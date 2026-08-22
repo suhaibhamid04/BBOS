@@ -1,0 +1,6 @@
+{
+  "name": "Booking Bridge OS",
+  "description": "AI-Powered Travel Business Operating System for Booking Bridge specializing in Kashmir, Jammu, Ladakh, and domestic India travel.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
