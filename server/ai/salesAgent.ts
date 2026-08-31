@@ -26,6 +26,8 @@ LEAD DETAILS:
 - Budget: ₹${lead.budget ? lead.budget.toLocaleString('en-IN') : 'Flexible'}
 - Source Platform: ${lead.sourcePlatform}
 - Current Status: ${lead.status}
+- Hotel Preference: ${lead.hotelPreference || 'None'}
+- Transport Preference: ${lead.transportPreference || 'None'}
 - Current Notes: ${lead.notes || 'None'}
 ${packageContext ? `- Matched Package Option: ${packageContext}` : ''}
 
@@ -35,17 +37,19 @@ ${conversationHistory}
 Produce your output strictly as a JSON object matching this exact TypeScript structure:
 {
   "summary": "Clear, concise 2-3 sentence summary of the customer's travel requirement and key constraints.",
-  "intent": "High / Medium / Low intent with specific focus (e.g., Honeymoon in Gulmarg & Pahalgam with luxury houseboat).",
-  "objections": ["Array of potential or stated hesitations like budget sensitivity, flight timings, snow season queries, hotel category"],
+  "intent": "High / Medium / Low intent with specific focus.",
+  "objections": ["Array of potential or stated hesitations like budget sensitivity, flight timings, etc."],
+  "priceSensitivity": "High / Medium / Low and reasoning.",
+  "urgency": "High / Medium / Low and reasoning.",
   "leadScore": <number between 1 and 100 based on budget alignment, clarity of dates, response speed, and group size>,
-  "recommendedAction": "Precise next operational step for the sales executive (e.g., Send 5N/6D Premium Kashmir Itinerary with private cab quote)",
-  "followUpRecommendation": "Exact timing suggestion (e.g., Follow up today at 4:30 PM via WhatsApp with Gulmarg gondola ticket assurance)",
-  "draftReply": "A warm, high-converting, professional reply tailored for WhatsApp/Email addressing their specific requirements, polite and hospitable in Kashmiri/Indian travel tone.",
-  "confidence": <number between 0.70 and 0.99>,
-  "suggestedPackage": "Name of recommended package (e.g. Kashmir Winter Wonderland 5N/6D or Ladakh High Passes Explorer)"
+  "bookingProbability": <number between 0 and 100 representing probability of conversion>,
+  "recommendedAction": "Precise next operational step for the sales executive.",
+  "followUpAt": "Exact timing suggestion (e.g., Today at 4:30 PM).",
+  "salesApproach": "Recommendation on how to handle the customer (e.g. Focus on luxury, pitch budget-friendly alternatives).",
+  "suggestedReply": "A warm, high-converting, professional reply tailored for WhatsApp/Email."
 }
 
-Do NOT wrap in markdown backticks other than valid JSON. Return valid JSON only.
+Do NOT wrap in markdown backticks other than valid JSON. Return valid JSON only. If information is missing, explicitly identify it as missing.
 `;
 
   try {
@@ -63,12 +67,14 @@ Do NOT wrap in markdown backticks other than valid JSON. Return valid JSON only.
       summary: parsed.summary || 'Customer interested in customized travel package.',
       intent: parsed.intent || 'High Intent',
       objections: Array.isArray(parsed.objections) ? parsed.objections : ['Pricing details needed'],
+      priceSensitivity: parsed.priceSensitivity || 'Medium',
+      urgency: parsed.urgency || 'Medium',
       leadScore: typeof parsed.leadScore === 'number' ? parsed.leadScore : 78,
+      bookingProbability: typeof parsed.bookingProbability === 'number' ? parsed.bookingProbability : 60,
       recommendedAction: parsed.recommendedAction || 'Share detailed day-wise itinerary and quote.',
-      followUpRecommendation: parsed.followUpRecommendation || 'Follow up within 4 hours via WhatsApp.',
-      draftReply: parsed.draftReply || `Dear ${lead.customerName}, Greetings from Booking Bridge! We are delighted to assist with your upcoming ${lead.destination} journey.`,
-      confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.88,
-      suggestedPackage: parsed.suggestedPackage || `${lead.destination} Signature Experience`,
+      followUpAt: parsed.followUpAt || 'Follow up within 4 hours.',
+      salesApproach: parsed.salesApproach || 'Standard consultative selling.',
+      suggestedReply: parsed.suggestedReply || `Dear ${lead.customerName}, Greetings from Booking Bridge! We are delighted to assist with your upcoming ${lead.destination} journey.`,
     };
   } catch (error) {
     console.error('Sales AI generation fallback:', error);
@@ -79,12 +85,14 @@ Do NOT wrap in markdown backticks other than valid JSON. Return valid JSON only.
       summary: `${lead.customerName} requested a ${lead.tripType} for ${lead.travelerCount} travelers to ${destination} starting ${lead.travelStartDate}.`,
       intent: `High Purchase Intent for ${destination} ${lead.tripType}`,
       objections: ['Comparison with local travel agents', 'Clarification on hotel categories & houseboat inclusions'],
+      priceSensitivity: 'Medium',
+      urgency: 'Medium',
       leadScore: lead.budget > 40000 ? 84 : 72,
+      bookingProbability: lead.budget > 40000 ? 70 : 45,
       recommendedAction: `Present customized ${destination} package with premium chauffeur driven vehicle and verified houseboat stay.`,
-      followUpRecommendation: 'Call customer today between 11:00 AM - 1:00 PM for hotel preference confirmation.',
-      draftReply: `Hello ${lead.customerName}, Warm greetings from Booking Bridge! 🏔️\n\nThank you for reaching out regarding your ${destination} ${lead.tripType} planned for ${lead.travelStartDate}. We have curated a specialized itinerary including top stays in Srinagar, Gulmarg, and Pahalgam.\n\nCould we connect briefly today so I can tailor the vehicle and hotel tier to your exact preference?\n\nWarm regards,\nBooking Bridge Travel Specialist`,
-      confidence: 0.85,
-      suggestedPackage: `${destination} Classic Deluxe Experience`,
+      followUpAt: 'Call customer today between 11:00 AM - 1:00 PM.',
+      salesApproach: 'Emphasize local expertise and seamless execution.',
+      suggestedReply: `Hello ${lead.customerName}, Warm greetings from Booking Bridge! 🏔️\n\nThank you for reaching out regarding your ${destination} ${lead.tripType} planned for ${lead.travelStartDate}. We have curated a specialized itinerary including top stays in Srinagar, Gulmarg, and Pahalgam.\n\nCould we connect briefly today so I can tailor the vehicle and hotel tier to your exact preference?\n\nWarm regards,\nBooking Bridge Travel Specialist`,
     };
   }
 }

@@ -34,6 +34,9 @@ export interface RolePermissions {
   canApproveActions: boolean;
   canViewAuditLogs: boolean;
   canManageSettings: boolean;
+  canManageTrips: boolean;
+  canManageBookings: boolean;
+  canViewMargins: boolean;
   leadAccessScope: 'ALL' | 'ASSIGNED_ONLY' | 'NONE';
 }
 
@@ -57,16 +60,23 @@ export interface Customer {
   isDemo?: boolean;
 }
 
+export type CompanyStatus = 'PROSPECT' | 'CONTACTED' | 'QUALIFIED' | 'ACTIVE' | 'DORMANT' | 'LOST';
+
 export interface Company {
   id: string;
-  name: string;
-  industry: string;
-  gstNumber?: string;
+  companyName: string;
   contactPerson: string;
-  email: string;
   phone: string;
+  email: string;
   city: string;
+  agencyType: string;
+  status: CompanyStatus;
+  assignedEmployee?: string;
+  notes?: string;
+  totalBookings: number;
+  totalRevenue: number;
   createdAt: string;
+  updatedAt: string;
   isDemo?: boolean;
 }
 
@@ -105,28 +115,35 @@ export type Priority = 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
 export interface Lead {
   id: string;
   customerId: string;
+  companyId?: string;
   customerName: string;
   customerPhone: string;
   customerEmail?: string;
   source: string;
-  sourcePlatform: 'Meta Ads' | 'Google Ads' | 'Instagram Direct' | 'WhatsApp Inbound' | 'Website Form' | 'Referral' | 'Direct Call';
+  sourcePlatform: 'Meta Ads' | 'Google Ads' | 'Instagram Direct' | 'WhatsApp Inbound' | 'Website Form' | 'Referral' | 'Direct Call' | string;
   campaignId?: string;
+  adId?: string;
+  contentId?: string;
   destination: DestinationRegion;
   travelStartDate: string;
   travelEndDate: string;
   travelerCount: number;
   tripType: TripType;
   budget: number;
+  hotelPreference?: string;
+  transportPreference?: string;
   status: LeadStatus;
   leadScore: number;
+  bookingProbability?: number;
   assignedEmployeeId: string;
   assignedEmployeeName: string;
+  assignedManagerId?: string;
   priority: Priority;
   lastContactAt: string;
   nextFollowUpAt: string;
+  notes: string;
   createdAt: string;
   updatedAt: string;
-  notes: string;
   isDemo?: boolean;
   scoreReasoning?: string;
   keyInterests?: string[];
@@ -233,34 +250,236 @@ export interface Quote {
   leadId: string;
   customerId: string;
   customerName: string;
-  destination: DestinationRegion;
+  destination: DestinationRegion | string;
+  tripId?: string;
+  items?: any[];
   travelerCount: number;
   packageId?: string;
   packageName?: string;
   totalAmount: number;
   discountAmount: number;
   finalAmount: number;
-  status: 'DRAFT' | 'SENT' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED';
+  status: 'DRAFT' | 'PENDING_APPROVAL' | 'SENT' | 'VIEWED' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED';
   validUntil: string;
   createdAt: string;
   notes?: string;
   isDemo?: boolean;
 }
 
+export type BookingStatus = 'PENDING_PAYMENT' | 'CONFIRMED' | 'IN_OPERATIONS' | 'TRAVELLING' | 'COMPLETED' | 'CANCELLED';
+
 export interface Booking {
   id: string;
-  quoteId?: string;
-  leadId?: string;
+  tripId: string;
   customerId: string;
-  customerName: string;
-  destination: DestinationRegion;
+  leadId?: string;
+  quoteId?: string;
+  bookingReference: string;
+  status: BookingStatus;
+  totalAmount: number;
+  amountReceived: number;
+  amountPending: number;
   travelStartDate: string;
   travelEndDate: string;
-  travelerCount: number;
-  totalAmount: number;
-  paidAmount: number;
-  status: 'CONFIRMED' | 'IN_TRANSIT' | 'COMPLETED' | 'CANCELLED';
+  assignedSalesEmployeeId?: string;
+  assignedOperationsEmployeeId?: string;
   createdAt: string;
+  updatedAt: string;
+  isDemo?: boolean;
+}
+
+export type TripStatus =
+  | 'DRAFT'
+  | 'ITINERARY_READY'
+  | 'QUOTE_READY'
+  | 'QUOTE_SENT'
+  | 'ACCEPTED'
+  | 'BOOKED'
+  | 'IN_OPERATIONS'
+  | 'COMPLETED'
+  | 'CANCELLED';
+
+export interface Trip {
+  id: string;
+  customerId: string;
+  leadId?: string;
+  title: string;
+  destination: DestinationRegion | string;
+  startDate: string;
+  endDate: string;
+  travelerCount: number;
+  adults: number;
+  children: number;
+  tripType: TripType | string;
+  status: TripStatus;
+  currency: string;
+  totalCost: number;
+  totalSellingPrice: number;
+  grossProfit: number;
+  grossMargin: number;
+  assignedSalesEmployeeId?: string;
+  assignedOperationsEmployeeId?: string;
+  createdAt: string;
+  updatedAt: string;
+  isDemo?: boolean;
+}
+
+export type ItineraryItemType = 'HOTEL' | 'TRANSPORT' | 'ACTIVITY' | 'MEAL' | 'SIGHTSEEING' | 'TRANSFER' | 'FREE_TIME' | 'OTHER';
+
+export interface ItineraryItem {
+  id: string;
+  dayId: string;
+  type: ItineraryItemType;
+  title: string;
+  description: string;
+  startTime?: string;
+  endTime?: string;
+  referenceId?: string;
+}
+
+export interface ItineraryDay {
+  id: string;
+  tripId: string;
+  dayNumber: number;
+  date: string;
+  title: string;
+  description: string;
+  location: string;
+  notes?: string;
+  items: ItineraryItem[];
+}
+
+export interface Hotel {
+  id: string;
+  name: string;
+  destination: string;
+  category: string;
+  address: string;
+  contact: string;
+  supplierId: string;
+  description: string;
+  amenities: string[];
+  active: boolean;
+  isDemo?: boolean;
+}
+
+export interface HotelRoom {
+  id: string;
+  hotelId: string;
+  roomType: string;
+  mealPlan: string;
+  season?: string;
+  supplierCost: number;
+  sellingPrice: number;
+  currency: string;
+  validFrom?: string;
+  validTo?: string;
+}
+
+export type BookingComponentStatus = 'DRAFT' | 'REQUESTED' | 'CONFIRMED' | 'CANCELLED';
+
+export interface HotelBooking {
+  id: string;
+  tripId: string;
+  hotelId: string;
+  supplierId: string;
+  checkIn: string;
+  checkOut: string;
+  roomType: string;
+  mealPlan: string;
+  rooms: number;
+  guests: number;
+  supplierCost: number;
+  sellingPrice: number;
+  profit: number;
+  status: BookingComponentStatus;
+  confirmationNumber?: string;
+  specialRequests?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Transport {
+  id: string;
+  tripId: string;
+  date: string;
+  pickup: string;
+  dropoff: string;
+  vehicleType: string;
+  supplierId: string;
+  driverId?: string;
+  supplierCost: number;
+  sellingPrice: number;
+  profit: number;
+  status: BookingComponentStatus;
+  notes?: string;
+}
+
+export interface Driver {
+  id: string;
+  name: string;
+  phone: string;
+  vehicleType: string;
+  vehicleNumber: string;
+  supplierId: string;
+  active: boolean;
+  notes?: string;
+  isDemo?: boolean;
+}
+
+export interface Activity {
+  id: string;
+  name: string;
+  destination: string;
+  supplierId: string;
+  description: string;
+  supplierCost: number;
+  sellingPrice: number;
+  active: boolean;
+  isDemo?: boolean;
+}
+
+export interface ActivityBooking {
+  id: string;
+  tripId: string;
+  activityId: string;
+  date: string;
+  participants: number;
+  supplierCost: number;
+  sellingPrice: number;
+  profit?: number;
+  status: BookingComponentStatus;
+  confirmationNumber?: string;
+  notes?: string;
+}
+
+export type SupplierType = 'HOTEL' | 'TRANSPORT' | 'ACTIVITY' | 'OTHER';
+
+export interface Supplier {
+  id: string;
+  name: string;
+  type: SupplierType;
+  contactPerson: string;
+  phone: string;
+  email: string;
+  city: string;
+  paymentTerms: string;
+  active: boolean;
+  notes?: string;
+  isDemo?: boolean;
+}
+
+export type VoucherType = 'HOTEL' | 'TRANSPORT' | 'ACTIVITY' | 'FINAL_TRAVEL_PACK';
+export type VoucherStatus = 'PENDING' | 'GENERATED' | 'SENT';
+
+export interface Voucher {
+  id: string;
+  bookingId: string;
+  tripId: string;
+  type: VoucherType;
+  status: VoucherStatus;
+  generatedAt?: string;
+  fileUrl?: string;
   isDemo?: boolean;
 }
 
@@ -371,16 +590,34 @@ export interface Integration {
   features: string[];
 }
 
+export interface AiObjectionAnalysis {
+  objectionType: string;
+  underlyingConcern: string;
+  customerSentiment: 'positive' | 'neutral' | 'negative' | 'hesitant';
+  recommendedStrategy: string;
+  suggestedResponse: string;
+}
+
+export interface AiSalesPlaybookStep {
+  step: number;
+  action: string;
+  description: string;
+}
+
 export interface SalesAiAnalysisResult {
   summary: string;
   intent: string;
   objections: string[];
+  priceSensitivity: string;
+  urgency: string;
   leadScore: number;
+  bookingProbability: number;
   recommendedAction: string;
-  followUpRecommendation: string;
-  draftReply: string;
-  confidence: number;
-  suggestedPackage?: string;
+  followUpAt: string;
+  salesApproach: string;
+  suggestedReply: string;
+  playbook?: AiSalesPlaybookStep[];
+  objectionAnalysis?: AiObjectionAnalysis;
 }
 
 export interface MarketingAiStrategyResult {

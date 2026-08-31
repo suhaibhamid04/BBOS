@@ -177,26 +177,32 @@ export const DEMO_CUSTOMERS: Customer[] = [
 export const DEMO_COMPANIES: Company[] = [
   {
     id: 'comp-demo-01',
-    name: 'Apex Technologies Pvt Ltd',
-    industry: 'Enterprise Software & Cloud',
-    gstNumber: '29ABCDE1234F1Z5',
+    companyName: 'Apex Technologies Pvt Ltd',
     contactPerson: 'Vikram Malhotra',
     email: 'offsite@apextechnologies.com',
     phone: '+91 80 4123 9900',
     city: 'Bangalore',
+    agencyType: 'Corporate',
+    status: 'ACTIVE',
+    totalBookings: 5,
+    totalRevenue: 450000,
     createdAt: '2026-08-18T16:00:00Z',
+    updatedAt: '2026-08-18T16:00:00Z',
     isDemo: true
   },
   {
     id: 'comp-demo-02',
-    name: 'Zenith Global Wealth Consultants',
-    industry: 'Financial Advisory',
-    gstNumber: '27AABCT9988H1Z8',
+    companyName: 'Zenith Global Wealth Consultants',
     contactPerson: 'Meera Deshmukh',
     email: 'events@zenithwealth.in',
     phone: '+91 22 6789 0011',
     city: 'Mumbai',
+    agencyType: 'Corporate',
+    status: 'PROSPECT',
+    totalBookings: 0,
+    totalRevenue: 0,
     createdAt: '2026-07-10T14:00:00Z',
+    updatedAt: '2026-07-10T14:00:00Z',
     isDemo: true
   }
 ];
@@ -442,15 +448,16 @@ export const DEMO_BOOKINGS: Booking[] = [
     quoteId: 'quote-demo-historical-01',
     leadId: 'lead-demo-past-01',
     customerId: 'cust-demo-02',
-    customerName: 'Dr. Ananya Sen',
-    destination: 'Kashmir',
+    tripId: 'trip-demo-01',
+    bookingReference: 'BKG-KAS-01',
     travelStartDate: '2026-05-10',
     travelEndDate: '2026-05-16',
-    travelerCount: 4,
     totalAmount: 145000,
-    paidAmount: 145000,
+    amountReceived: 145000,
+    amountPending: 0,
     status: 'COMPLETED',
     createdAt: '2026-04-12T10:00:00Z',
+    updatedAt: '2026-05-16T10:00:00Z',
     isDemo: true
   }
 ];
@@ -735,3 +742,65 @@ export const DEMO_AI_AGENTS: AiAgentConfig[] = [
     status: 'ACTIVE'
   }
 ];
+
+export const DEMO_TRIPS: any[] = [];
+export const DEMO_ITINERARIES: any[] = [];
+export const DEMO_HOTELS: any[] = [
+  {
+    id: 'demo-hotel-01',
+    name: 'The Khyber Himalayan Resort & Spa',
+    destination: 'Gulmarg',
+    category: '5 Star Luxury',
+    address: 'Gulmarg, Jammu and Kashmir 193403',
+    contact: '+91 99066 88888',
+    supplierId: 'demo-supplier-01',
+    description: 'Luxury resort with Pir Panjal views.',
+    amenities: ['Pool', 'Spa', 'Skiing', 'Fine Dining'],
+    active: true,
+    isDemo: true
+  }
+];
+export const DEMO_HOTEL_ROOMS: any[] = [];
+export const DEMO_HOTEL_BOOKINGS: any[] = [];
+export const DEMO_TRANSPORTS: any[] = [];
+export const DEMO_DRIVERS: any[] = [
+  {
+    id: 'demo-driver-01',
+    name: 'Tariq Ahmed',
+    phone: '+91 94190 12345',
+    vehicleType: 'Innova Crysta',
+    vehicleNumber: 'JK01AB1234',
+    supplierId: 'demo-supplier-02',
+    active: true,
+    isDemo: true
+  }
+];
+export const DEMO_ACTIVITIES: any[] = [];
+export const DEMO_ACTIVITY_BOOKINGS: any[] = [];
+export const DEMO_SUPPLIERS: any[] = [
+  {
+    id: 'demo-supplier-01',
+    name: 'Khyber Hotels Group',
+    type: 'HOTEL',
+    contactPerson: 'Manager',
+    phone: '+91 99066 88888',
+    email: 'res@khyber.com',
+    city: 'Gulmarg',
+    paymentTerms: 'Prepaid',
+    active: true,
+    isDemo: true
+  },
+  {
+    id: 'demo-supplier-02',
+    name: 'J&K Transport Syndicate',
+    type: 'TRANSPORT',
+    contactPerson: 'Showkat Ali',
+    phone: '+91 94190 99999',
+    email: 'transport@jksyndicate.com',
+    city: 'Srinagar',
+    paymentTerms: 'Postpaid 15 Days',
+    active: true,
+    isDemo: true
+  }
+];
+export const DEMO_VOUCHERS: any[] = [];

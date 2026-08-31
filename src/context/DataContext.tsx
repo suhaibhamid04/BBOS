@@ -1,4 +1,12 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { APP_CONFIG } from '../config';
+import {
+  EmployeeRepo, CustomerRepo, CompanyRepo, LeadRepo, ConversationRepo, MessageRepo, 
+  TaskRepo, QuoteRepo, BookingRepo, PackageRepo, AuditLogRepo, AiRecommendationRepo, 
+  AiActionRepo, ApprovalRepo, TripRepo, ItineraryDayRepo, HotelRepo, HotelRoomRepo,
+  HotelBookingRepo, TransportRepo, DriverRepo, ActivityRepo, ActivityBookingRepo,
+  SupplierRepo, VoucherRepo
+} from '../services/db/repositories';
 import {
   Lead,
   Customer,
@@ -21,7 +29,18 @@ import {
   MarketingPillar,
   AdCampaign,
   AiAgentConfig,
-  MarketingAiGenerateResult
+  MarketingAiGenerateResult,
+  Trip,
+  ItineraryDay,
+  Hotel,
+  HotelRoom,
+  HotelBooking,
+  Transport,
+  Driver,
+  Activity,
+  ActivityBooking,
+  Supplier,
+  Voucher
 } from '../types';
 import {
   INITIAL_PACKAGES,
@@ -42,6 +61,17 @@ import {
   DEMO_PILLARS,
   DEMO_CAMPAIGNS,
   DEMO_AI_AGENTS,
+  DEMO_TRIPS,
+  DEMO_ITINERARIES,
+  DEMO_HOTELS,
+  DEMO_HOTEL_ROOMS,
+  DEMO_HOTEL_BOOKINGS,
+  DEMO_TRANSPORTS,
+  DEMO_DRIVERS,
+  DEMO_ACTIVITIES,
+  DEMO_ACTIVITY_BOOKINGS,
+  DEMO_SUPPLIERS,
+  DEMO_VOUCHERS
 } from '../services/demoData';
 import { useAuth } from './AuthContext';
 import { db } from '../lib/firebase';
@@ -66,6 +96,14 @@ interface DataContextType {
   marketingPillars: MarketingPillar[];
   campaigns: AdCampaign[];
   aiAgents: AiAgentConfig[];
+
+  trips: Trip[];
+  hotels: Hotel[];
+  transports: Transport[];
+  drivers: Driver[];
+  activities: Activity[];
+  suppliers: Supplier[];
+  vouchers: Voucher[];
 
   // Lead actions
   createLead: (lead: Omit<Lead, 'id' | 'createdAt' | 'updatedAt'>) => Promise<Lead>;
@@ -121,69 +159,82 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Local state with persistence cache
   const [leads, setLeads] = useState<Lead[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
     const saved = localStorage.getItem('bb_leads');
     return saved ? JSON.parse(saved) : DEMO_LEADS;
   });
 
   const [customers, setCustomers] = useState<Customer[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
     const saved = localStorage.getItem('bb_customers');
     return saved ? JSON.parse(saved) : DEMO_CUSTOMERS;
   });
 
   const [companies, setCompanies] = useState<Company[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
     const saved = localStorage.getItem('bb_companies');
     return saved ? JSON.parse(saved) : DEMO_COMPANIES;
   });
 
   const [tasks, setTasks] = useState<Task[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
     const saved = localStorage.getItem('bb_tasks');
     return saved ? JSON.parse(saved) : DEMO_TASKS;
   });
 
   const [conversations, setConversations] = useState<Conversation[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
     const saved = localStorage.getItem('bb_conversations');
     return saved ? JSON.parse(saved) : DEMO_CONVERSATIONS;
   });
 
   const [messages, setMessages] = useState<Message[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
     const saved = localStorage.getItem('bb_messages');
     return saved ? JSON.parse(saved) : DEMO_MESSAGES;
   });
 
   const [quotes, setQuotes] = useState<Quote[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
     const saved = localStorage.getItem('bb_quotes');
     return saved ? JSON.parse(saved) : DEMO_QUOTES;
   });
 
   const [bookings, setBookings] = useState<Booking[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
     const saved = localStorage.getItem('bb_bookings');
     return saved ? JSON.parse(saved) : DEMO_BOOKINGS;
   });
 
-  const [packages] = useState<TravelPackage[]>(INITIAL_PACKAGES);
+  const [packages, setPackages] = useState<TravelPackage[]>(INITIAL_PACKAGES);
 
   const [recommendations, setRecommendations] = useState<AiRecommendation[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
     const saved = localStorage.getItem('bb_recommendations');
     return saved ? JSON.parse(saved) : DEMO_RECOMMENDATIONS;
   });
 
   const [aiActions, setAiActions] = useState<AiAction[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
     const saved = localStorage.getItem('bb_actions');
     return saved ? JSON.parse(saved) : DEMO_ACTIONS;
   });
 
   const [approvals, setApprovals] = useState<ApprovalItem[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
     const saved = localStorage.getItem('bb_approvals');
     return saved ? JSON.parse(saved) : DEMO_APPROVALS;
   });
 
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
     const saved = localStorage.getItem('bb_audit_logs');
     return saved ? JSON.parse(saved) : DEMO_AUDIT_LOGS;
   });
 
   const [integrations] = useState<Integration[]>(SYSTEM_INTEGRATIONS);
   const [contentCalendar, setContentCalendar] = useState<ContentItem[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
     const saved = localStorage.getItem('bb_content_calendar');
     return saved ? JSON.parse(saved) : DEMO_CONTENT_CALENDAR;
   });
@@ -191,8 +242,101 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [campaigns] = useState<AdCampaign[]>(DEMO_CAMPAIGNS);
   const [aiAgents] = useState<AiAgentConfig[]>(DEMO_AI_AGENTS);
 
-  // Sync to local storage for instant responsiveness
+  const [trips, setTrips] = useState<Trip[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
+    const saved = localStorage.getItem('bb_trips');
+    return saved ? JSON.parse(saved) : DEMO_TRIPS;
+  });
+
+  const [hotels, setHotels] = useState<Hotel[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
+    const saved = localStorage.getItem('bb_hotels');
+    return saved ? JSON.parse(saved) : DEMO_HOTELS;
+  });
+
+  const [transports, setTransports] = useState<Transport[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
+    const saved = localStorage.getItem('bb_transports');
+    return saved ? JSON.parse(saved) : DEMO_TRANSPORTS;
+  });
+
+  const [drivers, setDrivers] = useState<Driver[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
+    const saved = localStorage.getItem('bb_drivers');
+    return saved ? JSON.parse(saved) : DEMO_DRIVERS;
+  });
+
+  const [activities, setActivities] = useState<Activity[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
+    const saved = localStorage.getItem('bb_activities');
+    return saved ? JSON.parse(saved) : DEMO_ACTIVITIES;
+  });
+
+  const [suppliers, setSuppliers] = useState<Supplier[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
+    const saved = localStorage.getItem('bb_suppliers');
+    return saved ? JSON.parse(saved) : DEMO_SUPPLIERS;
+  });
+
+  const [vouchers, setVouchers] = useState<Voucher[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
+    const saved = localStorage.getItem('bb_vouchers');
+    return saved ? JSON.parse(saved) : DEMO_VOUCHERS;
+  });
+
+  // Fetch from Firestore if not in DEMO mode
   useEffect(() => {
+    if (APP_CONFIG.DEMO_MODE) return;
+    
+    const loadData = async () => {
+      setIsLoading(true);
+      try {
+        const [
+          fetchedLeads, fetchedCustomers, fetchedCompanies, fetchedTasks,
+          fetchedConversations, fetchedMessages, fetchedQuotes, fetchedBookings,
+          fetchedRecs, fetchedActions, fetchedApprovals, fetchedLogs, fetchedPackages,
+          fetchedTrips, fetchedHotels, fetchedTransports, fetchedDrivers, fetchedActivities, fetchedSuppliers, fetchedVouchers
+        ] = await Promise.all([
+          LeadRepo.getAll(), CustomerRepo.getAll(), CompanyRepo.getAll(), TaskRepo.getAll(),
+          ConversationRepo.getAll(), MessageRepo.getAll(), QuoteRepo.getAll(), BookingRepo.getAll(),
+          AiRecommendationRepo.getAll(), AiActionRepo.getAll(), ApprovalRepo.getAll(), AuditLogRepo.getAll(),
+          PackageRepo.getAll(),
+          TripRepo.getAll(), HotelRepo.getAll(), TransportRepo.getAll(), DriverRepo.getAll(), ActivityRepo.getAll(), SupplierRepo.getAll(), VoucherRepo.getAll()
+        ]);
+        
+        setLeads(fetchedLeads as any);
+        setCustomers(fetchedCustomers as any);
+        setCompanies(fetchedCompanies as any);
+        setTasks(fetchedTasks as any);
+        setConversations(fetchedConversations as any);
+        setMessages(fetchedMessages as any);
+        setQuotes(fetchedQuotes as any);
+        setBookings(fetchedBookings as any);
+        setRecommendations(fetchedRecs as any);
+        setAiActions(fetchedActions as any);
+        setApprovals(fetchedApprovals as any);
+        setAuditLogs(fetchedLogs as any);
+        if (fetchedPackages.length > 0) setPackages(fetchedPackages as any);
+        if (fetchedTrips.length > 0) setTrips(fetchedTrips as any);
+        if (fetchedHotels.length > 0) setHotels(fetchedHotels as any);
+        if (fetchedTransports.length > 0) setTransports(fetchedTransports as any);
+        if (fetchedDrivers.length > 0) setDrivers(fetchedDrivers as any);
+        if (fetchedActivities.length > 0) setActivities(fetchedActivities as any);
+        if (fetchedSuppliers.length > 0) setSuppliers(fetchedSuppliers as any);
+        if (fetchedVouchers.length > 0) setVouchers(fetchedVouchers as any);
+      } catch (err) {
+        console.error("Failed to load data from Firestore:", err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    
+    loadData();
+  }, []);
+
+  // Sync to local storage for instant responsiveness (only in DEMO_MODE)
+  useEffect(() => {
+    if (!APP_CONFIG.DEMO_MODE) return;
     localStorage.setItem('bb_leads', JSON.stringify(leads));
   }, [leads]);
   useEffect(() => {
@@ -228,6 +372,27 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     localStorage.setItem('bb_content_calendar', JSON.stringify(contentCalendar));
   }, [contentCalendar]);
+  useEffect(() => {
+    localStorage.setItem('bb_trips', JSON.stringify(trips));
+  }, [trips]);
+  useEffect(() => {
+    localStorage.setItem('bb_hotels', JSON.stringify(hotels));
+  }, [hotels]);
+  useEffect(() => {
+    localStorage.setItem('bb_transports', JSON.stringify(transports));
+  }, [transports]);
+  useEffect(() => {
+    localStorage.setItem('bb_drivers', JSON.stringify(drivers));
+  }, [drivers]);
+  useEffect(() => {
+    localStorage.setItem('bb_activities', JSON.stringify(activities));
+  }, [activities]);
+  useEffect(() => {
+    localStorage.setItem('bb_suppliers', JSON.stringify(suppliers));
+  }, [suppliers]);
+  useEffect(() => {
+    localStorage.setItem('bb_vouchers', JSON.stringify(vouchers));
+  }, [vouchers]);
 
   // Helper to log audit events
   const logAuditEvent = (action: string, entityType: string, entityId: string, before?: any, after?: any, reason?: string) => {
@@ -613,6 +778,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         marketingPillars,
         campaigns,
         aiAgents,
+        trips,
+        hotels,
+        transports,
+        drivers,
+        activities,
+        suppliers,
+        vouchers,
         createLead,
         updateLead,
         updateLeadStatus,

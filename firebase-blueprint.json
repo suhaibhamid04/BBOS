@@ -1,0 +1,123 @@
+{
+  "collections": [
+    {
+      "name": "leads",
+      "fields": {
+        "id": "string",
+        "customerId": "string",
+        "customerName": "string",
+        "customerEmail": "string",
+        "customerPhone": "string",
+        "companyId": "string?",
+        "destination": "string",
+        "tripType": "string",
+        "travelerCount": "number",
+        "travelStartDate": "string",
+        "travelEndDate": "string",
+        "budget": "number",
+        "sourcePlatform": "string",
+        "status": "string",
+        "priority": "string",
+        "createdAt": "string",
+        "lastContactAt": "string",
+        "assignedEmployeeId": "string",
+        "assignedEmployeeName": "string",
+        "notes": "string",
+        "hotelPreference": "string?",
+        "transportPreference": "string?",
+        "leadScore": "number",
+        "scoreReasoning": "string?",
+        "bookingProbability": "number?",
+        "adId": "string?",
+        "contentId": "string?"
+      },
+      "rules": "match /leads/{lead} { allow read, write: if request.auth != null; }"
+    },
+    {
+      "name": "customers",
+      "fields": {
+        "id": "string",
+        "name": "string",
+        "email": "string",
+        "phone": "string",
+        "city": "string",
+        "tags": "string[]",
+        "totalBookings": "number",
+        "lifetimeValue": "number",
+        "lastActive": "string",
+        "customerType": "string"
+      },
+      "rules": "match /customers/{customer} { allow read, write: if request.auth != null; }"
+    },
+    {
+      "name": "companies",
+      "fields": {
+        "id": "string",
+        "name": "string",
+        "industry": "string",
+        "primaryContactName": "string",
+        "primaryContactEmail": "string",
+        "primaryContactPhone": "string",
+        "gstNumber": "string?",
+        "billingAddress": "string?",
+        "contractStatus": "string",
+        "totalSpend": "number",
+        "employeeCount": "number?",
+        "createdAt": "string",
+        "updatedAt": "string"
+      },
+      "rules": "match /companies/{company} { allow read, write: if request.auth != null; }"
+    },
+    {
+      "name": "tasks",
+      "fields": {
+        "id": "string",
+        "title": "string",
+        "description": "string",
+        "status": "string",
+        "assignedTo": "string",
+        "assignedToId": "string",
+        "createdAt": "string",
+        "dueAt": "string",
+        "relatedEntityId": "string?",
+        "relatedEntityType": "string?"
+      },
+      "rules": "match /tasks/{task} { allow read, write: if request.auth != null; }"
+    },
+    {
+      "name": "quotes",
+      "fields": {
+        "id": "string",
+        "leadId": "string",
+        "customerName": "string",
+        "destination": "string",
+        "totalAmount": "number",
+        "margin": "number",
+        "status": "string",
+        "createdAt": "string",
+        "validUntil": "string",
+        "sentAt": "string?"
+      },
+      "rules": "match /quotes/{quote} { allow read, write: if request.auth != null; }"
+    },
+    {
+      "name": "bookings",
+      "fields": {
+        "id": "string",
+        "quoteId": "string",
+        "leadId": "string",
+        "customerName": "string",
+        "totalAmount": "number",
+        "amountPaid": "number",
+        "balanceDue": "number",
+        "status": "string",
+        "startDate": "string",
+        "endDate": "string",
+        "createdAt": "string",
+        "destination": "string",
+        "supplierStatus": "string"
+      },
+      "rules": "match /bookings/{booking} { allow read, write: if request.auth != null; }"
+    }
+  ]
+}

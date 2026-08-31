@@ -12,8 +12,12 @@ import { CustomersView } from './components/crm/CustomersView';
 import { CompaniesView } from './components/crm/CompaniesView';
 import { ConversationsView } from './components/crm/ConversationsView';
 import { SalesPipelineView } from './components/sales/SalesPipelineView';
+import { MyWorkspaceView } from './components/sales/MyWorkspace';
+import { LeadDetailView } from './components/crm/LeadDetailView';
 import { QuotesView } from './components/sales/QuotesView';
 import { SalesAiView } from './components/sales/SalesAiView';
+import { TripBuilderView } from './components/trips/TripBuilderView';
+import { BookingsView } from './components/trips/BookingsView';
 import { MarketingStrategyView } from './components/marketing/MarketingStrategyView';
 import { ContentCalendarView } from './components/marketing/ContentCalendarView';
 import { CampaignsView } from './components/marketing/CampaignsView';
@@ -26,14 +30,18 @@ import { ApprovalsView } from './components/governance/ApprovalsView';
 import { AuditLogsView } from './components/governance/AuditLogsView';
 import { TasksView } from './components/operations/TasksView';
 import { NotificationsView } from './components/operations/NotificationsView';
+import { OperationsDashboard } from './components/operations/OperationsDashboard';
+import { VouchersView } from './components/operations/VouchersView';
 import { IntegrationsView } from './components/operations/IntegrationsView';
 import { SettingsView } from './components/operations/SettingsView';
 
 export function AppContent() {
   const [activeNav, setActiveNav] = useState<NavSectionKey>('dashboard');
+  const [targetId, setTargetId] = useState<string | undefined>();
 
-  const handleNavigate = (section: NavSectionKey, targetId?: string) => {
+  const handleNavigate = (section: NavSectionKey, id?: string) => {
     setActiveNav(section);
+    setTargetId(id);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -43,6 +51,10 @@ export function AppContent() {
         return <CommandCenterDashboard onNavigate={handleNavigate} />;
       case 'ai-command':
         return <AiCommandCenterView onNavigate={handleNavigate} />;
+      case 'sales-workspace':
+        return <MyWorkspaceView onNavigate={handleNavigate} />;
+      case 'lead-detail':
+        return <LeadDetailView leadId={targetId!} onNavigate={handleNavigate} />;
       case 'leads':
         return <LeadsView />;
       case 'customers':
@@ -57,6 +69,10 @@ export function AppContent() {
         return <QuotesView />;
       case 'sales-ai':
         return <SalesAiView />;
+      case 'trips':
+        return <TripBuilderView />;
+      case 'bookings':
+        return <BookingsView />;
       case 'marketing-strategy':
         return <MarketingStrategyView />;
       case 'content-calendar':
@@ -81,6 +97,10 @@ export function AppContent() {
         return <AuditLogsView />;
       case 'tasks':
         return <TasksView />;
+      case 'operations-dashboard':
+        return <OperationsDashboard />;
+      case 'vouchers':
+        return <VouchersView />;
       case 'notifications':
         return <NotificationsView />;
       case 'integrations':

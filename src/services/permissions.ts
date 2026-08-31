@@ -15,6 +15,9 @@ export const ROLE_DEFINITIONS: Record<UserRole, RolePermissions> = {
     canApproveActions: true,
     canViewAuditLogs: true,
     canManageSettings: true,
+    canManageTrips: true,
+    canManageBookings: true,
+    canViewMargins: true,
     leadAccessScope: 'ALL'
   },
   Admin: {
@@ -31,6 +34,9 @@ export const ROLE_DEFINITIONS: Record<UserRole, RolePermissions> = {
     canApproveActions: true,
     canViewAuditLogs: true,
     canManageSettings: true,
+    canManageTrips: true,
+    canManageBookings: true,
+    canViewMargins: true,
     leadAccessScope: 'ALL'
   },
   'Sales Manager': {
@@ -47,6 +53,9 @@ export const ROLE_DEFINITIONS: Record<UserRole, RolePermissions> = {
     canApproveActions: true,
     canViewAuditLogs: true,
     canManageSettings: false,
+    canManageTrips: true,
+    canManageBookings: true,
+    canViewMargins: true,
     leadAccessScope: 'ALL'
   },
   'Sales Executive': {
@@ -63,6 +72,9 @@ export const ROLE_DEFINITIONS: Record<UserRole, RolePermissions> = {
     canApproveActions: false,
     canViewAuditLogs: false,
     canManageSettings: false,
+    canManageTrips: true,
+    canManageBookings: true,
+    canViewMargins: false,
     leadAccessScope: 'ASSIGNED_ONLY'
   },
   Marketing: {
@@ -79,6 +91,9 @@ export const ROLE_DEFINITIONS: Record<UserRole, RolePermissions> = {
     canApproveActions: false,
     canViewAuditLogs: true,
     canManageSettings: false,
+    canManageTrips: false,
+    canManageBookings: false,
+    canViewMargins: false,
     leadAccessScope: 'NONE'
   },
   Operations: {
@@ -95,6 +110,9 @@ export const ROLE_DEFINITIONS: Record<UserRole, RolePermissions> = {
     canApproveActions: false,
     canViewAuditLogs: true,
     canManageSettings: false,
+    canManageTrips: false,
+    canManageBookings: true,
+    canViewMargins: false,
     leadAccessScope: 'NONE'
   },
   Accounts: {
@@ -111,6 +129,9 @@ export const ROLE_DEFINITIONS: Record<UserRole, RolePermissions> = {
     canApproveActions: true,
     canViewAuditLogs: true,
     canManageSettings: false,
+    canManageTrips: false,
+    canManageBookings: true,
+    canViewMargins: true,
     leadAccessScope: 'ALL'
   }
 };

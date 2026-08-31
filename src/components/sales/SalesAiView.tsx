@@ -1,54 +1,183 @@
 import React, { useState } from 'react';
 import { useData } from '../../context/DataContext';
-import { Lead, SalesAiAnalysisResult } from '../../types';
-import {
-  Sparkles,
-  Bot,
-  Flame,
-  CheckCircle2,
-  AlertCircle,
-  Copy,
-  Check,
-  Send,
-  Loader2,
-  Clock,
-  ThumbsUp,
-  MapPin
+import { useAuth } from '../../context/AuthContext';
+import { 
+  Sparkles, Brain, TrendingUp, Users, DollarSign, AlertCircle, 
+  Clock, CheckCircle2, FileText, ChevronRight, Flame, Bot, Star
 } from 'lucide-react';
 
 export const SalesAiView: React.FC = () => {
-  const { leads, runSalesAiAnalysis, updateLeadStatus } = useData();
+  const { leads, quotes } = useData();
+  const { currentUser, permissions } = useAuth();
+  
+  const [timeframe, setTimeframe] = useState<'WEEK' | 'MONTH' | 'QUARTER'>('MONTH');
 
-  const [selectedLeadId, setSelectedLeadId] = useState<string>(leads[0]?.id || '');
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysisResult, setAnalysisResult] = useState<SalesAiAnalysisResult | null>(null);
-  const [copiedDraft, setCopiedDraft] = useState(false);
-  const [customQueryPrompt, setCustomQueryPrompt] = useState('');
+  // Simulated AI metrics for the dashboard
+  const activeLeads = leads.filter(l => l.status !== 'LOST' && l.status !== 'BOOKED');
+  const hotLeads = activeLeads.filter(l => l.leadScore > 80);
+  const totalPipeline = activeLeads.reduce((sum, l) => sum + l.budget, 0);
+  const weightedPipeline = activeLeads.reduce((sum, l) => sum + (l.budget * ((l.bookingProbability || 50) / 100)), 0);
+  
+  const lowMarginQuotes = quotes.filter(q => q.status === 'SENT' && (q.discountAmount / q.totalAmount) > 0.1);
+  const overdueFollowUps = activeLeads.filter(l => new Date(l.nextFollowUpAt) < new Date());
 
-  const selectedLead = leads.find((l) => l.id === selectedLeadId);
+  const renderManagerView = () => (
+    <div className="space-y-6">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+          <div className="flex justify-between items-start mb-2">
+            <span className="text-xs font-bold text-slate-500 uppercase">Team Conversion</span>
+            <TrendingUp className="w-4 h-4 text-emerald-500" />
+          </div>
+          <div className="text-2xl font-black text-slate-900">24.5%</div>
+          <p className="text-[10px] text-emerald-600 font-bold mt-1">↑ 2.1% from last month</p>
+        </div>
+        <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+          <div className="flex justify-between items-start mb-2">
+            <span className="text-xs font-bold text-slate-500 uppercase">Avg Response Time</span>
+            <Clock className="w-4 h-4 text-[#F0A608]" />
+          </div>
+          <div className="text-2xl font-black text-slate-900">14m</div>
+          <p className="text-[10px] text-emerald-600 font-bold mt-1">Within target (15m)</p>
+        </div>
+        <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+          <div className="flex justify-between items-start mb-2">
+            <span className="text-xs font-bold text-slate-500 uppercase">Hot Opportunities</span>
+            <Flame className="w-4 h-4 text-rose-500" />
+          </div>
+          <div className="text-2xl font-black text-slate-900">{hotLeads.length}</div>
+          <p className="text-[10px] text-slate-500 font-bold mt-1">Score &gt; 80</p>
+        </div>
+        <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+          <div className="flex justify-between items-start mb-2">
+            <span className="text-xs font-bold text-slate-500 uppercase">AI Actions Taken</span>
+            <Bot className="w-4 h-4 text-[#7056EE]" />
+          </div>
+          <div className="text-2xl font-black text-slate-900">142</div>
+          <p className="text-[10px] text-slate-500 font-bold mt-1">This {timeframe.toLowerCase()}</p>
+        </div>
+      </div>
 
-  const handleAnalyze = async () => {
-    if (!selectedLeadId) return;
-    setIsAnalyzing(true);
-    try {
-      const res = await runSalesAiAnalysis(selectedLeadId);
-      setAnalysisResult(res);
-    } catch (err) {
-      console.error('Failed to run Sales AI:', err);
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+            <h3 className="font-bold text-slate-900">Overdue Follow-ups</h3>
+            <span className="px-2 py-0.5 bg-rose-100 text-rose-700 text-[10px] font-bold rounded-full">{overdueFollowUps.length} Pending</span>
+          </div>
+          <div className="divide-y divide-slate-100 max-h-80 overflow-y-auto">
+            {overdueFollowUps.slice(0, 5).map(lead => (
+              <div key={lead.id} className="p-4 hover:bg-slate-50 transition-colors">
+                <div className="flex justify-between mb-1">
+                  <span className="font-bold text-sm text-slate-900">{lead.customerName}</span>
+                  <span className="text-xs text-rose-600 font-bold">Overdue by 2 hrs</span>
+                </div>
+                <div className="flex justify-between text-xs text-slate-500">
+                  <span>Rep: {lead.assignedEmployeeName}</span>
+                  <span>AI Score: {lead.leadScore}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
 
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedDraft(true);
-    setTimeout(() => setCopiedDraft(false), 2000);
-  };
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+            <h3 className="font-bold text-slate-900">Low-Margin Quotes</h3>
+            <span className="px-2 py-0.5 bg-amber-100 text-amber-800 text-[10px] font-bold rounded-full">Requires Review</span>
+          </div>
+          <div className="divide-y divide-slate-100 max-h-80 overflow-y-auto">
+            {lowMarginQuotes.slice(0, 5).map(quote => (
+              <div key={quote.id} className="p-4 hover:bg-slate-50 transition-colors">
+                <div className="flex justify-between mb-1">
+                  <span className="font-bold text-sm text-slate-900">{quote.customerName}</span>
+                  <span className="text-xs text-amber-600 font-bold">Margin &lt; 12%</span>
+                </div>
+                <div className="flex justify-between text-xs text-slate-500">
+                  <span>Quote: ₹{quote.finalAmount.toLocaleString()}</span>
+                  <button className="text-[#7056EE] font-bold hover:underline">Inspect AI Reasoning</button>
+                </div>
+              </div>
+            ))}
+            {lowMarginQuotes.length === 0 && (
+              <div className="p-8 text-center text-slate-500 text-sm">
+                No low-margin quotes detected.
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderFounderView = () => (
+    <div className="space-y-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="bg-gradient-to-br from-indigo-900 to-slate-900 rounded-xl p-6 shadow-md text-white">
+          <div className="flex justify-between items-start mb-4">
+            <span className="text-sm font-bold text-indigo-200 uppercase tracking-wider">Total Pipeline Value</span>
+            <DollarSign className="w-5 h-5 text-indigo-300" />
+          </div>
+          <div className="text-3xl font-black">₹{(totalPipeline / 100000).toFixed(1)}L</div>
+          <p className="text-xs text-indigo-300 mt-2">Active opportunities</p>
+        </div>
+        
+        <div className="bg-gradient-to-br from-[#7056EE] to-[#5b42d6] rounded-xl p-6 shadow-md text-white">
+          <div className="flex justify-between items-start mb-4">
+            <span className="text-sm font-bold text-purple-200 uppercase tracking-wider">Weighted Pipeline</span>
+            <TrendingUp className="w-5 h-5 text-purple-300" />
+          </div>
+          <div className="text-3xl font-black">₹{(weightedPipeline / 100000).toFixed(1)}L</div>
+          <p className="text-xs text-purple-200 mt-2">Based on AI win probability</p>
+        </div>
+
+        <div className="bg-gradient-to-br from-emerald-600 to-emerald-800 rounded-xl p-6 shadow-md text-white">
+          <div className="flex justify-between items-start mb-4">
+            <span className="text-sm font-bold text-emerald-200 uppercase tracking-wider">High Value Ops</span>
+            <Star className="w-5 h-5 text-emerald-300" />
+          </div>
+          <div className="text-3xl font-black">{hotLeads.filter(l => l.budget > 100000).length}</div>
+          <p className="text-xs text-emerald-200 mt-2">Budget &gt; 1L &amp; Score &gt; 80</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+          <h3 className="font-bold text-slate-900 mb-4 flex items-center gap-2">
+            <Brain className="w-5 h-5 text-[#7056EE]" /> AI Sales Recommendations
+          </h3>
+          <div className="space-y-3">
+            <div className="p-3 bg-slate-50 rounded-lg border border-slate-100 flex gap-3">
+              <div className="mt-0.5"><Sparkles className="w-4 h-4 text-emerald-500" /></div>
+              <div>
+                <p className="text-sm font-bold text-slate-900">Margin Optimization Opportunity</p>
+                <p className="text-xs text-slate-600 mt-1">AI detected that 45% of honeymoon packages are sold with standard transport. Offering premium transport at booking could increase margin by 2.4%.</p>
+              </div>
+            </div>
+            <div className="p-3 bg-slate-50 rounded-lg border border-slate-100 flex gap-3">
+              <div className="mt-0.5"><Sparkles className="w-4 h-4 text-amber-500" /></div>
+              <div>
+                <p className="text-sm font-bold text-slate-900">Lead Response Risk</p>
+                <p className="text-xs text-slate-600 mt-1">Weekend response time dropped to 45m average, leading to a 15% lower AI Booking Probability score for weekend leads.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+          <h3 className="font-bold text-slate-900 mb-4 flex items-center gap-2">
+            <CheckCircle2 className="w-5 h-5 text-slate-400" /> Pending Approvals
+          </h3>
+          <div className="flex flex-col items-center justify-center h-32 text-slate-500 text-sm">
+            <p>All AI-generated quotes and discounts have been approved.</p>
+            <button className="mt-2 text-[#7056EE] font-bold text-xs hover:underline">View Approval Log</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div id="sales-ai-view" className="space-y-6">
-      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <div className="flex items-center space-x-2">
@@ -57,181 +186,29 @@ export const SalesAiView: React.FC = () => {
                 <Sparkles className="w-4 h-4 text-[#F0A608]" />
               </div>
             </div>
-            <h2 className="text-xl font-bold text-slate-900 tracking-tight">Sales AI Agent & Copilot</h2>
-            <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-[#7056EE]/15 text-[#7056EE]">
-              Gemini Powered
-            </span>
+            <h2 className="text-xl font-bold text-slate-900 tracking-tight">AI Sales Intelligence</h2>
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
-            Autonomous lead scoring, objection analysis, high-conversion reply drafting, and follow-up timing
+            Manager and Founder insights, pipeline health, and team performance
           </p>
         </div>
-      </div>
-
-      {/* Main 2-Column Interface */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column: Lead Selector & Context */}
-        <div className="lg:col-span-5 space-y-4">
-          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-4">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">1. Select Target Lead</h3>
-
-            <div className="space-y-2">
-              <label className="block text-xs font-semibold text-slate-700">Active CRM Leads</label>
-              <select
-                id="sales-ai-lead-select"
-                value={selectedLeadId}
-                onChange={(e) => {
-                  setSelectedLeadId(e.target.value);
-                  setAnalysisResult(null);
-                }}
-                className="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl bg-slate-50 font-semibold text-slate-900 focus:ring-2 focus:ring-[#7056EE]"
-              >
-                {leads.map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.customerName} — {l.destination} (₹{l.budget.toLocaleString('en-IN')}) [{l.status}]
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {selectedLead && (
-              <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-2 text-xs">
-                <div className="flex justify-between font-bold text-slate-900">
-                  <span>{selectedLead.customerName}</span>
-                  <span className="text-[#7056EE]">Score: {selectedLead.leadScore}/100</span>
-                </div>
-                <div className="space-y-1 text-slate-600 text-[11px]">
-                  <p><strong>Destination:</strong> {selectedLead.destination} ({selectedLead.tripType})</p>
-                  <p><strong>Dates:</strong> {selectedLead.travelStartDate} to {selectedLead.travelEndDate} ({selectedLead.travelerCount} Pax)</p>
-                  <p><strong>Budget:</strong> ₹{selectedLead.budget.toLocaleString('en-IN')}</p>
-                  <p><strong>Source:</strong> {selectedLead.sourcePlatform}</p>
-                  <p><strong>Assigned:</strong> {selectedLead.assignedEmployeeName}</p>
-                </div>
-                {selectedLead.notes && (
-                  <div className="pt-2 border-t border-slate-200 text-slate-700 text-[11px]">
-                    <p className="font-semibold text-slate-900">Current Notes:</p>
-                    <p className="mt-0.5 line-clamp-3">{selectedLead.notes}</p>
-                  </div>
-                )}
-              </div>
-            )}
-
+        <div className="flex bg-slate-100 p-1 rounded-lg">
+          {(['WEEK', 'MONTH', 'QUARTER'] as const).map(t => (
             <button
-              id="execute-sales-ai-btn"
-              onClick={handleAnalyze}
-              disabled={isAnalyzing || !selectedLead}
-              className="w-full py-2.5 bg-[#7056EE] hover:bg-[#5e43dc] text-white rounded-xl text-xs font-bold flex items-center justify-center space-x-2 transition-all shadow-sm disabled:opacity-60"
+              key={t}
+              onClick={() => setTimeframe(t)}
+              className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${
+                timeframe === t ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-700'
+              }`}
             >
-              {isAnalyzing ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin text-[#F0A608]" />
-                  <span>Evaluating Lead & Generating Insights...</span>
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-4 h-4 text-[#F0A608]" />
-                  <span>Run Sales AI Evaluation</span>
-                </>
-              )}
+              This {t.charAt(0) + t.slice(1).toLowerCase()}
             </button>
-          </div>
-        </div>
-
-        {/* Right Column: AI Structured Output */}
-        <div className="lg:col-span-7 space-y-4">
-          {!analysisResult ? (
-            <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center space-y-3 shadow-2xs">
-              <Bot className="w-10 h-10 text-slate-300 mx-auto" />
-              <h4 className="font-bold text-slate-800 text-sm">Awaiting Sales AI Evaluation</h4>
-              <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                Select an active lead from the left and click "Run Sales AI Evaluation" to generate real-time lead score, objections, operational advice, and a drafted WhatsApp message.
-              </p>
-            </div>
-          ) : (
-            <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs space-y-5 animate-in fade-in duration-200">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-                <div className="flex items-center space-x-2">
-                  <span className="text-xs font-bold text-slate-900">AI Evaluation Report</span>
-                  <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded">
-                    Confidence: {Math.round((analysisResult.confidence || 0.88) * 100)}%
-                  </span>
-                </div>
-                <div className="flex items-center space-x-1.5">
-                  <span className="text-xs text-slate-500">Calculated Lead Score:</span>
-                  <span className="text-sm font-black text-[#7056EE] bg-[#7056EE]/10 px-2 py-0.5 rounded-md">
-                    {analysisResult.leadScore}/100
-                  </span>
-                </div>
-              </div>
-
-              {/* Requirement Summary & Intent */}
-              <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5 text-xs">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Customer Intent Profile</span>
-                <p className="font-semibold text-slate-900 leading-relaxed">{analysisResult.summary}</p>
-                <div className="flex items-center space-x-2 pt-1">
-                  <span className="text-[11px] text-slate-500 font-medium">Intent Category:</span>
-                  <span className="text-[11px] font-bold text-[#7056EE]">{analysisResult.intent}</span>
-                </div>
-              </div>
-
-              {/* Objections */}
-              <div className="space-y-1.5 text-xs">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Predicted / Stated Objections</span>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {analysisResult.objections.map((obj, i) => (
-                    <div key={i} className="p-2.5 bg-amber-50/70 border border-amber-200/80 rounded-lg flex items-start space-x-2 text-slate-800">
-                      <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
-                      <span className="text-[11px]">{obj}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Recommended Action & Follow-up Timing */}
-              <div className="p-3.5 bg-purple-50/70 border border-purple-200/80 rounded-xl space-y-2 text-xs">
-                <div className="flex items-center space-x-1.5 text-[#7056EE] font-bold">
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span>Recommended Sales Next Step</span>
-                </div>
-                <p className="text-slate-800 font-medium leading-relaxed">{analysisResult.recommendedAction}</p>
-                <div className="flex items-center space-x-2 text-[11px] text-purple-800 font-semibold pt-1">
-                  <Clock className="w-3.5 h-3.5" />
-                  <span>{analysisResult.followUpRecommendation}</span>
-                </div>
-              </div>
-
-              {/* Ready-to-Send Draft Reply */}
-              <div className="space-y-2 text-xs">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                    High-Converting WhatsApp / Email Draft
-                  </span>
-                  <button
-                    id="sales-ai-copy-draft-btn"
-                    onClick={() => handleCopy(analysisResult.draftReply)}
-                    className="px-2.5 py-1 text-[11px] font-bold text-[#7056EE] hover:bg-[#7056EE]/10 rounded flex items-center space-x-1 transition-colors"
-                  >
-                    {copiedDraft ? (
-                      <>
-                        <Check className="w-3 h-3 text-emerald-600" />
-                        <span className="text-emerald-600">Copied to Clipboard</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-3 h-3" />
-                        <span>Copy Draft Message</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-                <div className="p-3.5 bg-slate-900 text-slate-100 rounded-xl font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
-                  {analysisResult.draftReply}
-                </div>
-              </div>
-            </div>
-          )}
+          ))}
         </div>
       </div>
+
+      {permissions.canViewFinancials ? renderFounderView() : renderManagerView()}
+      
     </div>
   );
 };

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { APP_CONFIG } from '../../config';
 import {
   LayoutDashboard,
   Bot,
@@ -38,6 +39,8 @@ export type NavSectionKey =
   | 'ai-command'
   | 'tasks'
   | 'notifications'
+  | 'sales-workspace'
+  | 'lead-detail'
   | 'leads'
   | 'customers'
   | 'companies'
@@ -45,10 +48,14 @@ export type NavSectionKey =
   | 'sales-pipeline'
   | 'quotes'
   | 'sales-ai'
+  | 'trips'
+  | 'bookings'
   | 'marketing-strategy'
   | 'content-calendar'
   | 'campaigns'
   | 'marketing-ai'
+  | 'operations-dashboard'
+  | 'vouchers'
   | 'analytics-overview'
   | 'analytics-sales'
   | 'analytics-marketing'
@@ -91,6 +98,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     'COMMAND CENTER': true,
     'CRM': true,
     'SALES': true,
+    'TRIPS & BOOKINGS': true,
+    'OPERATIONS': true,
     'MARKETING': true,
     'ANALYTICS': false,
     'ADMIN': true,
@@ -104,12 +113,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const pendingApprovalsCount = approvals.filter(a => a.status === 'PENDING').length;
   const hotLeadsCount = leads.filter(l => l.priority === 'HIGH' || l.priority === 'URGENT').length;
 
-  const navGroups: NavGroup[] = [
+  const allNavGroups: NavGroup[] = [
     {
       title: 'COMMAND CENTER',
       items: [
-        { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-        { key: 'ai-command', label: 'AI Command Center', icon: Bot, badge: 'Live AI', badgeColor: 'bg-[#7056EE]/15 text-[#7056EE]' },
+        ...(permissions.canViewAllSales ? [{ key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard } as any] : []),
+        ...(permissions.canAccessAiCommand ? [{ key: 'ai-command', label: 'AI Command Center', icon: Bot, badge: 'Live AI', badgeColor: 'bg-[#7056EE]/15 text-[#7056EE]' } as any] : []),
         { key: 'tasks', label: 'Tasks', icon: CheckSquare, badge: pendingTasksCount > 0 ? pendingTasksCount : undefined, badgeColor: 'bg-amber-100 text-amber-800' },
         { key: 'notifications', label: 'Notifications', icon: Bell },
       ]
@@ -126,41 +135,58 @@ export const Sidebar: React.FC<SidebarProps> = ({
     {
       title: 'SALES',
       items: [
-        { key: 'sales-pipeline', label: 'Sales Pipeline', icon: GitPullRequest },
+        { key: 'sales-workspace', label: 'My Workspace', icon: LayoutDashboard },
+        ...(permissions.canViewAllSales ? [{ key: 'sales-pipeline', label: 'Sales Pipeline', icon: GitPullRequest } as any] : []),
         { key: 'quotes', label: 'Quotes', icon: FileText },
-        { key: 'sales-ai', label: 'Sales AI', icon: Sparkles, badge: 'Agent', badgeColor: 'bg-[#7056EE]/15 text-[#7056EE]' },
+        ...(permissions.canAccessAiCommand ? [{ key: 'sales-ai', label: 'AI Sales Head', icon: Sparkles, badge: 'Manager', badgeColor: 'bg-[#7056EE]/15 text-[#7056EE]' } as any] : []),
       ]
     },
-    {
+    ...(permissions.canManageTrips || permissions.canManageBookings ? [{
+      title: 'TRIPS & BOOKINGS',
+      items: [
+        ...(permissions.canManageTrips ? [{ key: 'trips', label: 'Trip Builder', icon: Plane } as any] : []),
+        ...(permissions.canManageBookings ? [{ key: 'bookings', label: 'Bookings', icon: CheckSquare } as any] : []),
+      ]
+    }] : []),
+    ...(permissions.canManageOperations ? [{
+      title: 'OPERATIONS',
+      items: [
+        { key: 'operations-dashboard', label: 'Ops Dashboard', icon: Compass } as any,
+        { key: 'vouchers', label: 'Vouchers', icon: FileText } as any,
+      ]
+    }] : []),
+    ...(permissions.canManageMarketing ? [{
       title: 'MARKETING',
       items: [
-        { key: 'marketing-strategy', label: 'Strategy', icon: TrendingUp },
-        { key: 'content-calendar', label: 'Content Calendar', icon: Calendar },
-        { key: 'campaigns', label: 'Campaigns', icon: Megaphone },
-        { key: 'marketing-ai', label: 'Marketing AI', icon: Palette, badge: 'GenAI', badgeColor: 'bg-[#F0A608]/15 text-amber-900' },
+        { key: 'marketing-strategy', label: 'Strategy', icon: TrendingUp } as any,
+        { key: 'content-calendar', label: 'Content Calendar', icon: Calendar } as any,
+        { key: 'campaigns', label: 'Campaigns', icon: Megaphone } as any,
+        { key: 'marketing-ai', label: 'Marketing AI', icon: Palette, badge: 'GenAI', badgeColor: 'bg-[#F0A608]/15 text-amber-900' } as any,
       ]
-    },
-    {
+    }] : []),
+    ...(permissions.canViewFinancials ? [{
       title: 'ANALYTICS',
       items: [
-        { key: 'analytics-overview', label: 'Business Overview', icon: BarChart3 },
-        { key: 'analytics-sales', label: 'Sales Analytics', icon: LineChart },
-        { key: 'analytics-marketing', label: 'Marketing Analytics', icon: PieChart },
+        { key: 'analytics-overview', label: 'Business Overview', icon: BarChart3 } as any,
+        { key: 'analytics-sales', label: 'Sales Analytics', icon: LineChart } as any,
+        { key: 'analytics-marketing', label: 'Marketing Analytics', icon: PieChart } as any,
       ]
-    },
-    {
+    }] : []),
+    ...(permissions.canManageUsers || permissions.canManageSettings || permissions.canManageOperations ? [{
       title: 'ADMIN',
       items: [
-        { key: 'employees', label: 'Employees', icon: UserCheck },
-        { key: 'roles-permissions', label: 'Roles & Permissions', icon: ShieldCheck },
-        { key: 'ai-permissions', label: 'AI Permissions', icon: Cpu },
-        { key: 'integrations', label: 'Integrations', icon: Boxes },
-        { key: 'approvals', label: 'Approval Center', icon: ShieldAlert, badge: pendingApprovalsCount > 0 ? pendingApprovalsCount : undefined, badgeColor: 'bg-rose-500 text-white font-bold' },
-        { key: 'audit-logs', label: 'Audit Logs', icon: History },
-        { key: 'settings', label: 'Settings', icon: Settings },
+        ...(permissions.canManageUsers ? [{ key: 'employees', label: 'Employees', icon: UserCheck } as any] : []),
+        ...(permissions.canManageUsers ? [{ key: 'roles-permissions', label: 'Roles & Permissions', icon: ShieldCheck } as any] : []),
+        ...(permissions.canManageSettings ? [{ key: 'ai-permissions', label: 'AI Permissions', icon: Cpu } as any] : []),
+        ...(permissions.canManageSettings ? [{ key: 'integrations', label: 'Integrations', icon: Boxes } as any] : []),
+        ...(permissions.canApproveActions ? [{ key: 'approvals', label: 'Approval Center', icon: ShieldAlert, badge: pendingApprovalsCount > 0 ? pendingApprovalsCount : undefined, badgeColor: 'bg-rose-500 text-white font-bold' } as any] : []),
+        ...(permissions.canViewAuditLogs ? [{ key: 'audit-logs', label: 'Audit Logs', icon: History } as any] : []),
+        ...(permissions.canManageSettings ? [{ key: 'settings', label: 'Settings', icon: Settings } as any] : []),
       ]
-    }
+    }] : [])
   ];
+
+  const navGroups = allNavGroups.filter(g => g.items.length > 0);
 
   return (
     <>
@@ -185,10 +211,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
             BB
           </div>
           <div className="flex-1 min-w-0">
-            <span className="font-bold text-lg tracking-tight text-slate-900 block leading-tight">
-              Booking Bridge <span className="text-[#7056EE]">OS</span>
+            <span className="font-bold text-lg tracking-tight text-slate-900 flex items-center gap-2 leading-tight">
+              <span>Booking Bridge <span className="text-[#7056EE]">OS</span></span>
             </span>
-            <span className="text-[10px] text-slate-400 font-medium tracking-wide">Himalayan Ops</span>
+            <span className="text-[10px] text-slate-400 font-medium tracking-wide flex items-center gap-2">
+              Himalayan Ops
+              {APP_CONFIG.DEMO_MODE && (
+                <span className="bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-sm font-bold text-[8px] tracking-widest uppercase">
+                  DEMO MODE
+                </span>
+              )}
+            </span>
           </div>
         </div>
 
