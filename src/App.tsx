@@ -66,11 +66,11 @@ export function AppContent() {
       case 'sales-pipeline':
         return <SalesPipelineView />;
       case 'quotes':
-        return <QuotesView />;
+        return <QuotesView initialQuoteId={targetId} onNavigate={handleNavigate} />;
       case 'sales-ai':
         return <SalesAiView />;
       case 'trips':
-        return <TripBuilderView />;
+        return <TripBuilderView initialTripId={targetId} onNavigate={handleNavigate} />;
       case 'bookings':
         return <BookingsView />;
       case 'marketing-strategy':

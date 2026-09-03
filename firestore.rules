@@ -1,10 +1,221 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Booking Bridge OS security rules
-    // By default, allow read/write for authenticated users or public demo operations with valid payload structure
+
+    // Helper functions for Authentication & Role Checking
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/employees/$(request.auth.uid)).data;
+    }
+
+    function getUserRole() {
+      return isAuthenticated() && exists(/databases/$(database)/documents/employees/$(request.auth.uid))
+        ? getUserData().role
+        : '';
+    }
+
+    function isFounder() {
+      return isAuthenticated() && (getUserRole() == 'Founder' || getUserRole() == 'FOUNDER');
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (getUserRole() == 'Admin' || getUserRole() == 'ADMIN' || isFounder());
+    }
+
+    function isSalesManager() {
+      return isAuthenticated() && (getUserRole() == 'Sales Manager' || getUserRole() == 'SALES_MANAGER' || isAdmin());
+    }
+
+    function isSalesExecutive() {
+      return isAuthenticated() && (getUserRole() == 'Sales Executive' || getUserRole() == 'SALES_EXECUTIVE' || isSalesManager());
+    }
+
+    function isOperations() {
+      return isAuthenticated() && (getUserRole() == 'Operations' || getUserRole() == 'OPERATIONS' || isAdmin());
+    }
+
+    function isMarketing() {
+      return isAuthenticated() && (getUserRole() == 'Marketing' || getUserRole() == 'MARKETING' || isAdmin());
+    }
+
+    function isAccounts() {
+      return isAuthenticated() && (getUserRole() == 'Accounts' || getUserRole() == 'ACCOUNTS' || isAdmin());
+    }
+
+    // 1. Employees Collection
+    match /employees/{employeeId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAdmin();
+      allow delete: if isFounder();
+    }
+
+    // 2. Customers Collection
+    match /customers/{customerId} {
+      allow read: if isSalesExecutive() || isOperations() || isAccounts();
+      allow create, update: if isSalesExecutive();
+      allow delete: if isAdmin();
+    }
+
+    // 3. Leads Collection (Scoped access)
+    match /leads/{leadId} {
+      allow read: if isSalesManager() || isAccounts() || 
+                  (isSalesExecutive() && (resource.data.assignedEmployeeId == request.auth.uid || resource.data.assignedEmployeeId == ''));
+      allow create, update: if isSalesExecutive();
+      allow delete: if isAdmin();
+    }
+
+    // 4. Companies Collection
+    match /companies/{companyId} {
+      allow read: if isSalesExecutive() || isAccounts() || isAdmin();
+      allow create, update: if isSalesExecutive();
+      allow delete: if isAdmin();
+    }
+
+    // 5. Conversations Collection
+    match /conversations/{conversationId} {
+      allow read, write: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
+
+    // 6. Messages Collection (Append-only)
+    match /messages/{messageId} {
+      allow read, create: if isAuthenticated();
+      allow update, delete: if false;
+    }
+
+    // 7. Tasks Collection
+    match /tasks/{taskId} {
+      allow read, create, update: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
+
+    // 8. Quotes Collection
+    match /quotes/{quoteId} {
+      allow read: if isSalesExecutive() || isAccounts();
+      allow create, update: if isSalesExecutive();
+      allow delete: if isAdmin();
+    }
+
+    // 9. Bookings Collection
+    match /bookings/{bookingId} {
+      allow read: if isSalesExecutive() || isOperations() || isAccounts();
+      allow create: if isSalesExecutive();
+      allow update: if isSalesExecutive() || isOperations() || isAccounts();
+      allow delete: if isAdmin();
+    }
+
+    // 10. Trips & Itinerary Collections
+    match /trips/{tripId} {
+      allow read: if isSalesExecutive() || isOperations() || isAccounts();
+      allow create: if isSalesExecutive();
+      allow update: if isSalesExecutive() || isOperations();
+      allow delete: if isAdmin();
+    }
+
+    match /itinerary_days/{dayId} {
+      allow read: if isSalesExecutive() || isOperations();
+      allow create, update: if isSalesExecutive() || isOperations();
+      allow delete: if isAdmin();
+    }
+
+    // 11. Stays, Transport & Activities Inventory
+    match /hotels/{hotelId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isOperations();
+      allow delete: if isAdmin();
+    }
+
+    match /hotel_rooms/{roomId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isOperations();
+      allow delete: if isAdmin();
+    }
+
+    match /hotel_bookings/{bookingId} {
+      allow read: if isSalesExecutive() || isOperations();
+      allow create, update: if isSalesExecutive() || isOperations();
+      allow delete: if isAdmin();
+    }
+
+    match /transports/{transportId} {
+      allow read: if isSalesExecutive() || isOperations();
+      allow create, update: if isOperations();
+      allow delete: if isAdmin();
+    }
+
+    match /drivers/{driverId} {
+      allow read: if isSalesExecutive() || isOperations();
+      allow create, update: if isOperations();
+      allow delete: if isAdmin();
+    }
+
+    match /activities/{activityId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isOperations();
+      allow delete: if isAdmin();
+    }
+
+    match /activity_bookings/{bookingId} {
+      allow read: if isSalesExecutive() || isOperations();
+      allow create, update: if isSalesExecutive() || isOperations();
+      allow delete: if isAdmin();
+    }
+
+    // 12. Suppliers & Vouchers
+    match /suppliers/{supplierId} {
+      allow read: if isOperations() || isAccounts();
+      allow create, update: if isOperations();
+      allow delete: if isAdmin();
+    }
+
+    match /vouchers/{voucherId} {
+      allow read: if isSalesExecutive() || isOperations();
+      allow create, update: if isOperations();
+      allow delete: if isAdmin();
+    }
+
+    // 13. Packages
+    match /packages/{packageId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // 14. Audit Logs (Append-only, strictly immutable)
+    match /audit_logs/{logId} {
+      allow read: if isAdmin() || isAccounts();
+      allow create: if isAuthenticated() && request.resource.data.actorId != null;
+      allow update, delete: if false;
+    }
+
+    // 15. AI Recommendations, Actions, and Approvals
+    match /ai_recommendations/{recId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin();
+      allow update: if isAuthenticated();
+      allow delete: if false;
+    }
+
+    match /ai_actions/{actionId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin();
+      allow update: if isSalesManager() || isAccounts();
+      allow delete: if false;
+    }
+
+    match /approvals/{approvalId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isSalesManager() || isAccounts();
+      allow delete: if false;
+    }
+
+    // Default: Deny all unauthenticated or unlisted collection access
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
   }
 }

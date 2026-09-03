@@ -12,8 +12,8 @@ interface RoleSwitcherModalProps {
 export const RoleSwitcherModal: React.FC<RoleSwitcherModalProps> = ({ isOpen, onClose }) => {
   const { currentUser, switchRole, selectUser, availableUsers, loginWithFirebase, isFirebaseAuthenticated } = useAuth();
   const [activeTab, setActiveTab] = useState<'SWITCH_PERSONA' | 'FIREBASE_AUTH'>('SWITCH_PERSONA');
-  const [email, setEmail] = useState('suhaib@bookingbridge.com');
-  const [password, setPassword] = useState('admin123456');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState('');
   const [authSuccess, setAuthSuccess] = useState('');
 

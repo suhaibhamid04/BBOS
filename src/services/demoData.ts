@@ -16,7 +16,16 @@ import {
   ContentItem,
   MarketingPillar,
   AdCampaign,
-  AiAgentConfig
+  AiAgentConfig,
+  Trip,
+  ItineraryDay,
+  Hotel,
+  HotelRoom,
+  Transport,
+  Driver,
+  Activity,
+  Supplier,
+  Voucher
 } from '../types';
 
 export const INITIAL_PACKAGES: TravelPackage[] = [
@@ -428,16 +437,105 @@ export const DEMO_QUOTES: Quote[] = [
     leadId: 'demo-lead-01',
     customerId: 'cust-demo-01',
     customerName: 'Rohit Sharma',
+    customerPhone: '+91 99061 23456',
+    customerEmail: 'rohit.sharma@gmail.com',
     destination: 'Kashmir',
+    tripId: 'trip-kashmir-honeymoon-01',
     travelerCount: 2,
+    adults: 2,
+    children: 0,
     packageId: 'pkg-kashmir-honeymoon-6d',
     packageName: 'Kashmir Royal Honeymoon (5N/6D)',
-    totalAmount: 72000,
-    discountAmount: 4000,
-    finalAmount: 68000,
+    durationDays: 6,
+    durationNights: 5,
+    totalAmount: 95000,
+    discountAmount: 5000,
+    finalAmount: 90000,
+    totalCost: 65000,
+    grossProfit: 25000,
+    grossMargin: 27.8,
     status: 'SENT',
-    validUntil: '2026-08-28',
+    validUntil: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
     createdAt: '2026-08-21T15:30:00Z',
+    updatedAt: '2026-08-21T15:30:00Z',
+    version: 1,
+    versionHistory: [],
+    salesEmployeeId: 'emp-01',
+    salesEmployeeName: 'Suhaib Hamid',
+    hotels: [
+      {
+        hotelId: 'hotel-lalit-srinagar',
+        hotelName: 'The Lalit Grand Palace',
+        roomType: 'Deluxe Palace Room',
+        mealPlan: 'CP (Breakfast)',
+        nights: 2,
+        rate: 36000,
+        supplierCost: 26000
+      },
+      {
+        hotelId: 'hotel-khyber-gulmarg',
+        hotelName: 'The Khyber Himalayan Resort & Spa',
+        roomType: 'Premier Pine View Room',
+        mealPlan: 'MAP (Breakfast + Dinner)',
+        nights: 2,
+        rate: 40000,
+        supplierCost: 28000
+      },
+      {
+        hotelId: 'hotel-mascot-houseboats',
+        hotelName: 'Mascot Houseboats (Nigeen Lake)',
+        roomType: 'Royal Cedar Wood Suite',
+        mealPlan: 'MAP (Breakfast + Dinner)',
+        nights: 1,
+        rate: 14000,
+        supplierCost: 9500
+      }
+    ],
+    transports: [
+      {
+        transportId: 'trans-innova-crysta',
+        vehicleType: 'Innova Crysta AC Dedicated Chauffeur',
+        route: 'Srinagar Airport → Gulmarg → Pahalgam → Nigeen Lake',
+        days: 6,
+        rate: 28800,
+        supplierCost: 20400
+      }
+    ],
+    activities: [
+      {
+        activityId: 'act-gondola-phase1-2',
+        name: 'Gulmarg Gondola Tickets (Phase 1 & Phase 2)',
+        pax: 2,
+        rate: 4900,
+        supplierCost: 3700
+      },
+      {
+        activityId: 'act-shikara-ride-sunset',
+        name: 'Private Sunset Shikara Ride on Nigeen Lake',
+        pax: 2,
+        rate: 2000,
+        supplierCost: 1200
+      }
+    ],
+    inclusions: [
+      '5 Nights Luxury Accommodation across Srinagar, Gulmarg & Houseboat',
+      'Daily Gourmet Breakfast and Chef Curated Dinners (MAP Plan)',
+      'Dedicated AC Innova Crysta throughout with expert Himalayan Chauffeur',
+      'Private Sunset Shikara Ride on Nigeen Lake (2 Hours)',
+      'Gulmarg Gondola Phase 1 & 2 Fast-track tickets for 2 adults',
+      'All toll taxes, parking fees, driver allowances, and fuel surcharges',
+      '24/7 dedicated local concierge and on-ground operational liaison'
+    ],
+    exclusions: [
+      'Airfare to and from Srinagar International Airport (SXR)',
+      'Personal expenses, laundry, tips, and room mini-bar charges',
+      'Pony rides or ATV quad biking in Baisaran / Gulmarg',
+      'Camera fees at heritage monuments and national parks',
+      'Any additional services or detour outside the agreed itinerary'
+    ],
+    termsAndConditions: 'Booking Confirmation requires 30% advance deposit. 70% balance payable 7 days prior to arrival. Free cancellation up to 14 days before check-in. In case of flight cancellations due to weather, dates can be rescheduled without penalty.',
+    notes: 'Special honeymoon cake and floral room decoration arranged at Mascot Houseboat on Day 5.',
+    internalNotes: 'VIP Honeymoon couple. Chauffeur Tariq advised to arrive 20 mins prior at SXR.',
     isDemo: true
   }
 ];
@@ -743,9 +841,226 @@ export const DEMO_AI_AGENTS: AiAgentConfig[] = [
   }
 ];
 
-export const DEMO_TRIPS: any[] = [];
-export const DEMO_ITINERARIES: any[] = [];
-export const DEMO_HOTELS: any[] = [
+export const DEMO_TRIPS: Trip[] = [
+  {
+    id: 'trip-demo-01',
+    customerId: 'cust-demo-01',
+    leadId: 'lead-demo-01',
+    title: 'Kashmir Luxury Honeymoon & Houseboat Stays',
+    destination: 'Kashmir',
+    startDate: '2026-10-12',
+    endDate: '2026-10-16',
+    travelerCount: 2,
+    adults: 2,
+    children: 0,
+    tripType: 'Honeymoon',
+    status: 'DRAFT',
+    currency: 'INR',
+    totalCost: 55400,
+    totalSellingPrice: 82500,
+    grossProfit: 27100,
+    grossMargin: 32.8,
+    budget: 120000,
+    assignedSalesEmployeeId: 'emp-sales-01',
+    createdAt: '2026-08-20T10:00:00Z',
+    updatedAt: '2026-08-20T10:00:00Z',
+    isDemo: true
+  }
+];
+
+export const DEMO_ITINERARIES: ItineraryDay[] = [
+  {
+    id: 'day-demo-1',
+    tripId: 'trip-demo-01',
+    dayNumber: 1,
+    date: '2026-10-12',
+    title: 'Arrival in Srinagar & Sunset Shikara Ride',
+    location: 'Srinagar (Nigeen Lake)',
+    description: 'Airport pickup, transfer to Nigeen Lake luxury houseboat. Evening Shikara ride with authentic Kashmiri saffron Kahwa.',
+    notes: 'Check-in at 2:00 PM. Welcome Kahwa pre-arranged.',
+    items: [
+      {
+        id: 'item-101',
+        dayId: 'day-demo-1',
+        tripId: 'trip-demo-01',
+        type: 'HOTEL',
+        title: 'Mascot Houseboats - Royal Cedar Suite',
+        description: 'MAP Plan (Breakfast + 4-Course Dinner). Nigeen Lake waterfront view.',
+        referenceId: 'demo-hotel-03',
+        supplierCost: 6500,
+        sellingPrice: 10500,
+        metadata: { hotelId: 'demo-hotel-03', roomType: 'Royal Cedar Suite', mealPlan: 'MAP', rooms: 1, guests: 2 }
+      },
+      {
+        id: 'item-102',
+        dayId: 'day-demo-1',
+        tripId: 'trip-demo-01',
+        type: 'TRANSPORT',
+        title: 'Innova Crysta AC - Airport to Nigeen Lake',
+        description: 'Dedicated vehicle & chauffeur for Srinagar airport pickup.',
+        referenceId: 'demo-trans-01',
+        supplierCost: 3400,
+        sellingPrice: 4800,
+        metadata: { vehicleType: 'Innova Crysta AC', pickup: 'Srinagar Airport', dropoff: 'Nigeen Lake' }
+      },
+      {
+        id: 'item-103',
+        dayId: 'day-demo-1',
+        tripId: 'trip-demo-01',
+        type: 'ACTIVITY',
+        title: 'Private Sunset Shikara Ride with Kahwa',
+        description: '1.5-hour peaceful cruise across serene Nigeen Lake.',
+        referenceId: 'demo-act-02',
+        supplierCost: 700,
+        sellingPrice: 1300,
+        metadata: { activityId: 'demo-act-02', participants: 2 }
+      }
+    ]
+  },
+  {
+    id: 'day-demo-2',
+    tripId: 'trip-demo-01',
+    dayNumber: 2,
+    date: '2026-10-13',
+    title: 'Srinagar to Gulmarg & Gondola Ride',
+    location: 'Gulmarg',
+    description: 'Scenic drive to Gulmarg. Gondola cable car ride to Apharwat peak.',
+    notes: 'Carry warm jackets; Phase 2 temperature can drop below freezing.',
+    items: [
+      {
+        id: 'item-201',
+        dayId: 'day-demo-2',
+        tripId: 'trip-demo-01',
+        type: 'HOTEL',
+        title: 'The Khyber Himalayan Resort & Spa - Premier Pine View Room',
+        description: 'MAP Plan (Breakfast + Dinner). Heated indoor pool & luxury amenities.',
+        referenceId: 'demo-hotel-01',
+        supplierCost: 14000,
+        sellingPrice: 20000,
+        metadata: { hotelId: 'demo-hotel-01', roomType: 'Premier Pine View Room', mealPlan: 'MAP', rooms: 1, guests: 2 }
+      },
+      {
+        id: 'item-202',
+        dayId: 'day-demo-2',
+        tripId: 'trip-demo-01',
+        type: 'TRANSPORT',
+        title: 'Innova Crysta AC - Srinagar to Gulmarg Excursion',
+        description: 'Full-day vehicle with snow chains if needed.',
+        referenceId: 'demo-trans-01',
+        supplierCost: 3400,
+        sellingPrice: 4800,
+        metadata: { vehicleType: 'Innova Crysta AC', pickup: 'Srinagar', dropoff: 'Gulmarg' }
+      },
+      {
+        id: 'item-203',
+        dayId: 'day-demo-2',
+        tripId: 'trip-demo-01',
+        type: 'ACTIVITY',
+        title: 'Gulmarg Gondola Phase 1 & 2 Cable Car Ticket Assistance',
+        description: 'High-altitude cable car up to 13,780 ft Apharwat peak.',
+        referenceId: 'demo-act-01',
+        supplierCost: 3700,
+        sellingPrice: 4900,
+        metadata: { activityId: 'demo-act-01', participants: 2 }
+      }
+    ]
+  },
+  {
+    id: 'day-demo-3',
+    tripId: 'trip-demo-01',
+    dayNumber: 3,
+    date: '2026-10-14',
+    title: 'Gulmarg to Pahalgam Valley of Shepherds',
+    location: 'Pahalgam',
+    description: 'Drive via saffron fields of Pampore and Apple valley. Check-in at riverside luxury resort.',
+    items: [
+      {
+        id: 'item-301',
+        dayId: 'day-demo-3',
+        tripId: 'trip-demo-01',
+        type: 'HOTEL',
+        title: 'Pine N Peak Hotel by ITC - Superior Valley Room',
+        description: 'MAP Plan (Breakfast + Dinner). Overlooking Lidder river.',
+        referenceId: 'demo-hotel-04',
+        supplierCost: 9000,
+        sellingPrice: 13500,
+        metadata: { hotelId: 'demo-hotel-04', roomType: 'Superior Valley Room', mealPlan: 'MAP', rooms: 1, guests: 2 }
+      },
+      {
+        id: 'item-302',
+        dayId: 'day-demo-3',
+        tripId: 'trip-demo-01',
+        type: 'TRANSPORT',
+        title: 'Innova Crysta AC - Gulmarg to Pahalgam Transit',
+        description: 'Dedicated transit with stops at Pampore saffron farms.',
+        referenceId: 'demo-trans-01',
+        supplierCost: 3400,
+        sellingPrice: 4800,
+        metadata: { vehicleType: 'Innova Crysta AC', pickup: 'Gulmarg', dropoff: 'Pahalgam' }
+      }
+    ]
+  },
+  {
+    id: 'day-demo-4',
+    tripId: 'trip-demo-01',
+    dayNumber: 4,
+    date: '2026-10-15',
+    title: 'Pahalgam Local Exploration: Betaab & Aru Valley',
+    location: 'Pahalgam',
+    description: 'Excursion to Betaab Valley and picturesque Aru Valley.',
+    items: [
+      {
+        id: 'item-401',
+        dayId: 'day-demo-4',
+        tripId: 'trip-demo-01',
+        type: 'HOTEL',
+        title: 'Pine N Peak Hotel by ITC - Superior Valley Room',
+        description: 'MAP Plan (Breakfast + Dinner).',
+        referenceId: 'demo-hotel-04',
+        supplierCost: 9000,
+        sellingPrice: 13500,
+        metadata: { hotelId: 'demo-hotel-04', roomType: 'Superior Valley Room', mealPlan: 'MAP', rooms: 1, guests: 2 }
+      },
+      {
+        id: 'item-402',
+        dayId: 'day-demo-4',
+        tripId: 'trip-demo-01',
+        type: 'ACTIVITY',
+        title: 'Pahalgam Betaab Valley & Aru Valley Private 4x4 Excursion',
+        description: 'Private 4x4 union jeep covering Betaab Valley and Chandanwari.',
+        referenceId: 'demo-act-03',
+        supplierCost: 2400,
+        sellingPrice: 3500,
+        metadata: { activityId: 'demo-act-03', participants: 2 }
+      }
+    ]
+  },
+  {
+    id: 'day-demo-5',
+    tripId: 'trip-demo-01',
+    dayNumber: 5,
+    date: '2026-10-16',
+    title: 'Pahalgam to Srinagar Airport Departure',
+    location: 'Srinagar Airport',
+    description: 'Breakfast at hotel, transfer to Srinagar airport for departure flight.',
+    items: [
+      {
+        id: 'item-501',
+        dayId: 'day-demo-5',
+        tripId: 'trip-demo-01',
+        type: 'TRANSPORT',
+        title: 'Innova Crysta AC - Pahalgam to Srinagar Airport Drop',
+        description: 'Timely airport departure transfer.',
+        referenceId: 'demo-trans-01',
+        supplierCost: 3400,
+        sellingPrice: 4800,
+        metadata: { vehicleType: 'Innova Crysta AC', pickup: 'Pahalgam', dropoff: 'Srinagar Airport' }
+      }
+    ]
+  }
+];
+
+export const DEMO_HOTELS: Hotel[] = [
   {
     id: 'demo-hotel-01',
     name: 'The Khyber Himalayan Resort & Spa',
@@ -754,53 +1069,305 @@ export const DEMO_HOTELS: any[] = [
     address: 'Gulmarg, Jammu and Kashmir 193403',
     contact: '+91 99066 88888',
     supplierId: 'demo-supplier-01',
-    description: 'Luxury resort with Pir Panjal views.',
-    amenities: ['Pool', 'Spa', 'Skiing', 'Fine Dining'],
+    description: 'Premier world-class luxury resort with heated pool and Pir Panjal views.',
+    amenities: ['Indoor Heated Pool', 'L\'Occitane Spa', 'Ski Assistance', 'Fine Dining', 'WiFi'],
+    active: true,
+    isDemo: true
+  },
+  {
+    id: 'demo-hotel-02',
+    name: 'The Lalit Grand Palace Srinagar',
+    destination: 'Srinagar',
+    category: 'Heritage 5 Star',
+    address: 'Gupkar Road, Srinagar 190001',
+    contact: '+91 194 250 1001',
+    supplierId: 'demo-supplier-01',
+    description: 'Historic royal residence built by Maharaja Pratap Singh overlooking Dal Lake.',
+    amenities: ['Heritage Gardens', 'Golf Course', 'Fine Dining', 'Luxury Spa', 'Lake View'],
+    active: true,
+    isDemo: true
+  },
+  {
+    id: 'demo-hotel-03',
+    name: 'Mascot Houseboats - Nigeen Lake',
+    destination: 'Srinagar',
+    category: 'Luxury Cedar Houseboat',
+    address: 'Nigeen Lake West Bank, Srinagar 190006',
+    contact: '+91 94190 22334',
+    supplierId: 'demo-supplier-01',
+    description: 'Handcrafted walnut and cedar wood houseboat offering peaceful waters and private butler service.',
+    amenities: ['Private Sun Deck', 'Kashmiri Cuisine', 'Private Shikara Access', 'Wi-Fi', 'Heating'],
+    active: true,
+    isDemo: true
+  },
+  {
+    id: 'demo-hotel-04',
+    name: 'Pine N Peak Hotel by ITC',
+    destination: 'Pahalgam',
+    category: '4 Star Premium Resort',
+    address: 'Aru Road, Pahalgam 192126',
+    contact: '+91 1936 243 210',
+    supplierId: 'demo-supplier-01',
+    description: 'Scenic mountain resort nestled on the Rajwas plateau overlooking Lidder Valley.',
+    amenities: ['Lidder View Lawn', 'Multi-Cuisine Dining', 'Bonfire', 'Activity Center'],
+    active: true,
+    isDemo: true
+  },
+  {
+    id: 'demo-hotel-05',
+    name: 'The Grand Dragon Ladakh',
+    destination: 'Ladakh',
+    category: '5 Star Deluxe',
+    address: 'Old Road Sheynam, Leh 194101',
+    contact: '+91 1982 255 886',
+    supplierId: 'demo-supplier-01',
+    description: 'Centrally heated luxury hotel equipped with solar panels and oxygen support.',
+    amenities: ['Oxygen Concentrators', 'Central Heating', 'Cultural Shows', 'Bakery', 'Mountain View'],
     active: true,
     isDemo: true
   }
 ];
-export const DEMO_HOTEL_ROOMS: any[] = [];
+
+export const DEMO_HOTEL_ROOMS: HotelRoom[] = [
+  {
+    id: 'room-khyber-01',
+    hotelId: 'demo-hotel-01',
+    roomType: 'Premier Pine View Room',
+    mealPlan: 'MAP (Breakfast + Dinner)',
+    supplierCost: 14000,
+    sellingPrice: 20000,
+    currency: 'INR'
+  },
+  {
+    id: 'room-khyber-02',
+    hotelId: 'demo-hotel-01',
+    roomType: 'Luxury Heritage Suite',
+    mealPlan: 'MAP (Breakfast + Dinner)',
+    supplierCost: 22000,
+    sellingPrice: 32000,
+    currency: 'INR'
+  },
+  {
+    id: 'room-lalit-01',
+    hotelId: 'demo-hotel-02',
+    roomType: 'Palace Room Lake View',
+    mealPlan: 'CP (Breakfast Only)',
+    supplierCost: 12000,
+    sellingPrice: 17500,
+    currency: 'INR'
+  },
+  {
+    id: 'room-mascot-01',
+    hotelId: 'demo-hotel-03',
+    roomType: 'Royal Cedar Suite',
+    mealPlan: 'MAP (Breakfast + Dinner)',
+    supplierCost: 6500,
+    sellingPrice: 10500,
+    currency: 'INR'
+  },
+  {
+    id: 'room-pine-01',
+    hotelId: 'demo-hotel-04',
+    roomType: 'Superior Valley Room',
+    mealPlan: 'MAP (Breakfast + Dinner)',
+    supplierCost: 9000,
+    sellingPrice: 13500,
+    currency: 'INR'
+  },
+  {
+    id: 'room-dragon-01',
+    hotelId: 'demo-hotel-05',
+    roomType: 'Deluxe Mountain View',
+    mealPlan: 'MAP (Breakfast + Dinner)',
+    supplierCost: 10000,
+    sellingPrice: 15000,
+    currency: 'INR'
+  }
+];
+
 export const DEMO_HOTEL_BOOKINGS: any[] = [];
-export const DEMO_TRANSPORTS: any[] = [];
-export const DEMO_DRIVERS: any[] = [
+
+export const DEMO_TRANSPORTS: Transport[] = [
+  {
+    id: 'demo-trans-01',
+    tripId: 'trip-demo-01',
+    date: '2026-10-12',
+    pickup: 'Srinagar Airport',
+    dropoff: 'Srinagar / Gulmarg / Pahalgam Circuit',
+    vehicleType: 'Innova Crysta AC (6 Seater)',
+    supplierId: 'demo-supplier-02',
+    supplierCost: 3400,
+    sellingPrice: 4800,
+    profit: 1400,
+    status: 'CONFIRMED',
+    notes: 'Clean vehicle with verified mountain chauffeur.'
+  },
+  {
+    id: 'demo-trans-02',
+    tripId: 'trip-demo-01',
+    date: '2026-10-13',
+    pickup: 'Leh Kushok Bakula Airport',
+    dropoff: 'Nubra Valley & Pangong Tso 4x4 Circuit',
+    vehicleType: 'Toyota Fortuner 4x4 (High Passes)',
+    supplierId: 'demo-supplier-02',
+    supplierCost: 5500,
+    sellingPrice: 7800,
+    profit: 2300,
+    status: 'CONFIRMED',
+    notes: 'Oxygen cylinder equipped.'
+  },
+  {
+    id: 'demo-trans-03',
+    tripId: 'trip-demo-01',
+    date: '2026-10-14',
+    pickup: 'Jammu Railway Station / Airport',
+    dropoff: 'Katra Vaishno Devi & Patnitop',
+    vehicleType: 'Force Tempo Traveller (12 Seater)',
+    supplierId: 'demo-supplier-02',
+    supplierCost: 5800,
+    sellingPrice: 8200,
+    profit: 2400,
+    status: 'CONFIRMED',
+    notes: 'Group transit with AC & pushback seats.'
+  },
+  {
+    id: 'demo-trans-04',
+    tripId: 'trip-demo-01',
+    date: '2026-10-15',
+    pickup: 'Srinagar Local Stays',
+    dropoff: 'Mughal Gardens & Old City Circuit',
+    vehicleType: 'Toyota Etios / Dzire AC (4 Seater)',
+    supplierId: 'demo-supplier-02',
+    supplierCost: 2200,
+    sellingPrice: 3200,
+    profit: 1000,
+    status: 'CONFIRMED',
+    notes: 'Comfortable sedan for couples and city touring.'
+  }
+];
+
+export const DEMO_DRIVERS: Driver[] = [
   {
     id: 'demo-driver-01',
-    name: 'Tariq Ahmed',
+    name: 'Tariq Ahmed Bhat',
     phone: '+91 94190 12345',
-    vehicleType: 'Innova Crysta',
+    vehicleType: 'Innova Crysta AC',
     vehicleNumber: 'JK01AB1234',
     supplierId: 'demo-supplier-02',
     active: true,
+    notes: 'Senior chauffeur with 12 years Himalayan mountain driving experience. Polite and fluent in Hindi/English.',
+    isDemo: true
+  },
+  {
+    id: 'demo-driver-02',
+    name: 'Stanzin Dorjey',
+    phone: '+91 94191 88776',
+    vehicleType: 'Toyota Fortuner 4x4',
+    vehicleNumber: 'LA02C9988',
+    supplierId: 'demo-supplier-02',
+    active: true,
+    notes: 'High-altitude specialist for Khardung La, Chang La and Zanskar tracks.',
     isDemo: true
   }
 ];
-export const DEMO_ACTIVITIES: any[] = [];
+
+export const DEMO_ACTIVITIES: Activity[] = [
+  {
+    id: 'demo-act-01',
+    name: 'Gulmarg Gondola Phase 1 & 2 Cable Car Ticket Assistance',
+    destination: 'Gulmarg',
+    supplierId: 'demo-supplier-01',
+    description: 'High-altitude cable car up to 13,780 ft Apharwat peak with snow activity support.',
+    supplierCost: 1850,
+    sellingPrice: 2450,
+    active: true,
+    isDemo: true
+  },
+  {
+    id: 'demo-act-02',
+    name: 'Private Sunset Shikara Ride on Nigeen Lake with Kahwa',
+    destination: 'Srinagar',
+    supplierId: 'demo-supplier-01',
+    description: '1.5-hour peaceful wooden boat cruise across tranquil waters with authentic saffron tea.',
+    supplierCost: 700,
+    sellingPrice: 1300,
+    active: true,
+    isDemo: true
+  },
+  {
+    id: 'demo-act-03',
+    name: 'Pahalgam Betaab Valley & Aru Valley Private 4x4 Excursion',
+    destination: 'Pahalgam',
+    supplierId: 'demo-supplier-02',
+    description: 'Local union jeep tour covering Betaab Valley, Aru Valley, and Chandanwari.',
+    supplierCost: 2400,
+    sellingPrice: 3500,
+    active: true,
+    isDemo: true
+  },
+  {
+    id: 'demo-act-04',
+    name: 'Hunder Sand Dunes Double-Humped Bactrian Camel Safari',
+    destination: 'Ladakh',
+    supplierId: 'demo-supplier-02',
+    description: '30-minute camel safari across high-altitude white sand dunes of Nubra Valley.',
+    supplierCost: 750,
+    sellingPrice: 1200,
+    active: true,
+    isDemo: true
+  },
+  {
+    id: 'demo-act-05',
+    name: 'Authentic 7-Course Kashmiri Wazwan Experience',
+    destination: 'Srinagar',
+    supplierId: 'demo-supplier-01',
+    description: 'Traditional feast with Rogan Josh, Rista, Gushtaba, and Tabak Maaz served on copper Traem.',
+    supplierCost: 1800,
+    sellingPrice: 2600,
+    active: true,
+    isDemo: true
+  }
+];
+
 export const DEMO_ACTIVITY_BOOKINGS: any[] = [];
-export const DEMO_SUPPLIERS: any[] = [
+
+export const DEMO_SUPPLIERS: Supplier[] = [
   {
     id: 'demo-supplier-01',
-    name: 'Khyber Hotels Group',
+    name: 'Himalayan Hospitality & Resorts Alliance',
     type: 'HOTEL',
-    contactPerson: 'Manager',
+    contactPerson: 'Nasir Mir',
     phone: '+91 99066 88888',
-    email: 'res@khyber.com',
-    city: 'Gulmarg',
-    paymentTerms: 'Prepaid',
+    email: 'contracts@himalayanalliancestays.com',
+    city: 'Srinagar',
+    paymentTerms: '30% Advance, Balance on Check-in',
     active: true,
     isDemo: true
   },
   {
     id: 'demo-supplier-02',
-    name: 'J&K Transport Syndicate',
+    name: 'J&K Royal Transport Fleet Syndicate',
     type: 'TRANSPORT',
-    contactPerson: 'Showkat Ali',
+    contactPerson: 'Showkat Ali Dar',
     phone: '+91 94190 99999',
-    email: 'transport@jksyndicate.com',
+    email: 'fleet@jkroyaltransport.com',
     city: 'Srinagar',
-    paymentTerms: 'Postpaid 15 Days',
+    paymentTerms: 'Weekly Settlement (Postpaid)',
     active: true,
     isDemo: true
   }
 ];
-export const DEMO_VOUCHERS: any[] = [];
+
+export const DEMO_VOUCHERS: Voucher[] = [
+  {
+    id: 'vouch-demo-01',
+    bookingId: 'book-demo-01',
+    tripId: 'trip-demo-01',
+    type: 'HOTEL',
+    status: 'GENERATED',
+    generatedAt: '2026-08-22T14:00:00Z',
+    fileUrl: '/vouchers/vouch-demo-01.pdf',
+    isDemo: true
+  }
+];
+

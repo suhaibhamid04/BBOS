@@ -32,6 +32,7 @@ import {
   MarketingAiGenerateResult,
   Trip,
   ItineraryDay,
+  ItineraryItem,
   Hotel,
   HotelRoom,
   HotelBooking,
@@ -74,8 +75,8 @@ import {
   DEMO_VOUCHERS
 } from '../services/demoData';
 import { useAuth } from './AuthContext';
-import { db } from '../lib/firebase';
-import { doc, setDoc } from 'firebase/firestore';
+import { db, auth } from '../lib/firebase';
+import { doc, setDoc, deleteDoc } from 'firebase/firestore';
 
 interface DataContextType {
   leads: Lead[];
@@ -98,12 +99,23 @@ interface DataContextType {
   aiAgents: AiAgentConfig[];
 
   trips: Trip[];
+  itineraryDays: ItineraryDay[];
   hotels: Hotel[];
+  hotelRooms: HotelRoom[];
   transports: Transport[];
   drivers: Driver[];
   activities: Activity[];
   suppliers: Supplier[];
   vouchers: Voucher[];
+
+  // Trip & Itinerary actions
+  createTrip: (tripData: Omit<Trip, 'id' | 'createdAt' | 'updatedAt' | 'status' | 'grossProfit' | 'grossMargin' | 'totalCost' | 'totalSellingPrice'> & { budget?: number; totalCost?: number; totalSellingPrice?: number }, initialDaysCount?: number, fromPackageId?: string) => Promise<Trip>;
+  updateTrip: (id: string, updates: Partial<Trip>) => Promise<void>;
+  addItineraryDay: (tripId: string, dayData?: Partial<ItineraryDay>) => Promise<ItineraryDay>;
+  updateItineraryDay: (id: string, updates: Partial<ItineraryDay>) => Promise<void>;
+  deleteItineraryDay: (id: string) => Promise<void>;
+  addItineraryItem: (dayId: string, item: Omit<ItineraryItem, 'id' | 'dayId'>) => Promise<ItineraryItem>;
+  deleteItineraryItem: (dayId: string, itemId: string) => Promise<void>;
 
   // Lead actions
   createLead: (lead: Omit<Lead, 'id' | 'createdAt' | 'updatedAt'>) => Promise<Lead>;
@@ -127,7 +139,13 @@ interface DataContextType {
   sendMessage: (conversationId: string, content: string, senderType?: 'EMPLOYEE' | 'CUSTOMER' | 'AI' | 'SYSTEM') => Promise<void>;
 
   // Quote actions
-  createQuote: (quote: Omit<Quote, 'id' | 'createdAt'>) => Promise<Quote>;
+  createQuote: (quote: Omit<Quote, 'id' | 'createdAt' | 'version'> & { version?: number }) => Promise<Quote>;
+  updateQuote: (id: string, updates: Partial<Quote>, createNewVersion?: boolean) => Promise<Quote>;
+  convertQuoteToBooking: (quoteId: string) => Promise<Booking>;
+
+  // Booking actions
+  createBooking: (bookingData: Omit<Booking, 'id' | 'createdAt' | 'updatedAt' | 'bookingReference'>) => Promise<Booking>;
+  updateBooking: (id: string, updates: Partial<Booking>) => Promise<void>;
 
   // AI & Approvals
   approveAction: (approvalId: string, feedback?: string) => Promise<void>;
@@ -248,6 +266,18 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return saved ? JSON.parse(saved) : DEMO_TRIPS;
   });
 
+  const [itineraryDays, setItineraryDays] = useState<ItineraryDay[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
+    const saved = localStorage.getItem('bb_itinerary_days');
+    return saved ? JSON.parse(saved) : DEMO_ITINERARIES;
+  });
+
+  const [hotelRooms] = useState<HotelRoom[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
+    const saved = localStorage.getItem('bb_hotel_rooms');
+    return saved ? JSON.parse(saved) : DEMO_HOTEL_ROOMS;
+  });
+
   const [hotels, setHotels] = useState<Hotel[]>(() => {
     if (!APP_CONFIG.DEMO_MODE) return [];
     const saved = localStorage.getItem('bb_hotels');
@@ -337,11 +367,18 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Sync to local storage for instant responsiveness (only in DEMO_MODE)
   useEffect(() => {
     if (!APP_CONFIG.DEMO_MODE) return;
-    localStorage.setItem('bb_leads', JSON.stringify(leads));
-  }, [leads]);
+    localStorage.setItem('bb_trips', JSON.stringify(trips));
+  }, [trips]);
+
   useEffect(() => {
-    localStorage.setItem('bb_customers', JSON.stringify(customers));
-  }, [customers]);
+    if (!APP_CONFIG.DEMO_MODE) return;
+    localStorage.setItem('bb_itinerary_days', JSON.stringify(itineraryDays));
+  }, [itineraryDays]);
+
+  useEffect(() => {
+    if (!APP_CONFIG.DEMO_MODE) return;
+    localStorage.setItem('bb_vouchers', JSON.stringify(vouchers));
+  }, [vouchers]);
   useEffect(() => {
     localStorage.setItem('bb_tasks', JSON.stringify(tasks));
   }, [tasks]);
@@ -394,13 +431,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.setItem('bb_vouchers', JSON.stringify(vouchers));
   }, [vouchers]);
 
-  // Helper to log audit events
+  // Helper to log audit events with verified actor details
   const logAuditEvent = (action: string, entityType: string, entityId: string, before?: any, after?: any, reason?: string) => {
+    const actorFirebaseUid = auth?.currentUser?.uid;
     const newLog: AuditLog = {
       id: `audit-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       timestamp: new Date().toISOString(),
       actorType: 'HUMAN',
-      actorId: currentUser.id,
+      actorId: actorFirebaseUid || currentUser.id,
       actorName: `${currentUser.name} (${currentUser.role})`,
       action,
       entityType,
@@ -481,17 +519,37 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       totalBookings: 0,
       lifetimeValue: 0,
       createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
+      isDemo: APP_CONFIG.DEMO_MODE
     };
     setCustomers(prev => [newCustomer, ...prev]);
     logAuditEvent('CUSTOMER_CREATED', 'CUSTOMER', newCustomer.id, null, newCustomer);
+
+    if (db) {
+      try {
+        await setDoc(doc(db, 'customers', newCustomer.id), newCustomer);
+      } catch (err) {
+        console.warn('Firestore customer create notice:', err);
+      }
+    }
     return newCustomer;
   };
 
   const updateCustomer = async (id: string, updates: Partial<Customer>) => {
+    const prevCust = customers.find(c => c.id === id);
+    const updated = prevCust ? { ...prevCust, ...updates, updatedAt: new Date().toISOString() } : null;
     setCustomers(prev =>
       prev.map(c => (c.id === id ? { ...c, ...updates, updatedAt: new Date().toISOString() } : c))
     );
+    logAuditEvent('CUSTOMER_UPDATED', 'CUSTOMER', id, prevCust, updates, `Updated customer ${prevCust?.name || id}`);
+
+    if (db && updated) {
+      try {
+        await setDoc(doc(db, 'customers', id), updated);
+      } catch (err) {
+        console.warn('Firestore customer update notice:', err);
+      }
+    }
   };
 
   // Task CRUD
@@ -551,16 +609,428 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     );
   };
 
+  // Trip & Itinerary Operations
+  const createTrip = async (
+    tripData: Omit<Trip, 'id' | 'createdAt' | 'updatedAt' | 'status' | 'grossProfit' | 'grossMargin' | 'totalCost' | 'totalSellingPrice'> & { budget?: number; totalCost?: number; totalSellingPrice?: number },
+    initialDaysCount?: number,
+    fromPackageId?: string
+  ): Promise<Trip> => {
+    const tripId = `trip-${Date.now()}`;
+    const initialCost = tripData.totalCost || 0;
+    const initialPrice = tripData.totalSellingPrice || tripData.budget || 0;
+    const profit = initialPrice - initialCost;
+    const margin = initialPrice > 0 ? Number(((profit / initialPrice) * 100).toFixed(1)) : 0;
+
+    const newTrip: Trip = {
+      ...tripData,
+      id: tripId,
+      status: 'DRAFT',
+      currency: tripData.currency || 'INR',
+      totalCost: initialCost,
+      totalSellingPrice: initialPrice,
+      grossProfit: profit,
+      grossMargin: margin,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      isDemo: APP_CONFIG.DEMO_MODE
+    };
+
+    // Generate Initial Days from Dates or Package
+    const createdDays: ItineraryDay[] = [];
+    const matchedPkg = fromPackageId ? packages.find(p => p.id === fromPackageId) : null;
+    
+    // Calculate days between start and end date if available
+    let calculatedDays = initialDaysCount || 4;
+    if (tripData.startDate && tripData.endDate) {
+      const start = new Date(tripData.startDate).getTime();
+      const end = new Date(tripData.endDate).getTime();
+      const diffDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
+      if (diffDays > 0 && diffDays < 30) {
+        calculatedDays = diffDays;
+      }
+    }
+    const daysToGenerate = matchedPkg ? matchedPkg.durationDays : calculatedDays;
+    const startDateObj = tripData.startDate ? new Date(tripData.startDate) : new Date();
+
+    for (let d = 1; d <= daysToGenerate; d++) {
+      const dayDate = new Date(startDateObj);
+      dayDate.setDate(dayDate.getDate() + (d - 1));
+      const pkgDay = matchedPkg?.itinerary?.find(item => item.day === d);
+
+      const newDay: ItineraryDay = {
+        id: `day-${tripId}-${d}-${Date.now()}`,
+        tripId,
+        dayNumber: d,
+        date: dayDate.toISOString().split('T')[0],
+        title: pkgDay ? pkgDay.title : `Day ${d} - Itinerary`,
+        location: tripData.destination || 'Destination',
+        description: pkgDay ? pkgDay.description : '',
+        items: []
+      };
+      createdDays.push(newDay);
+    }
+
+    setTrips(prev => [newTrip, ...prev]);
+    if (createdDays.length > 0) {
+      setItineraryDays(prev => [...prev, ...createdDays]);
+    }
+
+    logAuditEvent('trip.created', 'TRIP', newTrip.id, null, newTrip, `Created new trip "${newTrip.title}" for ${newTrip.destination}`);
+
+    if (db) {
+      try {
+        await setDoc(doc(db, 'trips', newTrip.id), newTrip);
+        for (const day of createdDays) {
+          await setDoc(doc(db, 'itinerary_days', day.id), day);
+        }
+      } catch (err) {
+        console.warn('Firestore trip create notice:', err);
+      }
+    }
+
+    return newTrip;
+  };
+
+  const updateTrip = async (id: string, updates: Partial<Trip>) => {
+    const prevTrip = trips.find(t => t.id === id);
+    const updated = prevTrip ? { ...prevTrip, ...updates, updatedAt: new Date().toISOString() } : null;
+    setTrips(prev =>
+      prev.map(t => (t.id === id ? { ...t, ...updates, updatedAt: new Date().toISOString() } : t))
+    );
+    logAuditEvent('trip.updated', 'TRIP', id, prevTrip, updates, `Updated trip ${prevTrip?.title || id}`);
+
+    if (db && updated) {
+      try {
+        await setDoc(doc(db, 'trips', id), updated);
+      } catch (err) {
+        console.warn('Firestore update trip notice:', err);
+      }
+    }
+  };
+
+  const addItineraryDay = async (tripId: string, dayData?: Partial<ItineraryDay>): Promise<ItineraryDay> => {
+    const trip = trips.find(t => t.id === tripId);
+    const existingDays = itineraryDays.filter(d => d.tripId === tripId);
+    const nextDayNumber = existingDays.length + 1;
+
+    let nextDate = new Date().toISOString().split('T')[0];
+    if (trip?.startDate) {
+      const d = new Date(trip.startDate);
+      d.setDate(d.getDate() + (nextDayNumber - 1));
+      nextDate = d.toISOString().split('T')[0];
+    }
+
+    const newDay: ItineraryDay = {
+      id: `day-${tripId}-${nextDayNumber}-${Date.now()}`,
+      tripId,
+      dayNumber: nextDayNumber,
+      date: dayData?.date || nextDate,
+      title: dayData?.title || `Day ${nextDayNumber}`,
+      location: dayData?.location || trip?.destination || 'Location',
+      description: dayData?.description || '',
+      notes: dayData?.notes || '',
+      items: dayData?.items || []
+    };
+
+    setItineraryDays(prev => [...prev, newDay]);
+    logAuditEvent('itinerary.day.created', 'ITINERARY_DAY', newDay.id, null, newDay, `Added Day ${nextDayNumber} to trip ${trip?.title || tripId}`);
+
+    if (db) {
+      try {
+        await setDoc(doc(db, 'itinerary_days', newDay.id), newDay);
+      } catch (err) {
+        console.warn('Firestore add day notice:', err);
+      }
+    }
+
+    return newDay;
+  };
+
+  const updateItineraryDay = async (id: string, updates: Partial<ItineraryDay>) => {
+    const day = itineraryDays.find(d => d.id === id);
+    setItineraryDays(prev =>
+      prev.map(d => (d.id === id ? { ...d, ...updates } : d))
+    );
+    if (db && day) {
+      try {
+        await setDoc(doc(db, 'itinerary_days', id), { ...day, ...updates });
+      } catch (err) {
+        console.warn('Firestore day update notice:', err);
+      }
+    }
+  };
+
+  const deleteItineraryDay = async (id: string) => {
+    const day = itineraryDays.find(d => d.id === id);
+    if (!day) return;
+    const remainingDays = itineraryDays.filter(d => d.id !== id);
+    setItineraryDays(remainingDays);
+
+    // Recompute costing for trip
+    const tripDays = remainingDays.filter(d => d.tripId === day.tripId);
+    let totalCost = 0;
+    let totalSellingPrice = 0;
+    for (const d of tripDays) {
+      for (const it of (d.items || [])) {
+        totalCost += it.supplierCost || 0;
+        totalSellingPrice += it.sellingPrice || 0;
+      }
+    }
+    const profit = totalSellingPrice - totalCost;
+    const margin = totalSellingPrice > 0 ? Number(((profit / totalSellingPrice) * 100).toFixed(1)) : 0;
+
+    setTrips(prev =>
+      prev.map(t => (t.id === day.tripId ? { ...t, totalCost, totalSellingPrice, grossProfit: profit, grossMargin: margin, updatedAt: new Date().toISOString() } : t))
+    );
+
+    if (db) {
+      try {
+        await deleteDoc(doc(db, 'itinerary_days', id));
+        const updatedTrip = trips.find(t => t.id === day.tripId);
+        if (updatedTrip) {
+          await setDoc(doc(db, 'trips', day.tripId), { ...updatedTrip, totalCost, totalSellingPrice, grossProfit: profit, grossMargin: margin, updatedAt: new Date().toISOString() });
+        }
+      } catch (err) {
+        console.warn('Firestore day delete notice:', err);
+      }
+    }
+  };
+
+  const addItineraryItem = async (dayId: string, itemData: Omit<ItineraryItem, 'id' | 'dayId'>): Promise<ItineraryItem> => {
+    const targetDay = itineraryDays.find(d => d.id === dayId);
+    if (!targetDay) throw new Error(`Day ${dayId} not found`);
+
+    const newItem: ItineraryItem = {
+      ...itemData,
+      id: `item-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      dayId,
+      tripId: targetDay.tripId
+    };
+
+    const updatedDay = { ...targetDay, items: [...(targetDay.items || []), newItem] };
+    const updatedDays = itineraryDays.map(d => (d.id === dayId ? updatedDay : d));
+
+    setItineraryDays(updatedDays);
+
+    // Recompute costing for this trip
+    const tripDays = updatedDays.filter(d => d.tripId === targetDay.tripId);
+    let totalCost = 0;
+    let totalSellingPrice = 0;
+    for (const d of tripDays) {
+      for (const it of (d.items || [])) {
+        totalCost += it.supplierCost || 0;
+        totalSellingPrice += it.sellingPrice || 0;
+      }
+    }
+    const profit = totalSellingPrice - totalCost;
+    const margin = totalSellingPrice > 0 ? Number(((profit / totalSellingPrice) * 100).toFixed(1)) : 0;
+
+    setTrips(prev =>
+      prev.map(t => (t.id === targetDay.tripId ? { ...t, totalCost, totalSellingPrice, grossProfit: profit, grossMargin: margin, updatedAt: new Date().toISOString() } : t))
+    );
+
+    const actionName = itemData.type === 'HOTEL' ? 'hotel.added_to_trip' :
+                       itemData.type === 'TRANSPORT' ? 'transport.added_to_trip' :
+                       itemData.type === 'ACTIVITY' ? 'activity.added_to_trip' : 'itinerary.item.added';
+
+    logAuditEvent(actionName, 'ITINERARY_ITEM', newItem.id, null, newItem, `Added ${itemData.type}: ${itemData.title}`);
+
+    if (db) {
+      try {
+        await setDoc(doc(db, 'itinerary_days', dayId), updatedDay);
+        const currentTrip = trips.find(t => t.id === targetDay.tripId);
+        if (currentTrip) {
+          await setDoc(doc(db, 'trips', targetDay.tripId), { ...currentTrip, totalCost, totalSellingPrice, grossProfit: profit, grossMargin: margin, updatedAt: new Date().toISOString() });
+        }
+      } catch (err) {
+        console.warn('Firestore add item notice:', err);
+      }
+    }
+
+    return newItem;
+  };
+
+  const deleteItineraryItem = async (dayId: string, itemId: string) => {
+    const targetDay = itineraryDays.find(d => d.id === dayId);
+    if (!targetDay) return;
+
+    const updatedDay = { ...targetDay, items: (targetDay.items || []).filter(it => it.id !== itemId) };
+    const updatedDays = itineraryDays.map(d => (d.id === dayId ? updatedDay : d));
+
+    setItineraryDays(updatedDays);
+
+    // Recompute costing
+    const tripDays = updatedDays.filter(d => d.tripId === targetDay.tripId);
+    let totalCost = 0;
+    let totalSellingPrice = 0;
+    for (const d of tripDays) {
+      for (const it of (d.items || [])) {
+        totalCost += it.supplierCost || 0;
+        totalSellingPrice += it.sellingPrice || 0;
+      }
+    }
+    const profit = totalSellingPrice - totalCost;
+    const margin = totalSellingPrice > 0 ? Number(((profit / totalSellingPrice) * 100).toFixed(1)) : 0;
+
+    setTrips(prev =>
+      prev.map(t => (t.id === targetDay.tripId ? { ...t, totalCost, totalSellingPrice, grossProfit: profit, grossMargin: margin, updatedAt: new Date().toISOString() } : t))
+    );
+
+    if (db) {
+      try {
+        await setDoc(doc(db, 'itinerary_days', dayId), updatedDay);
+        const currentTrip = trips.find(t => t.id === targetDay.tripId);
+        if (currentTrip) {
+          await setDoc(doc(db, 'trips', targetDay.tripId), { ...currentTrip, totalCost, totalSellingPrice, grossProfit: profit, grossMargin: margin, updatedAt: new Date().toISOString() });
+        }
+      } catch (err) {
+        console.warn('Firestore delete item notice:', err);
+      }
+    }
+  };
+
   // Quotes
-  const createQuote = async (quoteData: Omit<Quote, 'id' | 'createdAt'>): Promise<Quote> => {
+  const createQuote = async (quoteData: Omit<Quote, 'id' | 'createdAt' | 'version'> & { version?: number }): Promise<Quote> => {
     const newQuote: Quote = {
       ...quoteData,
       id: `quote-${Date.now()}`,
-      createdAt: new Date().toISOString()
+      version: quoteData.version || 1,
+      versionHistory: quoteData.versionHistory || [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      isDemo: APP_CONFIG.DEMO_MODE
     };
     setQuotes(prev => [newQuote, ...prev]);
     logAuditEvent('QUOTE_CREATED', 'QUOTE', newQuote.id, null, newQuote, `Generated quote of ₹${newQuote.finalAmount.toLocaleString('en-IN')}`);
+
+    if (db) {
+      try {
+        await setDoc(doc(db, 'quotes', newQuote.id), newQuote);
+      } catch (err) {
+        console.warn('Firestore quote create notice:', err);
+      }
+    }
     return newQuote;
+  };
+
+  const updateQuote = async (id: string, updates: Partial<Quote>, createNewVersion = false): Promise<Quote> => {
+    const prevQuote = quotes.find(q => q.id === id);
+    if (!prevQuote) throw new Error(`Quote ${id} not found`);
+
+    let nextVersion = prevQuote.version || 1;
+    let nextHistory = [...(prevQuote.versionHistory || [])];
+
+    if (createNewVersion) {
+      nextHistory.push({
+        version: prevQuote.version || 1,
+        updatedAt: prevQuote.updatedAt || prevQuote.createdAt,
+        updatedBy: currentUser.name,
+        totalAmount: prevQuote.totalAmount,
+        discountAmount: prevQuote.discountAmount,
+        finalAmount: prevQuote.finalAmount,
+        status: prevQuote.status,
+        notes: prevQuote.notes,
+        inclusions: prevQuote.inclusions,
+        exclusions: prevQuote.exclusions,
+        termsAndConditions: prevQuote.termsAndConditions
+      });
+      nextVersion = nextVersion + 1;
+    }
+
+    const updatedQuote: Quote = {
+      ...prevQuote,
+      ...updates,
+      version: nextVersion,
+      versionHistory: nextHistory,
+      updatedAt: new Date().toISOString()
+    };
+
+    setQuotes(prev => prev.map(q => (q.id === id ? updatedQuote : q)));
+    logAuditEvent('QUOTE_UPDATED', 'QUOTE', id, prevQuote, updates, `Updated quote #${id} (Version ${nextVersion})`);
+
+    if (db) {
+      try {
+        await setDoc(doc(db, 'quotes', id), updatedQuote);
+      } catch (err) {
+        console.warn('Firestore quote update notice:', err);
+      }
+    }
+    return updatedQuote;
+  };
+
+  const createBooking = async (bookingData: Omit<Booking, 'id' | 'createdAt' | 'updatedAt' | 'bookingReference'>): Promise<Booking> => {
+    const newBooking: Booking = {
+      ...bookingData,
+      id: `book-${Date.now()}`,
+      bookingReference: `BB-${Math.floor(100000 + Math.random() * 900000)}`,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      isDemo: APP_CONFIG.DEMO_MODE
+    };
+
+    setBookings(prev => [newBooking, ...prev]);
+    logAuditEvent('BOOKING_CREATED', 'BOOKING', newBooking.id, null, newBooking, `Booking ${newBooking.bookingReference} confirmed for ₹${newBooking.totalAmount.toLocaleString('en-IN')}`);
+
+    if (db) {
+      try {
+        await setDoc(doc(db, 'bookings', newBooking.id), newBooking);
+      } catch (err) {
+        console.warn('Firestore booking create notice:', err);
+      }
+    }
+    return newBooking;
+  };
+
+  const updateBooking = async (id: string, updates: Partial<Booking>) => {
+    const prevBooking = bookings.find(b => b.id === id);
+    const updated = prevBooking ? { ...prevBooking, ...updates, updatedAt: new Date().toISOString() } : null;
+
+    setBookings(prev => prev.map(b => (b.id === id ? { ...b, ...updates, updatedAt: new Date().toISOString() } : b)));
+    logAuditEvent('BOOKING_UPDATED', 'BOOKING', id, prevBooking, updates, `Updated booking #${id}`);
+
+    if (db && updated) {
+      try {
+        await setDoc(doc(db, 'bookings', id), updated);
+      } catch (err) {
+        console.warn('Firestore booking update notice:', err);
+      }
+    }
+  };
+
+  const convertQuoteToBooking = async (quoteId: string): Promise<Booking> => {
+    const quote = quotes.find(q => q.id === quoteId);
+    if (!quote) throw new Error(`Quote ${quoteId} not found`);
+
+    const trip = quote.tripId ? trips.find(t => t.id === quote.tripId) : null;
+
+    const booking = await createBooking({
+      quoteId: quote.id,
+      tripId: quote.tripId || '',
+      customerId: quote.customerId,
+      leadId: quote.leadId,
+      status: 'CONFIRMED',
+      totalAmount: quote.finalAmount,
+      amountReceived: 0,
+      amountPending: quote.finalAmount,
+      travelStartDate: trip?.startDate || new Date().toISOString().split('T')[0],
+      travelEndDate: trip?.endDate || new Date(Date.now() + 5 * 86400000).toISOString().split('T')[0],
+      assignedSalesEmployeeId: quote.salesEmployeeId || currentUser.id,
+      assignedOperationsEmployeeId: 'emp-05'
+    });
+
+    await updateQuote(quote.id, { status: 'ACCEPTED' });
+
+    if (trip) {
+      await updateTrip(trip.id, { status: 'BOOKED' });
+    }
+
+    if (quote.leadId) {
+      await updateLeadStatus(quote.leadId, 'BOOKED');
+    }
+
+    logAuditEvent('QUOTE_CONVERTED_TO_BOOKING', 'QUOTE', quote.id, { status: quote.status }, { status: 'ACCEPTED', bookingId: booking.id }, `Quote converted to confirmed booking ${booking.bookingReference}`);
+
+    return booking;
   };
 
   // Approvals
@@ -622,16 +1092,34 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     );
   };
 
+  // Secure authenticated headers for server calls
+  const getAuthHeaders = async (): Promise<Record<string, string>> => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'X-Demo-User-Id': currentUser.id,
+    };
+    if (auth && auth.currentUser) {
+      try {
+        const token = await auth.currentUser.getIdToken();
+        headers['Authorization'] = `Bearer ${token}`;
+      } catch (err) {
+        console.warn('Could not get Firebase ID token:', err);
+      }
+    }
+    return headers;
+  };
+
   // Server AI Calls
   const runSalesAiAnalysis = async (leadId: string): Promise<SalesAiAnalysisResult> => {
     const lead = leads.find(l => l.id === leadId);
     if (!lead) throw new Error('Lead not found');
 
     const leadMessages = messages.filter(m => m.conversationId === `demo-conv-01` || m.conversationId === leadId);
+    const headers = await getAuthHeaders();
 
     const response = await fetch('/api/ai/sales-analyze', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ lead, messages: leadMessages })
     });
 
@@ -654,9 +1142,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const runMarketingStrategy = async (destination: string, season: string, objective: string): Promise<MarketingAiStrategyResult> => {
+    const headers = await getAuthHeaders();
     const response = await fetch('/api/ai/marketing-strategy', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ destination, targetMonthOrSeason: season, primaryObjective: objective })
     });
 
@@ -694,8 +1183,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const askCommandCenterAi = async (question: string) => {
     const contextData = {
-      userRole: currentUser.role,
-      userName: currentUser.name,
       totalLeads: leads.length,
       leadStatuses: leads.reduce((acc: any, l) => { acc[l.status] = (acc[l.status] || 0) + 1; return acc; }, {}),
       highPriorityLeads: leads.filter(l => l.priority === 'HIGH' || l.priority === 'URGENT').map(l => ({ name: l.customerName, dest: l.destination, budget: l.budget, status: l.status })),
@@ -704,13 +1191,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       openQuotesCount: quotes.filter(q => q.status === 'SENT' || q.status === 'DRAFT').length
     };
 
+    const headers = await getAuthHeaders();
     const response = await fetch('/api/ai/command-center', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         question,
-        userRole: currentUser.role,
-        userName: currentUser.name,
         contextData
       })
     });
@@ -779,12 +1265,21 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         campaigns,
         aiAgents,
         trips,
+        itineraryDays,
         hotels,
+        hotelRooms,
         transports,
         drivers,
         activities,
         suppliers,
         vouchers,
+        createTrip,
+        updateTrip,
+        addItineraryDay,
+        updateItineraryDay,
+        deleteItineraryDay,
+        addItineraryItem,
+        deleteItineraryItem,
         createLead,
         updateLead,
         updateLeadStatus,
@@ -797,6 +1292,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         createContentItem,
         sendMessage,
         createQuote,
+        updateQuote,
+        convertQuoteToBooking,
+        createBooking,
+        updateBooking,
         approveAction,
         rejectAction,
         approveApproval: approveAction,

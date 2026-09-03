@@ -245,24 +245,92 @@ export interface TravelPackage {
   itinerary: { day: number; title: string; description: string }[];
 }
 
+export interface QuoteVersion {
+  version: number;
+  updatedAt: string;
+  updatedBy?: string;
+  totalAmount: number;
+  discountAmount: number;
+  finalAmount: number;
+  status: 'DRAFT' | 'PENDING_APPROVAL' | 'SENT' | 'VIEWED' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED';
+  notes?: string;
+  inclusions?: string[];
+  exclusions?: string[];
+  termsAndConditions?: string;
+}
+
+export type QuoteStatus = 'DRAFT' | 'PENDING_APPROVAL' | 'SENT' | 'VIEWED' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED';
+
+export interface QuoteHotelItem {
+  id?: string;
+  hotelId?: string;
+  hotelName: string;
+  roomType: string;
+  mealPlan: string;
+  nights: number;
+  rate: number;
+  supplierCost?: number;
+}
+
+export interface QuoteTransportItem {
+  id?: string;
+  transportId?: string;
+  vehicleType: string;
+  route: string;
+  days: number;
+  rate: number;
+  supplierCost?: number;
+}
+
+export interface QuoteActivityItem {
+  id?: string;
+  activityId?: string;
+  name: string;
+  pax: number;
+  rate: number;
+  supplierCost?: number;
+}
+
 export interface Quote {
   id: string;
   leadId: string;
   customerId: string;
   customerName: string;
+  customerPhone?: string;
+  customerEmail?: string;
   destination: DestinationRegion | string;
   tripId?: string;
   items?: any[];
+  hotels?: QuoteHotelItem[];
+  transports?: QuoteTransportItem[];
+  activities?: QuoteActivityItem[];
   travelerCount: number;
+  adults?: number;
+  children?: number;
   packageId?: string;
   packageName?: string;
+  durationDays?: number;
+  durationNights?: number;
   totalAmount: number;
   discountAmount: number;
   finalAmount: number;
-  status: 'DRAFT' | 'PENDING_APPROVAL' | 'SENT' | 'VIEWED' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED';
+  // Role-gated financials
+  totalCost?: number;
+  grossProfit?: number;
+  grossMargin?: number;
+  status: QuoteStatus;
   validUntil: string;
   createdAt: string;
+  updatedAt?: string;
   notes?: string;
+  internalNotes?: string;
+  inclusions?: string[];
+  exclusions?: string[];
+  termsAndConditions?: string;
+  salesEmployeeId?: string;
+  salesEmployeeName?: string;
+  version: number;
+  versionHistory?: QuoteVersion[];
   isDemo?: boolean;
 }
 
@@ -317,6 +385,7 @@ export interface Trip {
   totalSellingPrice: number;
   grossProfit: number;
   grossMargin: number;
+  budget?: number;
   assignedSalesEmployeeId?: string;
   assignedOperationsEmployeeId?: string;
   createdAt: string;
@@ -329,12 +398,17 @@ export type ItineraryItemType = 'HOTEL' | 'TRANSPORT' | 'ACTIVITY' | 'MEAL' | 'S
 export interface ItineraryItem {
   id: string;
   dayId: string;
+  tripId?: string;
   type: ItineraryItemType;
   title: string;
   description: string;
   startTime?: string;
   endTime?: string;
   referenceId?: string;
+  supplierCost?: number;
+  sellingPrice?: number;
+  notes?: string;
+  metadata?: Record<string, any>;
 }
 
 export interface ItineraryDay {
