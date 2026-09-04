@@ -56,7 +56,7 @@ export function AppContent() {
       case 'lead-detail':
         return <LeadDetailView leadId={targetId!} onNavigate={handleNavigate} />;
       case 'leads':
-        return <LeadsView />;
+        return <LeadsView onNavigate={handleNavigate} />;
       case 'customers':
         return <CustomersView />;
       case 'companies':
@@ -71,6 +71,8 @@ export function AppContent() {
         return <SalesAiView />;
       case 'trips':
         return <TripBuilderView initialTripId={targetId} onNavigate={handleNavigate} />;
+      case 'trips-new':
+        return <TripBuilderView initialLeadId={targetId} onNavigate={handleNavigate} />;
       case 'bookings':
         return <BookingsView />;
       case 'marketing-strategy':

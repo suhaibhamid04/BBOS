@@ -51,45 +51,9 @@ export const LeadDetailView: React.FC<Props> = ({ leadId, onNavigate }) => {
       return;
     }
 
-    try {
-      let targetCustomerId = lead.customerId;
-      const existingCust = customers.find(c => c.id === lead.customerId || c.name.toLowerCase() === lead.customerName.toLowerCase());
-      if (existingCust) {
-        targetCustomerId = existingCust.id;
-      } else {
-        const newCust = await createCustomer({
-          name: lead.customerName,
-          phone: lead.customerPhone || '+91 99060 00000',
-          email: lead.customerEmail || 'guest@bookingbridge.com',
-          city: lead.destination || 'Srinagar',
-          segment: 'B2C',
-          tags: [lead.destination, lead.tripType],
-          notes: `Customer created from Lead ${lead.id}`
-        });
-        targetCustomerId = newCust.id;
-      }
-
-      const created = await createTrip({
-        customerId: targetCustomerId,
-        leadId: lead.id,
-        title: `${lead.destination} ${lead.tripType || 'Custom'} Tour for ${lead.customerName}`,
-        destination: lead.destination || 'Kashmir',
-        startDate: lead.travelStartDate || new Date().toISOString().split('T')[0],
-        endDate: lead.travelEndDate || new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-        travelerCount: lead.travelerCount || 2,
-        adults: lead.travelerCount || 2,
-        children: 0,
-        tripType: lead.tripType || 'Leisure',
-        currency: 'INR',
-        budget: lead.budget || 75000,
-        totalCost: 0,
-        totalSellingPrice: lead.budget || 75000
-      });
-
-      onNavigate('trips', created.id);
-    } catch (err) {
-      console.error('Failed to create trip from lead:', err);
-    }
+    // Instead of instantly creating the trip in the background without user review,
+    // we route to the canonical Trip Builder which will auto-open and pre-fill the Lead's data.
+    onNavigate('trips-new', lead.id);
   };
 
   const handleCreateQuoteClick = async () => {

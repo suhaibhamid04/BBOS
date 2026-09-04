@@ -21,7 +21,11 @@ import {
 import { CreateLeadModal } from './CreateLeadModal';
 import { LeadDetailDrawer } from './LeadDetailDrawer';
 
-export const LeadsView: React.FC = () => {
+interface LeadsViewProps {
+  onNavigate?: (section: any, targetId?: string) => void;
+}
+
+export const LeadsView: React.FC<LeadsViewProps> = ({ onNavigate }) => {
   const { leads, updateLeadStatus } = useData();
   const { currentUser, permissions } = useAuth();
 
@@ -378,6 +382,7 @@ export const LeadsView: React.FC = () => {
       <LeadDetailDrawer
         leadId={selectedLeadId}
         onClose={() => setSelectedLeadId(null)}
+        onNavigate={onNavigate}
       />
     </div>
   );

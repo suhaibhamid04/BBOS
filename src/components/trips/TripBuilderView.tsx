@@ -26,10 +26,11 @@ import { useAuth } from '../../context/AuthContext';
 
 interface TripBuilderViewProps {
   initialTripId?: string;
+  initialLeadId?: string;
   onNavigate?: (section: any, targetId?: string) => void;
 }
 
-export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId, onNavigate }) => {
+export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId, initialLeadId, onNavigate }) => {
   const {
     trips,
     itineraryDays,
@@ -114,6 +115,14 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
       setSelectedTripId(initialTripId);
     }
   }, [initialTripId]);
+
+  // Automatically pre-fill from Lead if initialLeadId is provided
+  useEffect(() => {
+    if (initialLeadId) {
+      handleLeadSelect(initialLeadId);
+      setIsCreatingTrip(true);
+    }
+  }, [initialLeadId]);
 
   // Flash toast helper
   const notify = (msg: string) => {
@@ -263,10 +272,10 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
     setTripForm(prev => ({
       ...prev,
       packageId: pkg.id,
-      destination: pkg.destination,
-      title: pkg.title,
-      endDate: end.toISOString().split('T')[0],
-      budget: pkg.basePrice * (prev.adults || 2)
+      destination: prev.leadId ? prev.destination : pkg.destination,
+      title: prev.leadId ? prev.title : pkg.title,
+      endDate: prev.leadId ? prev.endDate : end.toISOString().split('T')[0],
+      budget: prev.leadId ? prev.budget : pkg.basePrice * (prev.adults || 2)
     }));
   };
 
