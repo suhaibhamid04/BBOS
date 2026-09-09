@@ -6,6 +6,13 @@ const RESTRICTED_FINANCIAL_KEYS = [
   'supplierPayment',
   'supplierNotes',
   'internalNotes',
+  'negotiatedRate',
+  'negotiatedBaseRate',
+  'standardBaseRate',
+  'standardRateId',
+  'supplierContractDiscount',
+  'internalSupplierNotes',
+  'commercialDiscount',
 ];
 
 const MARGIN_FINANCIAL_KEYS = [

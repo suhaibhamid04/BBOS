@@ -39,11 +39,12 @@ const SECTION_TITLES: Record<NavSectionKey, string> = {
   vouchers: 'Vouchers',
   employees: 'Team & Employee Directory',
   'roles-permissions': 'Role-Based Access Control Matrix',
-  'ai-permissions': 'AI Safety & Execution Limits',
-  integrations: 'Integrations & External APIs',
-  approvals: 'AI & Human Approval Center',
+  'ai-permissions': 'AI Access & Permissions',
+  'integrations': 'App Integrations',
+  'approvals': 'Approval Center',
   'audit-logs': 'System Audit Logs',
-  settings: 'Operating System Settings'
+  'settings': 'System Settings',
+  'accommodation': 'Accommodation Inventory'
 };
 
 export const AppLayout: React.FC<AppLayoutProps> = ({

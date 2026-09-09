@@ -72,3 +72,12 @@ export const AuditLogRepo = new FirestoreRepository<any>('audit_logs');
 export const AiRecommendationRepo = new FirestoreRepository<any>('ai_recommendations');
 export const AiActionRepo = new FirestoreRepository<any>('ai_actions');
 export const ApprovalRepo = new FirestoreRepository<any>('approvals');
+
+// Accommodation & Rate Management
+export const AccommodationPropertyRepo = new FirestoreRepository<any>('accommodation_properties');
+export const RoomCategoryRepo = new FirestoreRepository<any>('room_categories');
+export const RatePeriodRepo = new FirestoreRepository<any>('rate_periods');
+export const RateSupplementRepo = new FirestoreRepository<any>('rate_supplements');
+export const NegotiatedRateRepo = new FirestoreRepository<any>('negotiated_rates');
+export const PropertyPhotoRepo = new FirestoreRepository<any>('property_photos');
+export const RateHistoryRepo = new FirestoreRepository<any>('rate_history');

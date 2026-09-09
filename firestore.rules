@@ -121,7 +121,55 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // 11. Stays, Transport & Activities Inventory
+    // 11. Accommodation Inventory & Rate Management
+    match /accommodation_properties/{propertyId} {
+      allow read: if isAuthenticated();
+      // Only Admin and Operations can manage base accommodation details
+      allow create, update: if isAdmin() || isOperations();
+      allow delete: if isAdmin();
+    }
+
+    match /room_categories/{categoryId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAdmin() || isOperations();
+      allow delete: if isAdmin();
+    }
+
+    match /property_photos/{photoId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin() || isOperations();
+    }
+
+    // Rate Management — STRICLTY GATED
+    match /rate_periods/{rateId} {
+      // Readable by Operations, Accounts, and Leadership
+      allow read: if isOperations() || isAccounts() || isAdmin();
+      // Manageable by Operations and Leadership
+      allow create, update: if isOperations() || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /rate_supplements/{supplementId} {
+      allow read: if isOperations() || isAccounts() || isAdmin();
+      allow create, update: if isOperations() || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /negotiated_rates/{rateId} {
+      // Readable by Accounts and Leadership
+      allow read: if isAccounts() || isAdmin();
+      // Manageable by Accounts and Leadership
+      allow create, update: if isAccounts() || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /rate_history/{historyId} {
+      allow read: if isAccounts() || isAdmin();
+      allow create: if isAccounts() || isOperations() || isAdmin();
+      allow update, delete: if false; // Immutable audit log
+    }
+
+    // 12. Legacy Stays, Transport & Activities Inventory (Being replaced by Phase 2B-2)
     match /hotels/{hotelId} {
       allow read: if isAuthenticated();
       allow create, update: if isOperations();

@@ -37,6 +37,9 @@ export interface RolePermissions {
   canManageTrips: boolean;
   canManageBookings: boolean;
   canViewMargins: boolean;
+  canManageAccommodation: boolean;
+  canViewSupplierRates: boolean;
+  canManageNegotiatedRates: boolean;
   leadAccessScope: 'ALL' | 'ASSIGNED_ONLY' | 'NONE';
 }
 
@@ -766,3 +769,33 @@ export interface MarketingAiGenerateResult {
   instagramCaptions: string[];
   visualPrompts: string[];
 }
+
+// Re-export all accommodation inventory & rate management types
+export type {
+  PropertyType,
+  PropertyStatus,
+  MealPlanType,
+  SupplementType,
+  TaxTreatment,
+  RateContractType,
+  AvailabilityStatusType,
+  ConfirmationStatus,
+  PropertyPhotoCategory,
+  RoomPhotoCategory,
+  PropertyPhoto,
+  AccommodationProperty,
+  RoomCategory,
+  RateSupplement,
+  RatePeriod,
+  NegotiatedRate,
+  RateHistoryEntry,
+  OccupancyValidation,
+  RateCalculationResult,
+  RateCalculationRequest,
+} from './accommodation';
+
+export {
+  MEAL_PLAN_LABELS,
+  SUPPLEMENT_LABELS,
+  TAX_TREATMENT_LABELS,
+} from './accommodation';

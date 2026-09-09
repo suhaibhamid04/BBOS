@@ -5,7 +5,9 @@ import {
   TaskRepo, QuoteRepo, BookingRepo, PackageRepo, AuditLogRepo, AiRecommendationRepo, 
   AiActionRepo, ApprovalRepo, TripRepo, ItineraryDayRepo, HotelRepo, HotelRoomRepo,
   HotelBookingRepo, TransportRepo, DriverRepo, ActivityRepo, ActivityBookingRepo,
-  SupplierRepo, VoucherRepo
+  SupplierRepo, VoucherRepo,
+  AccommodationPropertyRepo, RoomCategoryRepo, RatePeriodRepo, NegotiatedRateRepo,
+  PropertyPhotoRepo, RateHistoryRepo
 } from '../services/db/repositories';
 import {
   Lead,
@@ -41,7 +43,15 @@ import {
   Activity,
   ActivityBooking,
   Supplier,
-  Voucher
+  Voucher,
+  AccommodationProperty,
+  RoomCategory,
+  RatePeriod,
+  NegotiatedRate,
+  RateHistoryEntry,
+  PropertyPhoto,
+  RateCalculationResult,
+  RateCalculationRequest
 } from '../types';
 import {
   INITIAL_PACKAGES,
@@ -74,6 +84,11 @@ import {
   DEMO_SUPPLIERS,
   DEMO_VOUCHERS
 } from '../services/demoData';
+import {
+  DEMO_ACCOMMODATION_PROPERTIES,
+  DEMO_ROOM_CATEGORIES,
+  DEMO_RATE_PERIODS
+} from '../services/accommodationDemoData';
 import { useAuth } from './AuthContext';
 import { db, auth } from '../lib/firebase';
 import { doc, setDoc, deleteDoc } from 'firebase/firestore';
@@ -107,6 +122,12 @@ interface DataContextType {
   activities: Activity[];
   suppliers: Supplier[];
   vouchers: Voucher[];
+
+  // Accommodation Inventory
+  accommodationProperties: AccommodationProperty[];
+  roomCategories: RoomCategory[];
+  ratePeriods: RatePeriod[];
+  negotiatedRates: NegotiatedRate[];
 
   // Trip & Itinerary actions
   createTrip: (tripData: Omit<Trip, 'id' | 'createdAt' | 'updatedAt' | 'status' | 'grossProfit' | 'grossMargin' | 'totalCost' | 'totalSellingPrice'> & { budget?: number; totalCost?: number; totalSellingPrice?: number }, initialDaysCount?: number, fromPackageId?: string) => Promise<Trip>;
@@ -314,6 +335,30 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return saved ? JSON.parse(saved) : DEMO_VOUCHERS;
   });
 
+  const [accommodationProperties, setAccommodationProperties] = useState<AccommodationProperty[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
+    const saved = localStorage.getItem('bb_accommodation_properties');
+    return saved ? JSON.parse(saved) : DEMO_ACCOMMODATION_PROPERTIES;
+  });
+
+  const [roomCategories, setRoomCategories] = useState<RoomCategory[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
+    const saved = localStorage.getItem('bb_room_categories');
+    return saved ? JSON.parse(saved) : DEMO_ROOM_CATEGORIES;
+  });
+
+  const [ratePeriods, setRatePeriods] = useState<RatePeriod[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
+    const saved = localStorage.getItem('bb_rate_periods');
+    return saved ? JSON.parse(saved) : DEMO_RATE_PERIODS;
+  });
+
+  const [negotiatedRates, setNegotiatedRates] = useState<NegotiatedRate[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
+    const saved = localStorage.getItem('bb_negotiated_rates');
+    return saved ? JSON.parse(saved) : [];
+  });
+
   // Fetch from Firestore if not in DEMO mode
   useEffect(() => {
     if (APP_CONFIG.DEMO_MODE) return;
@@ -325,13 +370,15 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           fetchedLeads, fetchedCustomers, fetchedCompanies, fetchedTasks,
           fetchedConversations, fetchedMessages, fetchedQuotes, fetchedBookings,
           fetchedRecs, fetchedActions, fetchedApprovals, fetchedLogs, fetchedPackages,
-          fetchedTrips, fetchedHotels, fetchedTransports, fetchedDrivers, fetchedActivities, fetchedSuppliers, fetchedVouchers
+          fetchedTrips, fetchedHotels, fetchedTransports, fetchedDrivers, fetchedActivities, fetchedSuppliers, fetchedVouchers,
+          fetchedAccommProps, fetchedRoomCats, fetchedRatePeriods, fetchedNegRates
         ] = await Promise.all([
           LeadRepo.getAll(), CustomerRepo.getAll(), CompanyRepo.getAll(), TaskRepo.getAll(),
           ConversationRepo.getAll(), MessageRepo.getAll(), QuoteRepo.getAll(), BookingRepo.getAll(),
           AiRecommendationRepo.getAll(), AiActionRepo.getAll(), ApprovalRepo.getAll(), AuditLogRepo.getAll(),
           PackageRepo.getAll(),
-          TripRepo.getAll(), HotelRepo.getAll(), TransportRepo.getAll(), DriverRepo.getAll(), ActivityRepo.getAll(), SupplierRepo.getAll(), VoucherRepo.getAll()
+          TripRepo.getAll(), HotelRepo.getAll(), TransportRepo.getAll(), DriverRepo.getAll(), ActivityRepo.getAll(), SupplierRepo.getAll(), VoucherRepo.getAll(),
+          AccommodationPropertyRepo.getAll(), RoomCategoryRepo.getAll(), RatePeriodRepo.getAll(), NegotiatedRateRepo.getAll()
         ]);
         
         setLeads(fetchedLeads as any);
@@ -354,6 +401,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (fetchedActivities.length > 0) setActivities(fetchedActivities as any);
         if (fetchedSuppliers.length > 0) setSuppliers(fetchedSuppliers as any);
         if (fetchedVouchers.length > 0) setVouchers(fetchedVouchers as any);
+        if (fetchedAccommProps.length > 0) setAccommodationProperties(fetchedAccommProps as any);
+        if (fetchedRoomCats.length > 0) setRoomCategories(fetchedRoomCats as any);
+        if (fetchedRatePeriods.length > 0) setRatePeriods(fetchedRatePeriods as any);
+        if (fetchedNegRates.length > 0) setNegotiatedRates(fetchedNegRates as any);
       } catch (err) {
         console.error("Failed to load data from Firestore:", err);
       } finally {
@@ -379,6 +430,26 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!APP_CONFIG.DEMO_MODE) return;
     localStorage.setItem('bb_vouchers', JSON.stringify(vouchers));
   }, [vouchers]);
+
+  useEffect(() => {
+    if (!APP_CONFIG.DEMO_MODE) return;
+    localStorage.setItem('bb_accommodation_properties', JSON.stringify(accommodationProperties));
+  }, [accommodationProperties]);
+
+  useEffect(() => {
+    if (!APP_CONFIG.DEMO_MODE) return;
+    localStorage.setItem('bb_room_categories', JSON.stringify(roomCategories));
+  }, [roomCategories]);
+
+  useEffect(() => {
+    if (!APP_CONFIG.DEMO_MODE) return;
+    localStorage.setItem('bb_rate_periods', JSON.stringify(ratePeriods));
+  }, [ratePeriods]);
+
+  useEffect(() => {
+    if (!APP_CONFIG.DEMO_MODE) return;
+    localStorage.setItem('bb_negotiated_rates', JSON.stringify(negotiatedRates));
+  }, [negotiatedRates]);
   useEffect(() => {
     localStorage.setItem('bb_tasks', JSON.stringify(tasks));
   }, [tasks]);
@@ -1273,6 +1344,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         activities,
         suppliers,
         vouchers,
+        accommodationProperties,
+        roomCategories,
+        ratePeriods,
+        negotiatedRates,
         createTrip,
         updateTrip,
         addItineraryDay,
