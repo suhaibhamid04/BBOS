@@ -1,20 +1,48 @@
 import React, { useState, useEffect } from 'react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
-import { Building2, CalendarDays, Users, AlertTriangle } from 'lucide-react';
-import { AccommodationProperty, RoomCategory, MealPlanType } from '../../types';
+import { Building2, AlertTriangle, ShieldAlert } from 'lucide-react';
+import { MealPlanType } from '../../types';
 
 interface HotelInventoryPickerProps {
-  date: string;
-  tripAdults: number;
-  tripChildren: number;
-  onSelectRate: (data: { propertyId: string, propertyName: string, roomId: string, roomName: string, mealPlan: string, sellingPrice: number }) => void;
+  checkInDate: string;
+  nights: number;
+  adults: number;
+  childrenCount: number;
+  childrenWithBed: number;
+  childrenWithoutBed: number;
+  onConfirm: (metadata: {
+    propertyId: string;
+    propertyName: string;
+    roomCategoryId: string;
+    roomCategoryName: string;
+    mealPlan: MealPlanType;
+    checkInDate: string;
+    nights: number;
+    adults: number;
+    children: number;
+    childrenWithBed: number;
+    childrenWithoutBed: number;
+    needsConfirmation: boolean;
+    taxDescription: string;
+  }) => void;
+  onCancel: () => void;
 }
 
-export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({ date, tripAdults, tripChildren, onSelectRate }) => {
+export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({ 
+  checkInDate, 
+  nights, 
+  adults, 
+  childrenCount, 
+  childrenWithBed, 
+  childrenWithoutBed, 
+  onConfirm,
+  onCancel
+}) => {
   const { accommodationProperties, roomCategories } = useData();
   const { currentUser } = useAuth();
   
+  const [destinationFilter, setDestinationFilter] = useState<string>('');
   const [selectedPropertyId, setSelectedPropertyId] = useState<string>('');
   const [selectedRoomId, setSelectedRoomId] = useState<string>('');
   const [selectedMealPlan, setSelectedMealPlan] = useState<MealPlanType>('MAP');
@@ -23,8 +51,10 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({ date
   const [calculatedRate, setCalculatedRate] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const activeProperties = accommodationProperties.filter(p => p.status === 'ACTIVE');
+  const activeProperties = accommodationProperties.filter(p => p.status === 'ACTIVE' && (destinationFilter ? p.location === destinationFilter || p.city === destinationFilter : true));
   const availableRooms = roomCategories.filter(r => r.propertyId === selectedPropertyId && r.active);
+
+  const destinations = Array.from(new Set(accommodationProperties.filter(p => p.status === 'ACTIVE').map(p => p.city)));
 
   useEffect(() => {
     if (activeProperties.length > 0 && !selectedPropertyId) {
@@ -44,27 +74,30 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({ date
     if (selectedPropertyId && selectedRoomId) {
       calculateRate();
     }
-  }, [selectedPropertyId, selectedRoomId, selectedMealPlan, date, tripAdults, tripChildren]);
+  }, [selectedPropertyId, selectedRoomId, selectedMealPlan, checkInDate, nights, adults, childrenWithBed, childrenWithoutBed]);
 
   const calculateRate = async () => {
+    if (!selectedPropertyId || !selectedRoomId || !checkInDate || nights < 1) return;
+    
     setIsCalculating(true);
     setError(null);
     setCalculatedRate(null);
     try {
-      // Direct fetch to our backend API
       const res = await fetch('/api/accommodation/calculate-rate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer demo-token-${currentUser.id}` // Mock auth
+          'X-Demo-User-Id': currentUser.id // Correct auth header for BBOS demo middleware
         },
         body: JSON.stringify({
           propertyId: selectedPropertyId,
           roomCategoryId: selectedRoomId,
-          checkIn: date,
-          checkOut: new Date(new Date(date).getTime() + 86400000).toISOString().split('T')[0], // Next day
-          adults: tripAdults,
-          children: tripChildren,
+          checkInDate,
+          nights,
+          adults,
+          children: childrenCount,
+          childrenWithBed,
+          childrenWithoutBed,
           mealPlan: selectedMealPlan
         })
       });
@@ -84,40 +117,67 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({ date
   };
 
   const handleSelect = () => {
-    if (!calculatedRate || !selectedPropertyId || !selectedRoomId) return;
-    const prop = accommodationProperties.find(p => p.id === selectedPropertyId);
-    const room = roomCategories.find(r => r.id === selectedRoomId);
+    if (!calculatedRate || !calculatedRate.available || !selectedPropertyId || !selectedRoomId) return;
     
-    onSelectRate({
+    onConfirm({
       propertyId: selectedPropertyId,
-      propertyName: prop?.name || 'Unknown',
-      roomId: selectedRoomId,
-      roomName: room?.name || 'Unknown',
+      propertyName: calculatedRate.propertyName || 'Unknown Property',
+      roomCategoryId: selectedRoomId,
+      roomCategoryName: calculatedRate.roomCategoryName || 'Unknown Room',
       mealPlan: selectedMealPlan,
-      sellingPrice: calculatedRate.summary.totalSellingPrice
+      checkInDate,
+      nights,
+      adults,
+      children: childrenCount,
+      childrenWithBed,
+      childrenWithoutBed,
+      needsConfirmation: !!calculatedRate.needsConfirmation,
+      taxDescription: calculatedRate.taxDescription || 'Taxes Extra'
     });
   };
 
   return (
-    <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
-      <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2 mb-4">
-        <Building2 className="w-4 h-4 text-[#7056EE]" />
-        Phase 2B-2 Inventory Picker
-      </h3>
+    <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm max-w-2xl mx-auto">
+      <div className="flex justify-between items-center mb-4">
+        <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+          <Building2 className="w-4 h-4 text-[#7056EE]" />
+          Accommodation Inventory Selection
+        </h3>
+        <button onClick={onCancel} className="text-xs text-slate-500 hover:text-slate-800 font-medium">Cancel</button>
+      </div>
 
       <div className="space-y-4">
-        <div>
-          <label className="block text-xs font-semibold text-slate-700 mb-1">Select Property</label>
-          <select
-            value={selectedPropertyId}
-            onChange={(e) => setSelectedPropertyId(e.target.value)}
-            className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-[#7056EE]"
-          >
-            <option value="" disabled>Select Property</option>
-            {activeProperties.map(p => (
-              <option key={p.id} value={p.id}>{p.name} — {p.city}</option>
-            ))}
-          </select>
+        <div className="grid grid-cols-2 gap-4">
+           <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Filter Destination</label>
+            <select
+              value={destinationFilter}
+              onChange={(e) => {
+                setDestinationFilter(e.target.value);
+                setSelectedPropertyId('');
+              }}
+              className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-[#7056EE]"
+            >
+              <option value="">All Destinations</option>
+              {destinations.map(d => (
+                <option key={d} value={d}>{d}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Select Property</label>
+            <select
+              value={selectedPropertyId}
+              onChange={(e) => setSelectedPropertyId(e.target.value)}
+              className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-[#7056EE]"
+            >
+              <option value="" disabled>Select Property</option>
+              {activeProperties.map(p => (
+                <option key={p.id} value={p.id}>{p.name} — {p.city}</option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-4">
@@ -149,6 +209,14 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({ date
           </div>
         </div>
 
+        {/* Occupancy Info (Read-only as it's passed from Trip) */}
+        <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 grid grid-cols-4 gap-2">
+           <div><span className="block text-[10px] text-slate-500 uppercase font-bold">Check-In</span><span className="text-xs font-semibold">{checkInDate}</span></div>
+           <div><span className="block text-[10px] text-slate-500 uppercase font-bold">Nights</span><span className="text-xs font-semibold">{nights}</span></div>
+           <div><span className="block text-[10px] text-slate-500 uppercase font-bold">Adults</span><span className="text-xs font-semibold">{adults}</span></div>
+           <div><span className="block text-[10px] text-slate-500 uppercase font-bold">Children</span><span className="text-xs font-semibold">{childrenCount} (CWB: {childrenWithBed}, CNB: {childrenWithoutBed})</span></div>
+        </div>
+
         {/* Rate Result Area */}
         <div className="mt-4 p-4 rounded-lg bg-slate-50 border border-slate-100">
           {isCalculating ? (
@@ -162,30 +230,51 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({ date
             </div>
           ) : calculatedRate ? (
             <div>
-              <div className="flex justify-between items-center mb-2">
-                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Total Selling Price</span>
-                <span className="text-lg font-bold text-slate-900">{calculatedRate.summary.currency} {calculatedRate.summary.totalSellingPrice.toLocaleString()}</span>
-              </div>
-              
-              {/* Optional: Show internal cost if user has permission. The backend automatically strips it if they don't, 
-                  so we just check if it exists in the payload. */}
-              {calculatedRate.summary.totalSupplierCost && (
-                <div className="flex justify-between items-center text-xs border-t border-slate-200 pt-2 mt-2">
-                  <span className="font-bold text-slate-400">Supplier Cost (Protected)</span>
-                  <span className="font-bold text-rose-600">{calculatedRate.summary.currency} {calculatedRate.summary.totalSupplierCost.toLocaleString()}</span>
-                </div>
-              )}
+              {calculatedRate.available === false ? (
+                 <div className="flex flex-col gap-2">
+                    <div className="flex items-start gap-2 text-rose-600 bg-rose-50 p-3 rounded border border-rose-100">
+                      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                      <div>
+                        <div className="text-xs font-bold">Rate Not Available</div>
+                        <div className="text-[11px] mt-0.5">{calculatedRate.reason || 'No valid rate could be calculated for these dates and occupancy.'}</div>
+                      </div>
+                    </div>
+                    <button disabled className="w-full mt-2 py-2 bg-slate-200 text-slate-400 font-bold rounded-lg text-sm cursor-not-allowed">
+                       Unavailable
+                    </button>
+                 </div>
+              ) : (
+                <>
+                  <div className="flex justify-between items-center mb-2">
+                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Status</span>
+                    {calculatedRate.needsConfirmation ? (
+                      <span className="px-2 py-1 bg-amber-100 text-amber-800 text-[10px] font-bold rounded-md flex items-center gap-1">
+                        <AlertTriangle className="w-3 h-3" /> NEEDS CONFIRMATION
+                      </span>
+                    ) : (
+                      <span className="px-2 py-1 bg-emerald-100 text-emerald-800 text-[10px] font-bold rounded-md">
+                        AVAILABLE
+                      </span>
+                    )}
+                  </div>
+                  
+                  {/* NEVER EXPOSE SELLING PRICE AS IT IS A PACKAGE CONCERN NOW */}
+                  <div className="text-center py-2 text-xs font-medium text-slate-600 italic">
+                     Component rate calculated and secured. Package pricing applies.
+                  </div>
 
-              <button
-                type="button"
-                onClick={handleSelect}
-                className="w-full mt-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg transition-colors text-sm"
-              >
-                Use this Rate
-              </button>
+                  <button
+                    type="button"
+                    onClick={handleSelect}
+                    className="w-full mt-4 py-2 bg-[#7056EE] hover:bg-[#5e43dc] text-white font-bold rounded-lg transition-colors text-sm shadow-sm"
+                  >
+                    Confirm & Add to Trip
+                  </button>
+                </>
+              )}
             </div>
           ) : (
-            <div className="text-center text-xs text-slate-500 py-2">Select options to calculate rate.</div>
+            <div className="text-center text-xs text-slate-500 py-2">Select options to check availability.</div>
           )}
         </div>
       </div>

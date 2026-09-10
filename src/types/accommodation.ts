@@ -244,8 +244,8 @@ export interface RateCalculationResult {
   roomCategoryName?: string;
   mealPlan?: MealPlanType;
   nights?: number;
-  sellingPricePerNight?: number;
-  totalSellingPrice?: number;
+  sellingPricePerNight?: never; // REMOVED: Business rules dictate no automatic markup. Selling price is a package concern.
+  totalSellingPrice?: never;    // REMOVED: Business rules dictate no automatic markup.
   taxIncluded?: boolean;
   taxDescription?: string;
   applicableSupplements?: { name: string; displayAmount: number }[];

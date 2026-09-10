@@ -270,9 +270,10 @@ export interface QuoteHotelItem {
   hotelName: string;
   roomType: string;
   mealPlan: string;
+  checkInDate?: string;
   nights: number;
-  rate: number;
-  supplierCost?: number;
+  rate?: number; // Optional component-level selling price
+  supplierCost?: number; // Should be stripped from customer preview
 }
 
 export interface QuoteTransportItem {

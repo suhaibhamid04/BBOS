@@ -190,6 +190,24 @@ export const DEMO_ACCOMMODATION_PROPERTIES: AccommodationProperty[] = [
     isDemo: true,
   },
   {
+    id: 'accom-sgr-kareemresidency',
+    name: 'Kareem Residency',
+    propertyType: 'HOTEL',
+    location: 'Kashmir',
+    city: 'Srinagar',
+    description: 'Upscale Srinagar hotel with seasonal MAP rates.',
+    amenities: ['WiFi', 'Restaurant', 'Room Service', 'Conference Room', 'Parking'],
+    preferredProperty: true,
+    status: 'ACTIVE',
+    currency: 'INR',
+    photos: [],
+    availabilityStatus: 'NOT_CHECKED',
+    createdAt: NOW,
+    updatedAt: NOW,
+    createdBy: 'system',
+    isDemo: true,
+  },
+  {
     id: 'accom-sgr-oni',
     name: 'Oni Boutique',
     propertyType: 'HOTEL',
@@ -481,28 +499,64 @@ export const DEMO_ACCOMMODATION_PROPERTIES: AccommodationProperty[] = [
     createdBy: 'system',
     isDemo: true,
   },
+  {
+    id: 'accom-hb-bulbul',
+    name: 'Bulbul Houseboat',
+    propertyType: 'HOUSEBOAT',
+    location: 'Kashmir',
+    city: 'Srinagar',
+    description: 'Charming houseboat with MAP meal plan.',
+    amenities: ['Sun Deck', 'Shikara Access'],
+    preferredProperty: false,
+    status: 'ACTIVE',
+    currency: 'INR',
+    photos: [],
+    availabilityStatus: 'NOT_CHECKED',
+    createdAt: NOW,
+    updatedAt: NOW,
+    createdBy: 'system',
+    isDemo: true,
+  },
 ];
 
 // =====================================================
 // ROOM CATEGORIES (1 Deluxe Room per property — initial import)
 // =====================================================
 
-export const DEMO_ROOM_CATEGORIES: RoomCategory[] = DEMO_ACCOMMODATION_PROPERTIES.map(p => ({
-  id: `rc-${p.id}`,
-  propertyId: p.id,
-  name: 'Deluxe Room',
-  description: `Standard deluxe room at ${p.name}`,
-  maxAdults: 2,
-  maxChildren: 1,
-  bedConfiguration: p.propertyType === 'HOUSEBOAT' ? '1 Double' : '1 King or Twin',
-  amenities: ['Attached Bathroom', 'Hot Water', 'Towels'],
-  photos: [],
-  active: true,
-  sortOrder: 1,
-  createdAt: NOW,
-  updatedAt: NOW,
-  isDemo: true,
-}));
+export const DEMO_ROOM_CATEGORIES: RoomCategory[] = [
+  ...DEMO_ACCOMMODATION_PROPERTIES.filter(p => p.id !== 'accom-sgr-kareemresidency').map(p => ({
+    id: `rc-${p.id}`,
+    propertyId: p.id,
+    name: 'Deluxe Room',
+    description: `Standard deluxe room at ${p.name}`,
+    maxAdults: 2,
+    maxChildren: 1,
+    bedConfiguration: p.propertyType === 'HOUSEBOAT' ? '1 Double' : '1 King or Twin',
+    amenities: ['Attached Bathroom', 'Hot Water', 'Towels'],
+    photos: [],
+    active: true,
+    sortOrder: 1,
+    createdAt: NOW,
+    updatedAt: NOW,
+    isDemo: true,
+  })),
+  {
+    id: 'rc-accom-sgr-kareemresidency',
+    propertyId: 'accom-sgr-kareemresidency',
+    name: 'Premium Deluxe',
+    description: 'Premium room with MAP meal plan.',
+    maxAdults: 3,
+    maxChildren: 2,
+    bedConfiguration: '1 Double',
+    amenities: ['WiFi', 'Room Heater', 'Ensuite Bathroom'],
+    photos: [],
+    active: true,
+    sortOrder: 1,
+    createdAt: NOW,
+    updatedAt: NOW,
+    isDemo: true,
+  }
+];
 
 // =====================================================
 // RATE PERIODS (STANDARD MAP rates from supplied sheets)
@@ -537,9 +591,8 @@ export const DEMO_RATE_PERIODS: RatePeriod[] = [
   makeRate('rate-hb-shubeena',   'accom-hb-shubeena',   'rc-accom-hb-shubeena',   4000, 1000, 800),
   makeRate('rate-hb-shabnam',    'accom-hb-shabnam',     'rc-accom-hb-shabnam',    6000, 2000, 1500),
   makeRate('rate-hb-harmukh',    'accom-hb-harmukh',     'rc-accom-hb-harmukh',    8000, 2000, 1500),
-];
 
-// Note: Kareem Residency (the seasonal property) is not in this batch.
-// It was referenced in planning but was not in the primary supplied rate sheet.
-// If needed, it can be added as a separate property with two RatePeriods:
-//   Sep 01–Sep 30: MAP ₹3,500   |   Oct 01 onward: MAP ₹4,000 (NEEDS_CONFIRMATION)
+  // --- KAREEM RESIDENCY SEASONAL RATES ---
+  makeRate('rp-accom-sgr-kareemresidency-sep', 'accom-sgr-kareemresidency', 'rc-accom-sgr-kareemresidency', 3500, 1200, 800, '2026-09-01', '2026-09-30', 'September Rate'),
+  makeRate('rp-accom-sgr-kareemresidency-oct', 'accom-sgr-kareemresidency', 'rc-accom-sgr-kareemresidency', 4000, 1400, 900, '2026-10-01', null, 'October Onwards Rate'),
+];

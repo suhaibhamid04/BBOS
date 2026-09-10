@@ -110,8 +110,8 @@ service cloud.firestore {
     // 10. Trips & Itinerary Collections
     match /trips/{tripId} {
       allow read: if isSalesExecutive() || isOperations() || isAccounts();
-      allow create: if isSalesExecutive();
-      allow update: if isSalesExecutive() || isOperations();
+      allow create: if isAdmin() || isAccounts() || (isSalesExecutive() && !request.resource.data.keys().hasAny(['totalCost', 'grossProfit', 'grossMargin']));
+      allow update: if isAdmin() || isAccounts() || ((isSalesExecutive() || isOperations()) && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['totalCost', 'grossProfit', 'grossMargin']));
       allow delete: if isAdmin();
     }
 

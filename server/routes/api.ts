@@ -7,14 +7,16 @@ import { isAiConfigured } from '../ai/aiClient.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { sanitizeFinancialData } from '../middleware/financialGuard.js';
 import { accommodationRouter } from './accommodation.js';
+import { tripsRouter } from './trips.js';
 
 export const apiRouter = Router();
 
 // Apply global authentication resolution to all API routes
 apiRouter.use(authenticate);
 
-// Mount Accommodation Sub-Router
+// Mount Sub-Routers
 apiRouter.use('/accommodation', accommodationRouter);
+apiRouter.use('/trips', tripsRouter);
 
 // Health check endpoint
 apiRouter.get('/health', (req: Request, res: Response) => {

@@ -422,8 +422,7 @@ export function buildRoleGatedResult(
   negotiatedRate: NegotiatedRate | null,
   propertyName: string,
   roomCategoryName: string,
-  userRole: UserRole,
-  sellingPriceMarkup: number = 1.35 // Default 35% markup for selling price
+  userRole: UserRole
 ): RateCalculationResult {
   if (!stayCalc.available || !ratePeriod) {
     return {
@@ -437,10 +436,6 @@ export function buildRoleGatedResult(
 
   const supplierCostPerNight = stayCalc.perNightBreakdown?.total || 0;
   const totalSupplierCost = stayCalc.totalAmount || 0;
-  const sellingPricePerNight = Math.round(supplierCostPerNight * sellingPriceMarkup);
-  const totalSellingPrice = Math.round(totalSupplierCost * sellingPriceMarkup);
-  const grossProfit = totalSellingPrice - totalSupplierCost;
-  const grossMargin = totalSellingPrice > 0 ? Number(((grossProfit / totalSellingPrice) * 100).toFixed(1)) : 0;
 
   const supplements = stayCalc.perNightBreakdown
     ? [
@@ -461,8 +456,6 @@ export function buildRoleGatedResult(
     roomCategoryName,
     mealPlan: ratePeriod.mealPlan,
     nights: stayCalc.nights,
-    sellingPricePerNight,
-    totalSellingPrice,
     taxIncluded: ratePeriod.taxTreatment === 'NET',
     taxDescription: stayCalc.taxDescription,
     applicableSupplements: supplements,
@@ -472,8 +465,6 @@ export function buildRoleGatedResult(
   if (FULL_FINANCIAL_ACCESS_ROLES.includes(userRole)) {
     result.supplierCostPerNight = supplierCostPerNight;
     result.totalSupplierCost = totalSupplierCost;
-    result.grossProfit = grossProfit;
-    result.grossMargin = grossMargin;
 
     if (negotiatedRate) {
       result.negotiatedRateApplied = true;

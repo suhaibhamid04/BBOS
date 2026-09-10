@@ -1311,7 +1311,10 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
                         <div key={i} className="p-2.5 bg-slate-50 rounded-lg flex justify-between items-center">
                           <div>
                             <p className="font-bold text-slate-900">{h.hotelName}</p>
-                            <p className="text-[11px] text-slate-500">{h.roomType} • {h.mealPlan}</p>
+                            <p className="text-[11px] text-slate-500">
+                              {h.roomType} • {h.mealPlan}
+                              {h.checkInDate && ` • Check-In: ${new Date(h.checkInDate).toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}`}
+                            </p>
                           </div>
                           <span className="font-semibold text-slate-700">{h.nights} Nights</span>
                         </div>

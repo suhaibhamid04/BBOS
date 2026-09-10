@@ -770,12 +770,57 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     );
     logAuditEvent('trip.updated', 'TRIP', id, prevTrip, updates, `Updated trip ${prevTrip?.title || id}`);
 
+    // If totalSellingPrice changed, we need to recalculate margin/profit
+    if (updates.totalSellingPrice !== undefined) {
+      setTimeout(() => {
+        recalculateTripCost(id);
+      }, 50);
+    }
+
     if (db && updated) {
       try {
         await setDoc(doc(db, 'trips', id), updated);
       } catch (err) {
         console.warn('Firestore update trip notice:', err);
       }
+    }
+  };
+
+  const recalculateTripCost = async (tripId: string) => {
+    try {
+      const trip = trips.find(t => t.id === tripId);
+      if (!trip) return;
+
+      const tripDaysLocal = itineraryDays.filter(d => d.tripId === tripId);
+      const allItems = tripDaysLocal.flatMap(d => d.items || []);
+
+      const response = await fetch('/api/trips/calculate-costs', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Demo-User-Id': currentUser.id
+        },
+        body: JSON.stringify({
+          tripId,
+          items: allItems,
+          totalSellingPrice: trip.totalSellingPrice
+        })
+      });
+
+      const data = await response.json();
+      if (data.success && data.data) {
+        setTrips(prev =>
+          prev.map(t => (t.id === tripId ? { 
+            ...t, 
+            totalCost: data.data.totalCost, 
+            grossProfit: data.data.grossProfit, 
+            grossMargin: data.data.grossMargin, 
+            updatedAt: new Date().toISOString() 
+          } : t))
+        );
+      }
+    } catch (err) {
+      console.error('Failed to recalculate trip cost:', err);
     }
   };
 
@@ -829,6 +874,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.warn('Firestore day update notice:', err);
       }
     }
+    
+    // Ensure state is updated so recalculateTripCost sends the right items
+    if (day) {
+      setTimeout(() => {
+        recalculateTripCost(day.tripId);
+      }, 50);
+    }
   };
 
   const deleteItineraryDay = async (id: string) => {
@@ -837,29 +889,15 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const remainingDays = itineraryDays.filter(d => d.id !== id);
     setItineraryDays(remainingDays);
 
-    // Recompute costing for trip
-    const tripDays = remainingDays.filter(d => d.tripId === day.tripId);
-    let totalCost = 0;
-    let totalSellingPrice = 0;
-    for (const d of tripDays) {
-      for (const it of (d.items || [])) {
-        totalCost += it.supplierCost || 0;
-        totalSellingPrice += it.sellingPrice || 0;
-      }
-    }
-    const profit = totalSellingPrice - totalCost;
-    const margin = totalSellingPrice > 0 ? Number(((profit / totalSellingPrice) * 100).toFixed(1)) : 0;
-
-    setTrips(prev =>
-      prev.map(t => (t.id === day.tripId ? { ...t, totalCost, totalSellingPrice, grossProfit: profit, grossMargin: margin, updatedAt: new Date().toISOString() } : t))
-    );
+    // Recompute costing for trip via server
+    recalculateTripCost(day.tripId);
 
     if (db) {
       try {
         await deleteDoc(doc(db, 'itinerary_days', id));
         const updatedTrip = trips.find(t => t.id === day.tripId);
         if (updatedTrip) {
-          await setDoc(doc(db, 'trips', day.tripId), { ...updatedTrip, totalCost, totalSellingPrice, grossProfit: profit, grossMargin: margin, updatedAt: new Date().toISOString() });
+          await setDoc(doc(db, 'trips', day.tripId), { ...updatedTrip, updatedAt: new Date().toISOString() });
         }
       } catch (err) {
         console.warn('Firestore day delete notice:', err);
@@ -883,22 +921,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     setItineraryDays(updatedDays);
 
-    // Recompute costing for this trip
-    const tripDays = updatedDays.filter(d => d.tripId === targetDay.tripId);
-    let totalCost = 0;
-    let totalSellingPrice = 0;
-    for (const d of tripDays) {
-      for (const it of (d.items || [])) {
-        totalCost += it.supplierCost || 0;
-        totalSellingPrice += it.sellingPrice || 0;
-      }
-    }
-    const profit = totalSellingPrice - totalCost;
-    const margin = totalSellingPrice > 0 ? Number(((profit / totalSellingPrice) * 100).toFixed(1)) : 0;
-
-    setTrips(prev =>
-      prev.map(t => (t.id === targetDay.tripId ? { ...t, totalCost, totalSellingPrice, grossProfit: profit, grossMargin: margin, updatedAt: new Date().toISOString() } : t))
-    );
+    // Ensure state is updated so recalculateTripCost sends the right items
+    setTimeout(() => {
+      recalculateTripCost(targetDay.tripId);
+    }, 50);
 
     const actionName = itemData.type === 'HOTEL' ? 'hotel.added_to_trip' :
                        itemData.type === 'TRANSPORT' ? 'transport.added_to_trip' :
@@ -911,7 +937,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await setDoc(doc(db, 'itinerary_days', dayId), updatedDay);
         const currentTrip = trips.find(t => t.id === targetDay.tripId);
         if (currentTrip) {
-          await setDoc(doc(db, 'trips', targetDay.tripId), { ...currentTrip, totalCost, totalSellingPrice, grossProfit: profit, grossMargin: margin, updatedAt: new Date().toISOString() });
+          await setDoc(doc(db, 'trips', targetDay.tripId), { ...currentTrip, updatedAt: new Date().toISOString() });
         }
       } catch (err) {
         console.warn('Firestore add item notice:', err);
@@ -930,29 +956,17 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     setItineraryDays(updatedDays);
 
-    // Recompute costing
-    const tripDays = updatedDays.filter(d => d.tripId === targetDay.tripId);
-    let totalCost = 0;
-    let totalSellingPrice = 0;
-    for (const d of tripDays) {
-      for (const it of (d.items || [])) {
-        totalCost += it.supplierCost || 0;
-        totalSellingPrice += it.sellingPrice || 0;
-      }
-    }
-    const profit = totalSellingPrice - totalCost;
-    const margin = totalSellingPrice > 0 ? Number(((profit / totalSellingPrice) * 100).toFixed(1)) : 0;
-
-    setTrips(prev =>
-      prev.map(t => (t.id === targetDay.tripId ? { ...t, totalCost, totalSellingPrice, grossProfit: profit, grossMargin: margin, updatedAt: new Date().toISOString() } : t))
-    );
+    // Ensure state is updated so recalculateTripCost sends the right items
+    setTimeout(() => {
+      recalculateTripCost(targetDay.tripId);
+    }, 50);
 
     if (db) {
       try {
         await setDoc(doc(db, 'itinerary_days', dayId), updatedDay);
         const currentTrip = trips.find(t => t.id === targetDay.tripId);
         if (currentTrip) {
-          await setDoc(doc(db, 'trips', targetDay.tripId), { ...currentTrip, totalCost, totalSellingPrice, grossProfit: profit, grossMargin: margin, updatedAt: new Date().toISOString() });
+          await setDoc(doc(db, 'trips', targetDay.tripId), { ...currentTrip, updatedAt: new Date().toISOString() });
         }
       } catch (err) {
         console.warn('Firestore delete item notice:', err);

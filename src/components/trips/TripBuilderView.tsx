@@ -23,6 +23,7 @@ import {
   Check
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { HotelInventoryPicker } from './HotelInventoryPicker';
 
 interface TripBuilderViewProps {
   initialTripId?: string;
@@ -434,29 +435,25 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
     }
   };
 
-  // Add Hotel Handler
-  const handleAddHotel = async () => {
-    if (!activeDay || !selectedHotelId) return;
-    const hotel = hotels.find(h => h.id === selectedHotelId);
-    const room = hotelRooms.find(r => r.id === selectedRoomId) || hotelRooms.find(r => r.hotelId === selectedHotelId);
+  // Add Hotel Handler (from HotelInventoryPicker)
+  const handleAddHotel = async (metadata: any) => {
+    if (!activeDay) return;
 
-    const title = `${hotel?.name || 'Hotel'} - ${room?.roomType || 'Standard Room'}`;
-    const desc = `${room?.mealPlan || 'EP'} • ${hotel?.category || 'Accommodation'}`;
-    const cost = room?.supplierCost || 7000;
-    const price = room?.sellingPrice || 10500;
+    const title = `${metadata.propertyName} - ${metadata.roomCategoryName}`;
+    const desc = `${metadata.mealPlan} • ${metadata.nights} Nights (${metadata.adults}A, ${metadata.children}C) • ${metadata.taxDescription}`;
 
     await addItineraryItem(activeDay.id, {
       type: 'HOTEL',
       title,
       description: desc,
-      referenceId: hotel?.id,
-      supplierCost: cost,
-      sellingPrice: price,
-      metadata: { hotelId: hotel?.id, roomType: room?.roomType, mealPlan: room?.mealPlan }
+      referenceId: metadata.propertyId,
+      supplierCost: undefined, // Authoritative cost calculated securely by backend
+      sellingPrice: undefined, // Deferred to package price
+      metadata
     });
 
     setShowHotelModal(false);
-    notify(`Added ${hotel?.name} to Day ${activeDay.dayNumber}!`);
+    notify(`Added ${metadata.propertyName} to Day ${activeDay.dayNumber}!`);
   };
 
   // Add Transport Handler
@@ -534,6 +531,17 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
       const validUntilDate = new Date();
       validUntilDate.setDate(validUntilDate.getDate() + 7);
 
+      const quoteHotels = tripDays.flatMap(day => 
+        (day.items || []).filter(it => it.type === 'HOTEL').map(it => ({
+          hotelName: it.title.split(' - ')[0] || 'Hotel',
+          roomType: it.metadata?.roomCategoryName || it.title.split(' - ')[1] || 'Room',
+          mealPlan: it.metadata?.mealPlan || 'MAP',
+          checkInDate: it.metadata?.checkInDate || day.date,
+          nights: it.metadata?.nights || 1,
+          rate: it.sellingPrice // Pass undefined or number, supplierCost omitted
+        }))
+      );
+
       const quote = await createQuote({
         leadId: activeTrip.leadId || `lead-${Date.now()}`,
         customerId: activeTrip.customerId,
@@ -547,6 +555,7 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
         discount: 0,
         finalAmount: activeTrip.totalSellingPrice || 0,
         validUntil: validUntilDate.toISOString().split('T')[0],
+        hotels: quoteHotels,
         inclusions: [
           `${tripDays.length} Days Handcrafted Kashmiri Itinerary`,
           'Verified Hotel Stays & Houseboat Accommodation',
@@ -1006,79 +1015,18 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
         {/* MODAL 1: ADD HOTEL */}
         {showHotelModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-            <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden animate-in fade-in zoom-in duration-150">
-              <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <Bed className="w-4 h-4 text-emerald-600" /> Select Accommodation for Day {activeDay.dayNumber}
-                </h3>
-                <button onClick={() => setShowHotelModal(false)} className="text-slate-400 hover:text-slate-700">
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <div className="p-6 space-y-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Select Hotel (Kashmir & Himalayan Inventory)</label>
-                  <select
-                    value={selectedHotelId}
-                    onChange={(e) => {
-                      setSelectedHotelId(e.target.value);
-                      const roomsForHotel = hotelRooms.filter(r => r.hotelId === e.target.value);
-                      if (roomsForHotel.length > 0) setSelectedRoomId(roomsForHotel[0].id);
-                    }}
-                    className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-[#7056EE]"
-                  >
-                    {hotels.map(h => (
-                      <option key={h.id} value={h.id}>{h.name} — {h.destination} ({h.category})</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Room Category & Meal Plan</label>
-                  <select
-                    value={selectedRoomId}
-                    onChange={(e) => setSelectedRoomId(e.target.value)}
-                    className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-[#7056EE]"
-                  >
-                    {hotelRooms
-                      .filter(r => !selectedHotelId || r.hotelId === selectedHotelId)
-                      .map(r => (
-                        <option key={r.id} value={r.id}>
-                          {r.roomType} • {r.mealPlan} — Retail: ₹{r.sellingPrice?.toLocaleString('en-IN')}
-                        </option>
-                      ))}
-                  </select>
-                </div>
-
-                {/* Rate card info */}
-                {(() => {
-                  const currentRoom = hotelRooms.find(r => r.id === selectedRoomId) || hotelRooms[0];
-                  if (!currentRoom) return null;
-                  return (
-                    <div className="p-3.5 bg-emerald-50/70 border border-emerald-200 rounded-xl space-y-1 text-xs">
-                      <div className="flex justify-between font-bold text-slate-900">
-                        <span>Retail Selling Price:</span>
-                        <span className="text-[#7056EE]">₹{currentRoom.sellingPrice?.toLocaleString('en-IN')}</span>
-                      </div>
-                      {canSeeSupplierCosts && (
-                        <div className="flex justify-between text-slate-500 text-[11px]">
-                          <span>Contracted Supplier Cost:</span>
-                          <span>₹{currentRoom.supplierCost?.toLocaleString('en-IN')}</span>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })()}
-
-                <button
-                  onClick={handleAddHotel}
-                  className="w-full py-2.5 bg-[#7056EE] text-white text-xs font-bold rounded-lg hover:bg-[#5e43dc] transition-colors shadow-sm"
-                >
-                  Confirm & Add Hotel to Day {activeDay.dayNumber}
-                </button>
-              </div>
-            </div>
+             <div className="animate-in fade-in zoom-in duration-150 w-full max-w-2xl">
+                <HotelInventoryPicker
+                  checkInDate={activeDay?.date || new Date().toISOString().split('T')[0]}
+                  nights={1} // Defaulting to 1 night for day-based itinerary adding
+                  adults={activeTrip?.adults || 2}
+                  childrenCount={activeTrip?.children || 0}
+                  childrenWithBed={0} // Can be enhanced later to pick exact child ages
+                  childrenWithoutBed={activeTrip?.children || 0}
+                  onConfirm={handleAddHotel}
+                  onCancel={() => setShowHotelModal(false)}
+                />
+             </div>
           </div>
         )}
 
