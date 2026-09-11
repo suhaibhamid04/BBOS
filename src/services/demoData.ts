@@ -550,10 +550,13 @@ export const DEMO_BOOKINGS: Booking[] = [
     bookingReference: 'BKG-KAS-01',
     travelStartDate: '2026-05-10',
     travelEndDate: '2026-05-16',
+    totalSellingPrice: 145000,
     totalAmount: 145000,
     amountReceived: 145000,
     amountPending: 0,
+    paymentStatus: 'PAID',
     status: 'COMPLETED',
+    schemaVersion: '2B-5',
     createdAt: '2026-04-12T10:00:00Z',
     updatedAt: '2026-05-16T10:00:00Z',
     isDemo: true

@@ -10,6 +10,8 @@ import { accommodationRouter } from './accommodation.js';
 import { transportRouter } from './transport.js';
 import { activitiesRouter } from './activities.js';
 import { tripsRouter } from './trips.js';
+import { quotesRouter } from './quotes.js';
+import { bookingsRouter } from './bookings.js';
 
 export const apiRouter = Router();
 
@@ -21,6 +23,8 @@ apiRouter.use('/accommodation', accommodationRouter);
 apiRouter.use('/transport', transportRouter);
 apiRouter.use('/activities', activitiesRouter);
 apiRouter.use('/trips', tripsRouter);
+apiRouter.use('/quotes', quotesRouter);
+apiRouter.use('/bookings', bookingsRouter);
 
 // Health check endpoint
 apiRouter.get('/health', (req: Request, res: Response) => {

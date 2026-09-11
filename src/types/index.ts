@@ -1,3 +1,5 @@
+import { BookingComponentStatus, VoucherStatus } from './booking';
+
 export type UserRole =
   | 'Founder'
   | 'Admin'
@@ -268,32 +270,70 @@ export interface QuoteHotelItem {
   id?: string;
   hotelId?: string;
   hotelName: string;
+  propertyId?: string;
+  roomCategoryId?: string;
+  ratePeriodId?: string;
+  negotiatedRateId?: string;
   roomType: string;
   mealPlan: string;
   checkInDate?: string;
+  checkOutDate?: string;
   nights: number;
+  roomsCount?: number;
+  rooms?: number;
+  adultsCount?: number;
+  childrenCount?: number;
   rate?: number; // Optional component-level selling price
+  quotedRate?: number; // Authoritative unit supplier rate quoted
   supplierCost?: number; // Should be stripped from customer preview
+  isFoc?: boolean;
+  focReason?: string;
+  guestNames?: string[];
+  specialRequests?: string;
 }
 
 export interface QuoteTransportItem {
   id?: string;
   transportId?: string;
+  vehicleCategoryId?: string;
+  transportRouteId?: string;
+  ratePeriodId?: string;
   vehicleType: string;
   route: string;
+  serviceDate?: string;
   days: number;
+  passengerCount?: number;
+  pickupLocation?: string;
+  dropoffLocation?: string;
   rate: number;
+  quotedRate?: number;
   supplierCost?: number;
+  isFoc?: boolean;
+  focReason?: string;
+  specialRequests?: string;
 }
 
 export interface QuoteActivityItem {
   id?: string;
   activityId?: string;
+  activityMasterId?: string;
+  activityRatePeriodId?: string;
   name: string;
+  activityName?: string;
+  destinationId?: string;
+  destinationName?: string;
+  serviceDate?: string;
+  date?: string;
   pax: number;
   rate: number;
+  quotedRate?: number;
   supplierCost?: number;
+  isFoc?: boolean;
+  focReason?: string;
+  specialRequests?: string;
 }
+
+export * from './quoteValidation';
 
 export interface Quote {
   id: string;
@@ -338,27 +378,9 @@ export interface Quote {
   isDemo?: boolean;
 }
 
-export type BookingStatus = 'PENDING_PAYMENT' | 'CONFIRMED' | 'IN_OPERATIONS' | 'TRAVELLING' | 'COMPLETED' | 'CANCELLED';
-
-export interface Booking {
-  id: string;
-  tripId: string;
-  customerId: string;
-  leadId?: string;
-  quoteId?: string;
-  bookingReference: string;
-  status: BookingStatus;
-  totalAmount: number;
-  amountReceived: number;
-  amountPending: number;
-  travelStartDate: string;
-  travelEndDate: string;
-  assignedSalesEmployeeId?: string;
-  assignedOperationsEmployeeId?: string;
-  createdAt: string;
-  updatedAt: string;
-  isDemo?: boolean;
-}
+// Re-export Phase 2B-5 booking and payment models
+export * from './booking';
+export * from './payment';
 
 export type TripStatus =
   | 'DRAFT'
@@ -454,7 +476,6 @@ export interface HotelRoom {
   validTo?: string;
 }
 
-export type BookingComponentStatus = 'DRAFT' | 'REQUESTED' | 'CONFIRMED' | 'CANCELLED';
 
 export interface HotelBooking {
   id: string;
@@ -548,7 +569,6 @@ export interface Supplier {
 }
 
 export type VoucherType = 'HOTEL' | 'TRANSPORT' | 'ACTIVITY' | 'FINAL_TRAVEL_PACK';
-export type VoucherStatus = 'PENDING' | 'GENERATED' | 'SENT';
 
 export interface Voucher {
   id: string;

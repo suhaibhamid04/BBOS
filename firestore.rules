@@ -99,12 +99,33 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // 9. Bookings Collection
+    // 9. Bookings Collection (Commercial Root)
     match /bookings/{bookingId} {
       allow read: if isSalesExecutive() || isOperations() || isAccounts();
-      allow create: if isSalesExecutive();
-      allow update: if isSalesExecutive() || isOperations() || isAccounts();
+      // Direct client creation restricted to Admin (created via Server Conversion Engine)
+      allow create: if isAdmin();
+      // Top-level bookings must NOT permit clients to directly modify:
+      // totalSellingPrice, amountReceived, amountPending, paymentStatus, confirmationProgress, schemaVersion
+      allow update: if (isSalesExecutive() || isOperations() || isAccounts()) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'totalSellingPrice',
+          'amountReceived',
+          'amountPending',
+          'paymentStatus',
+          'isOverpaid',
+          'overpaidAmount',
+          'confirmationProgress',
+          'schemaVersion'
+        ]);
       allow delete: if isAdmin();
+
+      // RESTRICTED FINANCIAL SNAPSHOT (SUBCOLLECTION)
+      match /financial_snapshot/{snapshotId} {
+        // Read strictly restricted to Founder, Admin, Accounts
+        allow read: if isFounder() || isAdmin() || isAccounts();
+        // DIRECT CLIENT MUTATION PROHIBITED FOR ALL ROLES (Server Admin SDK Only)
+        allow create, update, delete: if false;
+      }
     }
 
     // 10. Trips & Itinerary Collections
@@ -239,7 +260,107 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // 12. Legacy Stays, Transport & Activities Inventory (Being replaced by Phase 2B-2/2B-4)
+    // =========================================================================
+    // PHASE 2B-5: MODERN SERVICE COLLECTIONS
+    // =========================================================================
+
+    match /booking_accommodations/{docId} {
+      allow read: if isSalesExecutive() || isOperations() || isAccounts();
+      allow create: if isAdmin(); // Created via Server Conversion Engine
+      
+      // Sales may modify ONLY guestNames, specialRequests
+      // Operations may modify ONLY operational fields (cannot touch commercial/itinerary fields)
+      allow update: if isAdmin() ||
+        (isOperations() && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'bookingId', 'tripId', 'customerId', 'propertyId', 'propertyName', 'roomCategoryId',
+          'roomCategoryName', 'mealPlan', 'checkInDate', 'checkOutDate', 'nightsCount',
+          'roomsCount', 'adultsCount', 'childrenCount', 'schemaVersion'
+        ])) ||
+        (isSalesExecutive() && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'guestNames', 'specialRequests'
+        ]));
+      allow delete: if isAdmin();
+    }
+
+    match /booking_transports/{docId} {
+      allow read: if isSalesExecutive() || isOperations() || isAccounts();
+      allow create: if isAdmin(); // Created via Server Conversion Engine
+      
+      // Sales may modify ONLY passengerCount, specialRequests
+      // Operations may modify ONLY operational fields (cannot touch commercial/route fields)
+      allow update: if isAdmin() ||
+        (isOperations() && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'bookingId', 'tripId', 'customerId', 'vehicleCategoryId', 'vehicleCategoryName',
+          'routeId', 'routeName', 'serviceDate', 'endDate', 'daysCount', 'pickupLocation',
+          'dropoffLocation', 'pickupTime', 'schemaVersion'
+        ])) ||
+        (isSalesExecutive() && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'passengerCount', 'specialRequests'
+        ]));
+      allow delete: if isAdmin();
+    }
+
+    match /booking_activities/{docId} {
+      allow read: if isSalesExecutive() || isOperations() || isAccounts();
+      allow create: if isAdmin(); // Created via Server Conversion Engine
+      
+      // Sales may modify ONLY participantCount, leadGuestName, specialRequests
+      // Operations may modify ONLY operational fields (cannot touch commercial/master fields)
+      allow update: if isAdmin() ||
+        (isOperations() && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'bookingId', 'tripId', 'customerId', 'activityMasterId', 'activityName',
+          'destinationId', 'destinationName', 'serviceDate', 'sessionTime', 'schemaVersion'
+        ])) ||
+        (isSalesExecutive() && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'participantCount', 'leadGuestName', 'specialRequests'
+        ]));
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // PHASE 2B-5: PAYMENTS COLLECTION
+    // =========================================================================
+
+    match /payments/{paymentId} {
+      // Scoped read: Founder, Admin, Accounts have enterprise access; Sales/Ops checked against booking
+      allow read: if isFounder() || isAdmin() || isAccounts() || (
+        isAuthenticated() && (
+          (isSalesExecutive() && get(/databases/$(database)/documents/bookings/$(resource.data.bookingId)).data.assignedSalesEmployeeId == request.auth.uid) ||
+          (isSalesManager() && (
+            get(/databases/$(database)/documents/bookings/$(resource.data.bookingId)).data.assignedSalesManagerId == request.auth.uid ||
+            get(/databases/$(database)/documents/bookings/$(resource.data.bookingId)).data.assignedSalesEmployeeId == request.auth.uid
+          )) ||
+          (isOperations() && (
+            get(/databases/$(database)/documents/bookings/$(resource.data.bookingId)).data.assignedOperationsEmployeeId == request.auth.uid
+          ))
+        )
+      );
+      
+      // Sales and Accounts can record payments with status 'RECORDED' only
+      // verifiedBy, verifiedByName, verifiedAt, voidedBy, voidedAt CANNOT be set during recording
+      allow create: if (isSalesExecutive() || isSalesManager() || isAccounts() || isAdmin()) &&
+        request.resource.data.status == 'RECORDED' &&
+        request.resource.data.amount > 0 &&
+        (!('verifiedBy' in request.resource.data) || request.resource.data.verifiedBy == null) &&
+        (!('verifiedByName' in request.resource.data) || request.resource.data.verifiedByName == null) &&
+        (!('verifiedAt' in request.resource.data) || request.resource.data.verifiedAt == null) &&
+        (!('voidedBy' in request.resource.data) || request.resource.data.voidedBy == null) &&
+        (!('voidedByName' in request.resource.data) || request.resource.data.voidedByName == null) &&
+        (!('voidedAt' in request.resource.data) || request.resource.data.voidedAt == null) &&
+        (!('voidReason' in request.resource.data) || request.resource.data.voidReason == null) &&
+        (!('rejectionReason' in request.resource.data) || request.resource.data.rejectionReason == null);
+        
+      // Verification restricted strictly to Accounts & Admin (Sales CANNOT verify payments)
+      // Server-side backend verification is authoritative and updates booking aggregates atomically
+      allow update: if (isAccounts() || isAdmin()) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['bookingId', 'amount', 'currency']);
+        
+      allow delete: if false; // Permanent audit records; client deletes strictly denied
+    }
+
+    // =========================================================================
+    // 12. LEGACY COLLECTIONS (STRICT READ-ONLY HISTORICAL FREEZE)
+    // =========================================================================
     match /hotels/{hotelId} {
       allow read: if isAuthenticated();
       allow create, update: if isOperations();
@@ -253,15 +374,13 @@ service cloud.firestore {
     }
 
     match /hotel_bookings/{bookingId} {
-      allow read: if isSalesExecutive() || isOperations();
-      allow create, update: if isSalesExecutive() || isOperations();
-      allow delete: if isAdmin();
+      allow read: if isSalesExecutive() || isOperations() || isAccounts();
+      allow create, update, delete: if false; // Frozen: Read-only historical collection
     }
 
     match /transports/{transportId} {
-      allow read: if isSalesExecutive() || isOperations();
-      allow create, update: if isOperations();
-      allow delete: if isAdmin();
+      allow read: if isSalesExecutive() || isOperations() || isAccounts();
+      allow create, update, delete: if false; // Frozen: Read-only historical collection
     }
 
     match /drivers/{driverId} {
@@ -277,9 +396,8 @@ service cloud.firestore {
     }
 
     match /activity_bookings/{bookingId} {
-      allow read: if isSalesExecutive() || isOperations();
-      allow create, update: if isSalesExecutive() || isOperations();
-      allow delete: if isAdmin();
+      allow read: if isSalesExecutive() || isOperations() || isAccounts();
+      allow create, update, delete: if false; // Frozen: Read-only historical collection
     }
 
     // 12. Suppliers & Vouchers

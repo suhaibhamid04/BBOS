@@ -44,7 +44,9 @@ const SECTION_TITLES: Record<NavSectionKey, string> = {
   'approvals': 'Approval Center',
   'audit-logs': 'System Audit Logs',
   'settings': 'System Settings',
-  'accommodation': 'Accommodation Inventory'
+  'accommodation': 'Accommodation Inventory',
+  'transport': 'Transport Management',
+  'activities': 'Activities Inventory'
 };
 
 export const AppLayout: React.FC<AppLayoutProps> = ({

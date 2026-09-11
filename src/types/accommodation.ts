@@ -49,10 +49,11 @@ export const SUPPLEMENT_LABELS: Record<SupplementType, string> = {
 
 // --- Tax Treatment ---
 
-export type TaxTreatment = 'NET' | 'GST_5' | 'GST_18' | 'CUSTOM_TAX' | 'NEEDS_CONFIRMATION';
+export type TaxTreatment = 'NET' | 'INCLUSIVE' | 'GST_5' | 'GST_18' | 'CUSTOM_TAX' | 'NEEDS_CONFIRMATION';
 
 export const TAX_TREATMENT_LABELS: Record<TaxTreatment, string> = {
   NET: 'NET (Tax Included)',
+  INCLUSIVE: 'Tax Inclusive',
   GST_5: 'GST 5% Additional',
   GST_18: 'GST 18% Additional',
   CUSTOM_TAX: 'Custom Tax Rate',
