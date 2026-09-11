@@ -35,6 +35,8 @@ import { VouchersView } from './components/operations/VouchersView';
 import { IntegrationsView } from './components/operations/IntegrationsView';
 import { SettingsView } from './components/operations/SettingsView';
 import { AccommodationInventoryView } from './components/inventory/AccommodationInventoryView';
+import { TransportInventoryView } from './components/inventory/TransportInventoryView';
+import { ActivityInventoryView } from './components/inventory/ActivityInventoryView';
 
 export function AppContent() {
   const [activeNav, setActiveNav] = useState<NavSectionKey>('dashboard');
@@ -112,6 +114,10 @@ export function AppContent() {
         return <SettingsView />;
       case 'accommodation':
         return <AccommodationInventoryView />;
+      case 'transport':
+        return <TransportInventoryView />;
+      case 'activities':
+        return <ActivityInventoryView />;
       default:
         return <CommandCenterDashboard onNavigate={handleNavigate} />;
     }

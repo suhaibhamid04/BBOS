@@ -7,7 +7,9 @@ import {
   HotelBookingRepo, TransportRepo, DriverRepo, ActivityRepo, ActivityBookingRepo,
   SupplierRepo, VoucherRepo,
   AccommodationPropertyRepo, RoomCategoryRepo, RatePeriodRepo, NegotiatedRateRepo,
-  PropertyPhotoRepo, RateHistoryRepo
+  PropertyPhotoRepo, RateHistoryRepo,
+  VehicleCategoryRepo, DestinationRepo, TransportRouteRepo, TransportRatePeriodRepo,
+  TransportSupplementRepo, ActivityMasterRepo, ActivityRatePeriodRepo
 } from '../services/db/repositories';
 import {
   Lead,
@@ -51,7 +53,14 @@ import {
   RateHistoryEntry,
   PropertyPhoto,
   RateCalculationResult,
-  RateCalculationRequest
+  RateCalculationRequest,
+  VehicleCategory,
+  Destination,
+  TransportRoute,
+  TransportRatePeriod,
+  TransportSupplement,
+  ActivityMaster,
+  ActivityRatePeriod
 } from '../types';
 import {
   INITIAL_PACKAGES,
@@ -89,6 +98,17 @@ import {
   DEMO_ROOM_CATEGORIES,
   DEMO_RATE_PERIODS
 } from '../services/accommodationDemoData';
+import {
+  DEMO_VEHICLE_CATEGORIES,
+  DEMO_DESTINATIONS,
+  DEMO_TRANSPORT_ROUTES,
+  DEMO_TRANSPORT_RATE_PERIODS,
+  DEMO_TRANSPORT_SUPPLEMENTS
+} from '../services/transportDemoData';
+import {
+  DEMO_ACTIVITY_MASTERS,
+  DEMO_ACTIVITY_RATE_PERIODS
+} from '../services/activityDemoData';
 import { useAuth } from './AuthContext';
 import { db, auth } from '../lib/firebase';
 import { doc, setDoc, deleteDoc } from 'firebase/firestore';
@@ -128,6 +148,15 @@ interface DataContextType {
   roomCategories: RoomCategory[];
   ratePeriods: RatePeriod[];
   negotiatedRates: NegotiatedRate[];
+
+  // Transport & Activity Inventory (Phase 2B-4)
+  vehicleCategories: VehicleCategory[];
+  destinations: Destination[];
+  transportRoutes: TransportRoute[];
+  transportRatePeriods: TransportRatePeriod[];
+  transportSupplements: TransportSupplement[];
+  activityMasters: ActivityMaster[];
+  activityRatePeriods: ActivityRatePeriod[];
 
   // Trip & Itinerary actions
   createTrip: (tripData: Omit<Trip, 'id' | 'createdAt' | 'updatedAt' | 'status' | 'grossProfit' | 'grossMargin' | 'totalCost' | 'totalSellingPrice'> & { budget?: number; totalCost?: number; totalSellingPrice?: number }, initialDaysCount?: number, fromPackageId?: string) => Promise<Trip>;

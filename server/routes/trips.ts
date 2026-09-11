@@ -1,9 +1,20 @@
 import { Router, Request, Response } from 'express';
 import { requireRole } from '../middleware/auth.js';
 import { getAdminDb } from '../firebaseAdmin.js';
+
+// Accommodation
 import { DEMO_ACCOMMODATION_PROPERTIES, DEMO_ROOM_CATEGORIES, DEMO_RATE_PERIODS } from '../../src/services/accommodationDemoData.js';
 import { calculateStayTotal, buildRoleGatedResult } from '../../src/services/accommodationEngine.js';
 import { AccommodationProperty, RatePeriod, RoomCategory } from '../../src/types/accommodation.js';
+
+// Transport
+import { DEMO_TRANSPORT_RATE_PERIODS, DEMO_TRANSPORT_SUPPLEMENTS } from '../../src/services/transportDemoData.js';
+import { calculateTransportCost } from '../../src/services/transportEngine.js';
+
+// Activity
+import { DEMO_ACTIVITY_RATE_PERIODS } from '../../src/services/activityDemoData.js';
+import { calculateActivityCost } from '../../src/services/activityEngine.js';
+
 import { ItineraryItem } from '../../src/types/index.js';
 
 export const tripsRouter = Router();
@@ -60,10 +71,71 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
              }
           }
         }
-      } else {
-         // For transports, activities, we would resolve authoritative cost here.
-         // For this phase, we'll assume they aren't fully modelled in the engine yet or have 0 cost
-         // or we fallback to the requested supplierCost if it's safe (which it's not, but out of scope for accommodation phase)
+      } else if (item.type === 'TRANSPORT' && item.metadata) {
+        // Phase 2B-4: Calculate Transport Cost
+        const { vehicleCategoryId, startDate, vehicleDays, nightHalts, serviceType } = item.metadata;
+
+        if (!vehicleCategoryId || !startDate || !vehicleDays) continue;
+
+        // In production, query Firestore transport_rate_periods where vehicleCategoryId matches.
+        const ratePeriods = DEMO_TRANSPORT_RATE_PERIODS.filter(rp => rp.vehicleCategoryId === vehicleCategoryId);
+        const targetDate = new Date(startDate);
+
+        let activeRate = null;
+        for (const rp of ratePeriods) {
+          const from = new Date(rp.validFrom);
+          const to = rp.validTo ? new Date(rp.validTo) : new Date('2099-12-31');
+          if (targetDate >= from && targetDate <= to) {
+            activeRate = rp;
+            break;
+          }
+        }
+
+        if (activeRate) {
+          const transportCalc = calculateTransportCost({
+            ratePeriod: activeRate,
+            supplements: DEMO_TRANSPORT_SUPPLEMENTS,
+            serviceParams: {
+              vehicleDays,
+              nightHalts: nightHalts || 0
+            }
+          });
+
+          if (transportCalc.available && transportCalc.totalAmount) {
+             totalTripCost += transportCalc.totalAmount;
+          }
+        }
+
+      } else if (item.type === 'ACTIVITY' && item.metadata) {
+         // Phase 2B-4: Calculate Activity Cost
+         const { activityId, date, adults, children } = item.metadata;
+
+         if (!activityId || !date) continue;
+
+         // In production, query Firestore activity_rate_periods where activityId matches.
+         const ratePeriods = DEMO_ACTIVITY_RATE_PERIODS.filter(rp => rp.activityId === activityId);
+         const targetDate = new Date(date);
+
+         let activeRate = null;
+         for (const rp of ratePeriods) {
+           const from = new Date(rp.validFrom);
+           const to = rp.validTo ? new Date(rp.validTo) : new Date('2099-12-31');
+           if (targetDate >= from && targetDate <= to) {
+             activeRate = rp;
+             break;
+           }
+         }
+
+         if (activeRate) {
+           const activityCalc = calculateActivityCost({
+             ratePeriod: activeRate,
+             params: { adults, children }
+           });
+
+           if (activityCalc.available && activityCalc.totalAmount) {
+             totalTripCost += activityCalc.totalAmount;
+           }
+         }
       }
     }
 

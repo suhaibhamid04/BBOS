@@ -240,11 +240,9 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
       const discount = Number(editForm.discountAmount) || 0;
       const finalAmt = Math.max(0, sellingTotal - discount);
 
-      // Compute costs if items present
-      let totalCost = 0;
-      (editForm.hotels || []).forEach(h => { totalCost += (h.supplierCost || 0) * (h.nights || 1); });
-      (editForm.transports || []).forEach(t => { totalCost += (t.supplierCost || 0) * (t.days || 1); });
-      (editForm.activities || []).forEach(a => { totalCost += a.supplierCost || 0; });
+      // Use the authoritative totalCost stored in the quote (which came from the Trip)
+      // Do NOT recalculate it from missing client-side supplierCost fields
+      const totalCost = editForm.totalCost || 0;
 
       const grossProfit = finalAmt - totalCost;
       const grossMargin = finalAmt > 0 ? Number(((grossProfit / finalAmt) * 100).toFixed(1)) : 0;

@@ -169,7 +169,77 @@ service cloud.firestore {
       allow update, delete: if false; // Immutable audit log
     }
 
-    // 12. Legacy Stays, Transport & Activities Inventory (Being replaced by Phase 2B-2)
+    // =========================================================================
+    // PHASE 2B-4: TRANSPORT & ACTIVITY INVENTORY
+    // =========================================================================
+
+    match /vehicle_categories/{docId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAdmin() || isOperations();
+      allow delete: if isAdmin();
+    }
+
+    match /destinations/{docId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAdmin() || isOperations();
+      allow delete: if isAdmin();
+    }
+
+    match /transport_routes/{docId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAdmin() || isOperations();
+      allow delete: if isAdmin();
+    }
+
+    match /transport_rate_periods/{docId} {
+      allow read: if isOperations() || isAccounts() || isAdmin();
+      allow create, update: if isOperations() || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /transport_supplements/{docId} {
+      allow read: if isOperations() || isAccounts() || isAdmin();
+      allow create, update: if isOperations() || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /negotiated_transport_rates/{docId} {
+      allow read: if isAccounts() || isAdmin();
+      allow create, update: if isAccounts() || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /activity_masters/{docId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAdmin() || isOperations();
+      allow delete: if isAdmin();
+    }
+
+    match /activity_rate_periods/{docId} {
+      allow read: if isOperations() || isAccounts() || isAdmin();
+      allow create, update: if isOperations() || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /negotiated_activity_rates/{docId} {
+      allow read: if isAccounts() || isAdmin();
+      allow create, update: if isAccounts() || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /transport_rate_history/{docId} {
+      allow read: if isAccounts() || isAdmin();
+      allow create: if isAuthenticated();
+      allow update, delete: if false;
+    }
+
+    match /activity_rate_history/{docId} {
+      allow read: if isAccounts() || isAdmin();
+      allow create: if isAuthenticated();
+      allow update, delete: if false;
+    }
+
+    // 12. Legacy Stays, Transport & Activities Inventory (Being replaced by Phase 2B-2/2B-4)
     match /hotels/{hotelId} {
       allow read: if isAuthenticated();
       allow create, update: if isOperations();

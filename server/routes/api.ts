@@ -7,6 +7,8 @@ import { isAiConfigured } from '../ai/aiClient.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { sanitizeFinancialData } from '../middleware/financialGuard.js';
 import { accommodationRouter } from './accommodation.js';
+import { transportRouter } from './transport.js';
+import { activitiesRouter } from './activities.js';
 import { tripsRouter } from './trips.js';
 
 export const apiRouter = Router();
@@ -16,6 +18,8 @@ apiRouter.use(authenticate);
 
 // Mount Sub-Routers
 apiRouter.use('/accommodation', accommodationRouter);
+apiRouter.use('/transport', transportRouter);
+apiRouter.use('/activities', activitiesRouter);
 apiRouter.use('/trips', tripsRouter);
 
 // Health check endpoint

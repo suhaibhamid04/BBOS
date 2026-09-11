@@ -16,3 +16,5 @@ service-account*.json
 *serviceaccount*.json
 *credentials*.json
 firebase-admin*.json
+
+codex.vsix

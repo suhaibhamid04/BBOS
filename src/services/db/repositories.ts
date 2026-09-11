@@ -81,3 +81,16 @@ export const RateSupplementRepo = new FirestoreRepository<any>('rate_supplements
 export const NegotiatedRateRepo = new FirestoreRepository<any>('negotiated_rates');
 export const PropertyPhotoRepo = new FirestoreRepository<any>('property_photos');
 export const RateHistoryRepo = new FirestoreRepository<any>('rate_history');
+
+// Phase 2B-4: Transport & Activity Master Data & Rates
+export const VehicleCategoryRepo = new FirestoreRepository<any>('vehicle_categories');
+export const DestinationRepo = new FirestoreRepository<any>('destinations');
+export const TransportRouteRepo = new FirestoreRepository<any>('transport_routes');
+export const TransportRatePeriodRepo = new FirestoreRepository<any>('transport_rate_periods');
+export const TransportSupplementRepo = new FirestoreRepository<any>('transport_supplements');
+export const NegotiatedTransportRateRepo = new FirestoreRepository<any>('negotiated_transport_rates');
+export const ActivityMasterRepo = new FirestoreRepository<any>('activity_masters');
+export const ActivityRatePeriodRepo = new FirestoreRepository<any>('activity_rate_periods');
+export const NegotiatedActivityRateRepo = new FirestoreRepository<any>('negotiated_activity_rates');
+export const TransportRateHistoryRepo = new FirestoreRepository<any>('transport_rate_history');
+export const ActivityRateHistoryRepo = new FirestoreRepository<any>('activity_rate_history');

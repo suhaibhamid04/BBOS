@@ -800,3 +800,7 @@ export {
   SUPPLEMENT_LABELS,
   TAX_TREATMENT_LABELS,
 } from './accommodation';
+
+// Re-export transport and activity types
+export * from './transport';
+export * from './activity';

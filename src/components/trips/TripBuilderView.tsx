@@ -24,6 +24,8 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { HotelInventoryPicker } from './HotelInventoryPicker';
+import { TransportInventoryPicker } from './TransportInventoryPicker';
+import { ActivityInventoryPicker } from './ActivityInventoryPicker';
 
 interface TripBuilderViewProps {
   initialTripId?: string;
@@ -457,50 +459,36 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
   };
 
   // Add Transport Handler
-  const handleAddTransport = async () => {
+  const handleAddTransport = (metadata: any) => {
     if (!activeDay) return;
-    const transport = transports.find(t => t.id === selectedTransportId) || transports[0];
-
-    const title = `${transport?.vehicleType || 'Innova Crysta AC'} (${customPickup} → ${customDropoff})`;
-    const cost = transport?.supplierCost || 3400;
-    const price = transport?.sellingPrice || 4800;
-
-    await addItineraryItem(activeDay.id, {
+    
+    // Add item with metadata only, let the server calculate costs when quote is generated
+    addItineraryItem(activeDay.id, {
       type: 'TRANSPORT',
-      title,
-      description: `Chauffeur driven transit: ${customPickup} to ${customDropoff}`,
-      referenceId: transport?.id,
-      supplierCost: cost,
-      sellingPrice: price,
-      metadata: { vehicleType: transport?.vehicleType, pickup: customPickup, dropoff: customDropoff }
+      title: `Transport: ${metadata.vehicleName}`,
+      description: metadata.routeName,
+      inventoryId: metadata.vehicleCategoryId,
+      transportMetadata: metadata,
+      sellingPrice: 0 // Prices calculated on server
     });
-
+    
     setShowTransportModal(false);
-    notify(`Added transport to Day ${activeDay.dayNumber}!`);
   };
 
   // Add Activity Handler
-  const handleAddActivity = async () => {
-    if (!activeDay || !selectedActivityId) return;
-    const activity = activities.find(a => a.id === selectedActivityId);
-    if (!activity) return;
-
-    const count = Number(activityParticipants) || 1;
-    const cost = (activity.supplierCost || 0) * count;
-    const price = (activity.sellingPrice || 0) * count;
-
-    await addItineraryItem(activeDay.id, {
+  const handleAddActivity = (metadata: any) => {
+    if (!activeDay) return;
+    
+    addItineraryItem(activeDay.id, {
       type: 'ACTIVITY',
-      title: `${activity.name} (${count} Pax)`,
-      description: activity.description || 'Sightseeing / Adventure experience',
-      referenceId: activity.id,
-      supplierCost: cost,
-      sellingPrice: price,
-      metadata: { activityId: activity.id, participants: count }
+      title: `Activity: ${metadata.activityName}`,
+      description: `Model: ${metadata.pricingModel}`,
+      inventoryId: metadata.activityId,
+      activityMetadata: metadata,
+      sellingPrice: 0 // Prices calculated on server
     });
-
+    
     setShowActivityModal(false);
-    notify(`Added ${activity.name} to Day ${activeDay.dayNumber}!`);
   };
 
   // Add Custom / Sightseeing Item Handler
@@ -1033,60 +1021,12 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
         {/* MODAL 2: ADD TRANSPORT */}
         {showTransportModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-            <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden animate-in fade-in zoom-in duration-150">
-              <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <Car className="w-4 h-4 text-amber-500" /> Select Transportation
-                </h3>
-                <button onClick={() => setShowTransportModal(false)} className="text-slate-400 hover:text-slate-700">
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <div className="p-6 space-y-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Vehicle Tier</label>
-                  <select
-                    value={selectedTransportId}
-                    onChange={(e) => setSelectedTransportId(e.target.value)}
-                    className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-[#7056EE]"
-                  >
-                    {transports.map(t => (
-                      <option key={t.id} value={t.id}>{t.vehicleType} — Daily Rate: ₹{t.sellingPrice?.toLocaleString('en-IN')}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">Pickup Location</label>
-                    <input
-                      type="text"
-                      value={customPickup}
-                      onChange={(e) => setCustomPickup(e.target.value)}
-                      className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg"
-                      placeholder="e.g. Srinagar Airport"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">Drop-off Location</label>
-                    <input
-                      type="text"
-                      value={customDropoff}
-                      onChange={(e) => setCustomDropoff(e.target.value)}
-                      className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg"
-                      placeholder="e.g. Nigeen Lake Houseboat"
-                    />
-                  </div>
-                </div>
-
-                <button
-                  onClick={handleAddTransport}
-                  className="w-full py-2.5 bg-[#7056EE] text-white text-xs font-bold rounded-lg hover:bg-[#5e43dc] transition-colors shadow-sm"
-                >
-                  Add Transport to Itinerary
-                </button>
-              </div>
+            <div className="animate-in fade-in zoom-in duration-150 w-full max-w-2xl">
+              <TransportInventoryPicker
+                startDate={activeDay?.date || new Date().toISOString().split('T')[0]}
+                onConfirm={handleAddTransport}
+                onCancel={() => setShowTransportModal(false)}
+              />
             </div>
           </div>
         )}
@@ -1094,49 +1034,14 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
         {/* MODAL 3: ADD ACTIVITY */}
         {showActivityModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-            <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden animate-in fade-in zoom-in duration-150">
-              <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <Compass className="w-4 h-4 text-[#F0A608]" /> Select Activity / Excursion
-                </h3>
-                <button onClick={() => setShowActivityModal(false)} className="text-slate-400 hover:text-slate-700">
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <div className="p-6 space-y-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Curated Himalayan Experiences</label>
-                  <select
-                    value={selectedActivityId}
-                    onChange={(e) => setSelectedActivityId(e.target.value)}
-                    className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-[#7056EE]"
-                  >
-                    {activities.map(a => (
-                      <option key={a.id} value={a.id}>{a.name} (₹{a.sellingPrice?.toLocaleString('en-IN')})</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Participants Count</label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="50"
-                    value={activityParticipants}
-                    onChange={(e) => setActivityParticipants(Number(e.target.value))}
-                    className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg"
-                  />
-                </div>
-
-                <button
-                  onClick={handleAddActivity}
-                  className="w-full py-2.5 bg-[#7056EE] text-white text-xs font-bold rounded-lg hover:bg-[#5e43dc] transition-colors shadow-sm"
-                >
-                  Add Activity to Day {activeDay.dayNumber}
-                </button>
-              </div>
+            <div className="animate-in fade-in zoom-in duration-150 w-full max-w-2xl">
+              <ActivityInventoryPicker
+                date={activeDay?.date || new Date().toISOString().split('T')[0]}
+                defaultAdults={activeTrip?.adults || 2}
+                defaultChildren={activeTrip?.children || 0}
+                onConfirm={handleAddActivity}
+                onCancel={() => setShowActivityModal(false)}
+              />
             </div>
           </div>
         )}

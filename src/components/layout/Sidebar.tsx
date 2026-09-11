@@ -66,7 +66,9 @@ export type NavSectionKey =
   | 'approvals'
   | 'audit-logs'
   | 'settings'
-  | 'accommodation';
+  | 'accommodation'
+  | 'transport'
+  | 'activities';
 
 interface SidebarProps {
   activeNav: NavSectionKey;
@@ -150,10 +152,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ...(permissions.canManageBookings ? [{ key: 'bookings', label: 'Bookings', icon: CheckSquare } as any] : []),
       ]
     }] : []),
-    ...(permissions.canManageAccommodation || permissions.canManageNegotiatedRates ? [{
+    ...(permissions.canManageAccommodation || permissions.canManageNegotiatedRates || permissions.canManageOperations ? [{
       title: 'INVENTORY',
       items: [
-        { key: 'accommodation', label: 'Accommodation', icon: Building2 } as any,
+        ...(permissions.canManageAccommodation || permissions.canManageNegotiatedRates ? [{ key: 'accommodation', label: 'Accommodation', icon: Building2 } as any] : []),
+        ...(permissions.canManageOperations ? [{ key: 'transport', label: 'Transport', icon: Plane } as any] : []),
+        ...(permissions.canManageOperations ? [{ key: 'activities', label: 'Activities', icon: Sparkles } as any] : []),
       ]
     }] : []),
     ...(permissions.canManageOperations ? [{
