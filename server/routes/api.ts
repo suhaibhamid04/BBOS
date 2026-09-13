@@ -18,10 +18,13 @@ export const apiRouter = Router();
 // Apply global authentication resolution to all API routes
 apiRouter.use(authenticate);
 
+// Define roles allowed to interact with inventory/pricing (Excludes Marketing)
+const inventoryRoles: import('../../src/types/index.js').UserRole[] = ['Founder', 'Admin', 'Operations', 'Accounts', 'Sales Manager', 'Sales Executive'];
+
 // Mount Sub-Routers
 apiRouter.use('/accommodation', accommodationRouter);
-apiRouter.use('/transport', transportRouter);
-apiRouter.use('/activities', activitiesRouter);
+apiRouter.use('/transport', requireRole(inventoryRoles), transportRouter);
+apiRouter.use('/activities', requireRole(inventoryRoles), activitiesRouter);
 apiRouter.use('/trips', tripsRouter);
 apiRouter.use('/quotes', quotesRouter);
 apiRouter.use('/bookings', bookingsRouter);

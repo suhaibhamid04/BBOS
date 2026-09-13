@@ -329,4 +329,29 @@ describe('Phase 2B-5 Security & Architecture Verification', () => {
       expect(activityBookingsMatch![1]).toContain('allow create, update, delete: if false;');
     });
   });
+
+  describe('7. Invariant: Quote Conversions Collection Security (Immutable Server-Only Markers)', () => {
+    it('quote_conversions read is restricted to Founder, Admin, Accounts ONLY', () => {
+      const convMatch = firestoreRules.match(/match\s+\/quote_conversions\/\{conversionId\}\s*\{([\s\S]*?)\}/);
+      expect(convMatch).not.toBeNull();
+      const convRules = convMatch![1];
+
+      // Read must only allow Founder, Admin, Accounts
+      expect(convRules).toContain('allow read: if isFounder() || isAdmin() || isAccounts();');
+      // Sales, Ops, Marketing must NOT appear in read rules
+      expect(convRules).not.toContain('isSalesExecutive');
+      expect(convRules).not.toContain('isSalesManager');
+      expect(convRules).not.toContain('isOperations');
+      expect(convRules).not.toContain('isMarketing');
+    });
+
+    it('Clients (ALL roles) CANNOT create, update, or delete quote_conversions', () => {
+      const convMatch = firestoreRules.match(/match\s+\/quote_conversions\/\{conversionId\}\s*\{([\s\S]*?)\}/);
+      expect(convMatch).not.toBeNull();
+      const convRules = convMatch![1];
+
+      // Must strictly deny all client mutations
+      expect(convRules).toContain('allow create, update, delete: if false;');
+    });
+  });
 });

@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { UserRole } from '../../src/types/index.js';
+import { APP_CONFIG } from '../../src/config.js';
 
 export interface AuthenticatedUser {
   id: string;
@@ -150,16 +151,20 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
     }
   }
 
-  // 2. Demo Mode / Development Header resolution (Explicit, untrusted for production security)
-  if (demoUserId && PRESET_MOCK_USERS[demoUserId]) {
+  // 2. Demo Mode / Development Header resolution
+  if (APP_CONFIG.DEMO_MODE && demoUserId && PRESET_MOCK_USERS[demoUserId]) {
     req.user = PRESET_MOCK_USERS[demoUserId];
     return next();
   }
 
   // 3. Fallback for DEMO_MODE local development when no explicit header provided
-  // Default to Founder persona in local sandbox if unconfigured
-  req.user = PRESET_MOCK_USERS['emp-founder-01'];
-  return next();
+  if (APP_CONFIG.DEMO_MODE) {
+    req.user = PRESET_MOCK_USERS['emp-founder-01'];
+    return next();
+  }
+
+  // 4. Deny unauthenticated requests in production
+  return res.status(401).json({ error: 'Unauthorized: Valid Firebase authentication token required.' });
 }
 
 /**

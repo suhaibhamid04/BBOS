@@ -381,7 +381,7 @@ export interface Quote {
 // Re-export Phase 2B-5 booking and payment models
 export * from './booking';
 export * from './payment';
-
+export * from './bookingApi';
 export type TripStatus =
   | 'DRAFT'
   | 'ITINERARY_READY'

@@ -67,15 +67,10 @@ activitiesRouter.post('/calculate-rate', async (req: Request, res: Response) => 
 
     const safeResult = buildRoleGatedActivityResult(calculationResult, userRole);
     
-    // For demo purposes, we define selling price as supplier cost + 30% markup
-    const supplierCost = calculationResult.totalAmount;
-    const sellingPrice = Math.round(supplierCost * 1.30);
-    
     res.json({
       success: true,
       data: {
         ...safeResult,
-        sellingPrice,
         supplierCost: safeResult.totalAmount, // This will be undefined for Sales Execs
         pricingModel: activeRate.pricingModel,
         needsConfirmation: activeRate.availabilityStatus === 'NEEDS_CONFIRMATION' || activeRate.availabilityStatus === 'ON_REQUEST',

@@ -124,7 +124,7 @@ export function buildRoleGatedActivityResult(
     available: result.available,
   };
 
-  const canSeeSupplierCost = ['FOUNDER', 'ADMIN', 'ACCOUNTS', 'OPERATIONS'].includes(userRole);
+  const canSeeSupplierCost = ['Founder', 'Admin', 'Accounts', 'Operations'].includes(userRole);
 
   if (canSeeSupplierCost) {
     safeResult.totalAmount = result.totalAmount;

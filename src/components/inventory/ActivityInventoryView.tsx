@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { Sparkles, ActivitySquare, CalendarDays } from 'lucide-react';
+import { ActivityMasterManager } from './ActivityMasterManager';
+import { ActivityRateManager } from './ActivityRateManager';
 
 type TabKey = 'masters' | 'rates';
 
@@ -50,19 +52,8 @@ export const ActivityInventoryView: React.FC = () => {
       </div>
 
       <div className="flex-1 overflow-auto p-6">
-        {activeTab === 'masters' && (
-          <div className="bg-white border border-slate-200 rounded-xl p-6 flex flex-col items-center justify-center min-h-[300px]">
-            <ActivitySquare className="w-12 h-12 text-slate-300 mb-4" />
-            <p className="text-slate-500 font-medium">Activity Master Manager coming soon...</p>
-          </div>
-        )}
-
-        {activeTab === 'rates' && (
-          <div className="bg-white border border-slate-200 rounded-xl p-6 flex flex-col items-center justify-center min-h-[300px]">
-            <CalendarDays className="w-12 h-12 text-slate-300 mb-4" />
-            <p className="text-slate-500 font-medium">Activity Rate Manager coming soon...</p>
-          </div>
-        )}
+        {activeTab === 'masters' && <ActivityMasterManager />}
+        {activeTab === 'rates' && <ActivityRateManager />}
       </div>
     </div>
   );

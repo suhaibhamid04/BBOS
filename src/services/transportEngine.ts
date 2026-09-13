@@ -134,8 +134,7 @@ export function buildRoleGatedTransportResult(
     available: result.available,
   };
 
-  // Roles allowed to see supplier-side cost breakdown
-  const canSeeSupplierCost = ['FOUNDER', 'ADMIN', 'ACCOUNTS', 'OPERATIONS'].includes(userRole);
+  const canSeeSupplierCost = ['Founder', 'Admin', 'Accounts', 'Operations'].includes(userRole);
 
   if (canSeeSupplierCost) {
     safeResult.totalAmount = result.totalAmount;

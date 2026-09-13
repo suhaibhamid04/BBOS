@@ -9,10 +9,15 @@ import {
   PaymentError,
   PaymentActor,
 } from '../services/paymentService.js';
+import {
+  BookingQueryService,
+  BookingQueryError,
+} from '../../src/services/booking/bookingQueryService.js';
 
 export const bookingsRouter = Router();
 const quoteConversionService = new QuoteConversionService();
 const paymentService = new PaymentService();
+const bookingQueryService = new BookingQueryService();
 
 /**
  * Helper to extract current authenticated actor
@@ -38,6 +43,19 @@ function handlePaymentError(error: any, res: Response, context: string) {
       error: error.message,
       code: error.code,
       details: error.details,
+    });
+  }
+  console.error(`API Error in ${context}:`, error);
+  return res.status(500).json({
+    error: error.message || `Internal Server Error in ${context}`,
+  });
+}
+
+function handleBookingQueryError(error: any, res: Response, context: string) {
+  if (error instanceof BookingQueryError) {
+    return res.status(error.statusCode).json({
+      error: error.message,
+      code: error.code,
     });
   }
   console.error(`API Error in ${context}:`, error);
@@ -78,6 +96,72 @@ bookingsRouter.get(
       return res.status(500).json({
         error: error.message || 'Internal Server Error in financial snapshot retrieval',
       });
+    }
+  }
+);
+
+// =========================================================================
+// PHASE 2B-6: STAGE 1 BOOKING MANAGEMENT ROUTES
+// =========================================================================
+
+/**
+ * GET /api/bookings
+ * Retrieves a paginated list of bookings authorized for the actor.
+ * 
+ * Authorized roles: Founder, Admin, Accounts, Sales Manager, Sales Executive, Operations
+ */
+bookingsRouter.get(
+  '/',
+  requireRole(['Founder', 'Admin', 'Accounts', 'Sales Manager', 'Sales Executive', 'Operations']),
+  async (req: Request, res: Response) => {
+    try {
+      const actor = getActorFromRequest(req);
+      const filter = {
+        status: req.query.status as any,
+        paymentStatus: req.query.paymentStatus as any,
+        query: req.query.query as string,
+        cursor: req.query.cursor as string,
+        limit: req.query.limit ? parseInt(req.query.limit as string, 10) : undefined,
+      };
+
+      const result = await bookingQueryService.listBookings(filter, actor);
+
+      return res.status(200).json({
+        success: true,
+        ...result,
+      });
+    } catch (error: any) {
+      return handleBookingQueryError(error, res, 'GET /bookings');
+    }
+  }
+);
+
+/**
+ * GET /api/bookings/:bookingId
+ * Retrieves detailed booking information including services and a sanitized payment summary.
+ * 
+ * Authorized roles: Founder, Admin, Accounts, Sales Manager, Sales Executive, Operations
+ */
+bookingsRouter.get(
+  '/:bookingId',
+  requireRole(['Founder', 'Admin', 'Accounts', 'Sales Manager', 'Sales Executive', 'Operations']),
+  async (req: Request, res: Response) => {
+    // Avoid conflicting with other specific routes by checking if bookingId is a known sub-route
+    if (['financial-snapshot', 'payments'].includes(req.params.bookingId)) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+
+    try {
+      const bookingId = req.params.bookingId;
+      const actor = getActorFromRequest(req);
+      const result = await bookingQueryService.getBookingDetail(bookingId, actor);
+
+      return res.status(200).json({
+        success: true,
+        data: result,
+      });
+    } catch (error: any) {
+      return handleBookingQueryError(error, res, 'GET /bookings/:bookingId');
     }
   }
 );

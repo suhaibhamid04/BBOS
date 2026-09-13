@@ -5,6 +5,8 @@ import { Plane, Car, MapPin, Route, CalendarDays, Receipt } from 'lucide-react';
 import { VehicleCategoryManager } from './VehicleCategoryManager';
 import { DestinationManager } from './DestinationManager';
 import { TransportRouteManager } from './TransportRouteManager';
+import { TransportRateManager } from './TransportRateManager';
+import { TransportSupplementManager } from './TransportSupplementManager';
 
 type TabKey = 'vehicles' | 'destinations' | 'routes' | 'rates' | 'supplements';
 
@@ -60,19 +62,8 @@ export const TransportInventoryView: React.FC = () => {
         {activeTab === 'destinations' && <DestinationManager />}
         {activeTab === 'routes' && <TransportRouteManager />}
 
-        {activeTab === 'rates' && (
-          <div className="bg-white border border-slate-200 rounded-xl p-6 flex flex-col items-center justify-center min-h-[300px]">
-            <CalendarDays className="w-12 h-12 text-slate-300 mb-4" />
-            <p className="text-slate-500 font-medium">Transport Rate Manager coming soon...</p>
-          </div>
-        )}
-
-        {activeTab === 'supplements' && (
-          <div className="bg-white border border-slate-200 rounded-xl p-6 flex flex-col items-center justify-center min-h-[300px]">
-            <Receipt className="w-12 h-12 text-slate-300 mb-4" />
-            <p className="text-slate-500 font-medium">Transport Supplement Manager coming soon...</p>
-          </div>
-        )}
+        {activeTab === 'rates' && <TransportRateManager />}
+        {activeTab === 'supplements' && <TransportSupplementManager />}
       </div>
     </div>
   );

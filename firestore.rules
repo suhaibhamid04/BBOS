@@ -99,7 +99,15 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // 9. Bookings Collection (Commercial Root)
+    // 9. Quote Conversions Collection (Immutable Server-Authoritative Conversion Markers)
+    match /quote_conversions/{conversionId} {
+      // Read restricted to Founder, Admin, Accounts for audit tracing
+      allow read: if isFounder() || isAdmin() || isAccounts();
+      // DIRECT CLIENT MUTATION PROHIBITED FOR ALL ROLES (Server Admin SDK Only)
+      allow create, update, delete: if false;
+    }
+
+    // 10. Bookings Collection (Commercial Root)
     match /bookings/{bookingId} {
       allow read: if isSalesExecutive() || isOperations() || isAccounts();
       // Direct client creation restricted to Admin (created via Server Conversion Engine)

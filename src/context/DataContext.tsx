@@ -158,6 +158,27 @@ interface DataContextType {
   activityMasters: ActivityMaster[];
   activityRatePeriods: ActivityRatePeriod[];
 
+  // Transport & Activity Actions
+  addTransportRatePeriod: (rate: Omit<TransportRatePeriod, 'id' | 'createdAt' | 'updatedAt'>) => Promise<TransportRatePeriod>;
+  updateTransportRatePeriod: (id: string, updates: Partial<TransportRatePeriod>) => Promise<void>;
+  deleteTransportRatePeriod: (id: string) => Promise<void>;
+  
+  addTransportSupplement: (supp: Omit<TransportSupplement, 'id' | 'createdAt' | 'updatedAt'>) => Promise<TransportSupplement>;
+  updateTransportSupplement: (id: string, updates: Partial<TransportSupplement>) => Promise<void>;
+  deleteTransportSupplement: (id: string) => Promise<void>;
+  
+  addActivityMaster: (master: Omit<ActivityMaster, 'id' | 'createdAt' | 'updatedAt'>) => Promise<ActivityMaster>;
+  updateActivityMaster: (id: string, updates: Partial<ActivityMaster>) => Promise<void>;
+  deleteActivityMaster: (id: string) => Promise<void>;
+  
+  addActivityRatePeriod: (rate: Omit<ActivityRatePeriod, 'id' | 'createdAt' | 'updatedAt'>) => Promise<ActivityRatePeriod>;
+  updateActivityRatePeriod: (id: string, updates: Partial<ActivityRatePeriod>) => Promise<void>;
+  deleteActivityRatePeriod: (id: string) => Promise<void>;
+
+  // Accommodation Property Actions
+  addAccommodationProperty: (property: Omit<AccommodationProperty, 'id' | 'createdAt' | 'updatedAt'>) => Promise<AccommodationProperty>;
+  updateAccommodationProperty: (id: string, updates: Partial<AccommodationProperty>) => Promise<void>;
+
   // Trip & Itinerary actions
   createTrip: (tripData: Omit<Trip, 'id' | 'createdAt' | 'updatedAt' | 'status' | 'grossProfit' | 'grossMargin' | 'totalCost' | 'totalSellingPrice'> & { budget?: number; totalCost?: number; totalSellingPrice?: number }, initialDaysCount?: number, fromPackageId?: string) => Promise<Trip>;
   updateTrip: (id: string, updates: Partial<Trip>) => Promise<void>;
@@ -388,6 +409,41 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return saved ? JSON.parse(saved) : [];
   });
 
+  const [vehicleCategories, setVehicleCategories] = useState<VehicleCategory[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
+    return DEMO_VEHICLE_CATEGORIES;
+  });
+
+  const [destinations, setDestinations] = useState<Destination[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
+    return DEMO_DESTINATIONS;
+  });
+
+  const [transportRoutes, setTransportRoutes] = useState<TransportRoute[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
+    return DEMO_TRANSPORT_ROUTES;
+  });
+
+  const [transportRatePeriods, setTransportRatePeriods] = useState<TransportRatePeriod[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
+    return DEMO_TRANSPORT_RATE_PERIODS;
+  });
+
+  const [transportSupplements, setTransportSupplements] = useState<TransportSupplement[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
+    return DEMO_TRANSPORT_SUPPLEMENTS;
+  });
+
+  const [activityMasters, setActivityMasters] = useState<ActivityMaster[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
+    return DEMO_ACTIVITY_MASTERS;
+  });
+
+  const [activityRatePeriods, setActivityRatePeriods] = useState<ActivityRatePeriod[]>(() => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
+    return DEMO_ACTIVITY_RATE_PERIODS;
+  });
+
   // Fetch from Firestore if not in DEMO mode
   useEffect(() => {
     if (APP_CONFIG.DEMO_MODE) return;
@@ -400,14 +456,18 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           fetchedConversations, fetchedMessages, fetchedQuotes, fetchedBookings,
           fetchedRecs, fetchedActions, fetchedApprovals, fetchedLogs, fetchedPackages,
           fetchedTrips, fetchedHotels, fetchedTransports, fetchedDrivers, fetchedActivities, fetchedSuppliers, fetchedVouchers,
-          fetchedAccommProps, fetchedRoomCats, fetchedRatePeriods, fetchedNegRates
+          fetchedAccommProps, fetchedRoomCats, fetchedRatePeriods, fetchedNegRates,
+          fetchedVehicles, fetchedDestinations, fetchedRoutes, fetchedTransRates, fetchedTransSupps,
+          fetchedActMasters, fetchedActRates
         ] = await Promise.all([
           LeadRepo.getAll(), CustomerRepo.getAll(), CompanyRepo.getAll(), TaskRepo.getAll(),
           ConversationRepo.getAll(), MessageRepo.getAll(), QuoteRepo.getAll(), BookingRepo.getAll(),
           AiRecommendationRepo.getAll(), AiActionRepo.getAll(), ApprovalRepo.getAll(), AuditLogRepo.getAll(),
           PackageRepo.getAll(),
           TripRepo.getAll(), HotelRepo.getAll(), TransportRepo.getAll(), DriverRepo.getAll(), ActivityRepo.getAll(), SupplierRepo.getAll(), VoucherRepo.getAll(),
-          AccommodationPropertyRepo.getAll(), RoomCategoryRepo.getAll(), RatePeriodRepo.getAll(), NegotiatedRateRepo.getAll()
+          AccommodationPropertyRepo.getAll(), RoomCategoryRepo.getAll(), RatePeriodRepo.getAll(), NegotiatedRateRepo.getAll(),
+          VehicleCategoryRepo.getAll(), DestinationRepo.getAll(), TransportRouteRepo.getAll(), TransportRatePeriodRepo.getAll(), TransportSupplementRepo.getAll(),
+          ActivityMasterRepo.getAll(), ActivityRatePeriodRepo.getAll()
         ]);
         
         setLeads(fetchedLeads as any);
@@ -434,6 +494,15 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (fetchedRoomCats.length > 0) setRoomCategories(fetchedRoomCats as any);
         if (fetchedRatePeriods.length > 0) setRatePeriods(fetchedRatePeriods as any);
         if (fetchedNegRates.length > 0) setNegotiatedRates(fetchedNegRates as any);
+
+        if (fetchedVehicles.length > 0) setVehicleCategories(fetchedVehicles as any);
+        if (fetchedDestinations.length > 0) setDestinations(fetchedDestinations as any);
+        if (fetchedRoutes.length > 0) setTransportRoutes(fetchedRoutes as any);
+        if (fetchedTransRates.length > 0) setTransportRatePeriods(fetchedTransRates as any);
+        if (fetchedTransSupps.length > 0) setTransportSupplements(fetchedTransSupps as any);
+        
+        if (fetchedActMasters.length > 0) setActivityMasters(fetchedActMasters as any);
+        if (fetchedActRates.length > 0) setActivityRatePeriods(fetchedActRates as any);
       } catch (err) {
         console.error("Failed to load data from Firestore:", err);
       } finally {
@@ -583,18 +652,36 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const updateLead = async (id: string, updates: Partial<Lead>) => {
     const prevLead = leads.find(l => l.id === id);
-    setLeads(prev =>
-      prev.map(l => (l.id === id ? { ...l, ...updates, updatedAt: new Date().toISOString() } : l))
-    );
+    const updatedLead = prevLead ? { ...prevLead, ...updates, updatedAt: new Date().toISOString() } : null;
+    if (!updatedLead) return;
+    
+    setLeads(prev => prev.map(l => (l.id === id ? updatedLead : l)));
     logAuditEvent('LEAD_UPDATED', 'LEAD', id, prevLead, updates, 'Lead details updated');
+
+    if (db) {
+      try {
+        await setDoc(doc(db, 'leads', id), updatedLead);
+      } catch (err) {
+        console.warn('Firestore lead update fallback:', err);
+      }
+    }
   };
 
   const updateLeadStatus = async (id: string, status: LeadStatus) => {
     const prevLead = leads.find(l => l.id === id);
-    setLeads(prev =>
-      prev.map(l => (l.id === id ? { ...l, status, updatedAt: new Date().toISOString() } : l))
-    );
+    const updatedLead = prevLead ? { ...prevLead, status, updatedAt: new Date().toISOString() } : null;
+    if (!updatedLead) return;
+    
+    setLeads(prev => prev.map(l => (l.id === id ? updatedLead : l)));
     logAuditEvent('LEAD_STATUS_CHANGED', 'LEAD', id, { status: prevLead?.status }, { status }, `Status changed to ${status}`);
+
+    if (db) {
+      try {
+        await setDoc(doc(db, 'leads', id), updatedLead);
+      } catch (err) {
+        console.warn('Firestore lead status update fallback:', err);
+      }
+    }
   };
 
   const addLeadNote = async (id: string, note: string) => {
@@ -609,6 +696,106 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const prevLead = leads.find(l => l.id === id);
     await updateLead(id, { assignedEmployeeId: employeeId, assignedEmployeeName: employeeName });
     logAuditEvent('LEAD_REASSIGNED', 'LEAD', id, { assignedEmployee: prevLead?.assignedEmployeeName }, { assignedEmployee: employeeName }, `Reassigned to ${employeeName}`);
+  };
+
+  // Accommodation CRUD
+  const addAccommodationProperty = async (propertyData: Omit<AccommodationProperty, 'id' | 'createdAt' | 'updatedAt'>): Promise<AccommodationProperty> => {
+    const newProperty: AccommodationProperty = {
+      ...propertyData,
+      id: `accom-${Date.now()}`,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    setAccommodationProperties(prev => [newProperty, ...prev]);
+    logAuditEvent('PROPERTY_CREATED', 'INVENTORY', newProperty.id, null, newProperty);
+
+    if (db) {
+      try {
+        await setDoc(doc(db, 'accommodation_properties', newProperty.id), newProperty);
+      } catch (err) {
+        console.warn('Firestore property create notice:', err);
+      }
+    }
+    return newProperty;
+  };
+
+  const updateAccommodationProperty = async (id: string, updates: Partial<AccommodationProperty>) => {
+    const prevProp = accommodationProperties.find(p => p.id === id);
+    const updated = prevProp ? { ...prevProp, ...updates, updatedAt: new Date().toISOString() } : null;
+    if (!updated) return;
+
+    setAccommodationProperties(prev => prev.map(p => (p.id === id ? updated : p)));
+    logAuditEvent('PROPERTY_UPDATED', 'INVENTORY', id, prevProp, updates);
+
+    if (db) {
+      try {
+        await setDoc(doc(db, 'accommodation_properties', id), updated);
+      } catch (err) {
+        console.warn('Firestore property update notice:', err);
+      }
+    }
+  };
+
+  // Phase 2B-4: Transport CRUD
+  const addTransportRatePeriod = async (data: Omit<TransportRatePeriod, 'id' | 'createdAt' | 'updatedAt'>) => {
+    const newRate = { ...data, id: `trate-${Date.now()}`, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    setTransportRatePeriods(prev => [newRate, ...prev]);
+    if (db) await setDoc(doc(db, 'transport_rate_periods', newRate.id), newRate).catch(console.warn);
+    return newRate;
+  };
+  const updateTransportRatePeriod = async (id: string, updates: Partial<TransportRatePeriod>) => {
+    setTransportRatePeriods(prev => prev.map(r => r.id === id ? { ...r, ...updates, updatedAt: new Date().toISOString() } : r));
+    if (db) await setDoc(doc(db, 'transport_rate_periods', id), { ...updates, updatedAt: new Date().toISOString() }, { merge: true }).catch(console.warn);
+  };
+  const deleteTransportRatePeriod = async (id: string) => {
+    setTransportRatePeriods(prev => prev.filter(r => r.id !== id));
+    if (db) await deleteDoc(doc(db, 'transport_rate_periods', id)).catch(console.warn);
+  };
+
+  const addTransportSupplement = async (data: Omit<TransportSupplement, 'id' | 'createdAt' | 'updatedAt'>) => {
+    const newSupp = { ...data, id: `tsupp-${Date.now()}`, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    setTransportSupplements(prev => [newSupp, ...prev]);
+    if (db) await setDoc(doc(db, 'transport_supplements', newSupp.id), newSupp).catch(console.warn);
+    return newSupp;
+  };
+  const updateTransportSupplement = async (id: string, updates: Partial<TransportSupplement>) => {
+    setTransportSupplements(prev => prev.map(s => s.id === id ? { ...s, ...updates, updatedAt: new Date().toISOString() } : s));
+    if (db) await setDoc(doc(db, 'transport_supplements', id), { ...updates, updatedAt: new Date().toISOString() }, { merge: true }).catch(console.warn);
+  };
+  const deleteTransportSupplement = async (id: string) => {
+    setTransportSupplements(prev => prev.filter(s => s.id !== id));
+    if (db) await deleteDoc(doc(db, 'transport_supplements', id)).catch(console.warn);
+  };
+
+  // Phase 2B-4: Activity CRUD
+  const addActivityMaster = async (data: Omit<ActivityMaster, 'id' | 'createdAt' | 'updatedAt'>) => {
+    const newMaster = { ...data, id: `actm-${Date.now()}`, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    setActivityMasters(prev => [newMaster, ...prev]);
+    if (db) await setDoc(doc(db, 'activity_masters', newMaster.id), newMaster).catch(console.warn);
+    return newMaster;
+  };
+  const updateActivityMaster = async (id: string, updates: Partial<ActivityMaster>) => {
+    setActivityMasters(prev => prev.map(m => m.id === id ? { ...m, ...updates, updatedAt: new Date().toISOString() } : m));
+    if (db) await setDoc(doc(db, 'activity_masters', id), { ...updates, updatedAt: new Date().toISOString() }, { merge: true }).catch(console.warn);
+  };
+  const deleteActivityMaster = async (id: string) => {
+    setActivityMasters(prev => prev.filter(m => m.id !== id));
+    if (db) await deleteDoc(doc(db, 'activity_masters', id)).catch(console.warn);
+  };
+
+  const addActivityRatePeriod = async (data: Omit<ActivityRatePeriod, 'id' | 'createdAt' | 'updatedAt'>) => {
+    const newRate = { ...data, id: `actr-${Date.now()}`, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    setActivityRatePeriods(prev => [newRate, ...prev]);
+    if (db) await setDoc(doc(db, 'activity_rate_periods', newRate.id), newRate).catch(console.warn);
+    return newRate;
+  };
+  const updateActivityRatePeriod = async (id: string, updates: Partial<ActivityRatePeriod>) => {
+    setActivityRatePeriods(prev => prev.map(r => r.id === id ? { ...r, ...updates, updatedAt: new Date().toISOString() } : r));
+    if (db) await setDoc(doc(db, 'activity_rate_periods', id), { ...updates, updatedAt: new Date().toISOString() }, { merge: true }).catch(console.warn);
+  };
+  const deleteActivityRatePeriod = async (id: string) => {
+    setActivityRatePeriods(prev => prev.filter(r => r.id !== id));
+    if (db) await deleteDoc(doc(db, 'activity_rate_periods', id)).catch(console.warn);
   };
 
   // Customer CRUD
@@ -1391,6 +1578,27 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         roomCategories,
         ratePeriods,
         negotiatedRates,
+        vehicleCategories,
+        destinations,
+        transportRoutes,
+        transportRatePeriods,
+        transportSupplements,
+        activityMasters,
+        activityRatePeriods,
+        addTransportRatePeriod,
+        updateTransportRatePeriod,
+        deleteTransportRatePeriod,
+        addTransportSupplement,
+        updateTransportSupplement,
+        deleteTransportSupplement,
+        addActivityMaster,
+        updateActivityMaster,
+        deleteActivityMaster,
+        addActivityRatePeriod,
+        updateActivityRatePeriod,
+        deleteActivityRatePeriod,
+        addAccommodationProperty,
+        updateAccommodationProperty,
         createTrip,
         updateTrip,
         addItineraryDay,
