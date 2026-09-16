@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
@@ -37,4 +38,3 @@ startServer().catch(err => {
   console.error('Failed to start server:', err);
   process.exit(1);
 });
-

@@ -74,29 +74,35 @@ export const LeadDetailView: React.FC<Props> = ({ leadId, onNavigate }) => {
     // Create quote from existing trip
     try {
       const days = itineraryDays.filter(d => d.tripId === existingTrip.id);
-      const hotels = days.flatMap(d => d.items?.filter(i => i.type === 'HOTEL') || []).map(h => ({
+      const itineraryItems = days.flatMap(d => d.items || []);
+      if (!Number.isFinite(existingTrip.totalSellingPrice) || existingTrip.totalSellingPrice <= 0 ||
+          itineraryItems.some(item => !Number.isFinite(item.sellingPrice) || item.sellingPrice <= 0)) {
+        throw new Error('This trip must be priced before a quote can be created.');
+      }
+
+      const hotels = itineraryItems.filter(i => i.type === 'HOTEL').map(h => ({
         hotelName: h.title,
         roomType: h.description || 'Standard Room',
         mealPlan: 'MAP',
         nights: 1,
-        rate: h.sellingPrice || 12000,
-        supplierCost: h.supplierCost || 8000
+        rate: h.sellingPrice!,
+        supplierCost: h.supplierCost
       }));
-      const transports = days.flatMap(d => d.items?.filter(i => i.type === 'TRANSPORT') || []).map(t => ({
+      const transports = itineraryItems.filter(i => i.type === 'TRANSPORT').map(t => ({
         vehicleType: t.title,
         route: t.description || 'Airport Transit & Sightseeing',
         days: 1,
-        rate: t.sellingPrice || 4500,
-        supplierCost: t.supplierCost || 3200
+        rate: t.sellingPrice!,
+        supplierCost: t.supplierCost
       }));
-      const activities = days.flatMap(d => d.items?.filter(i => i.type === 'ACTIVITY') || []).map(a => ({
+      const activities = itineraryItems.filter(i => i.type === 'ACTIVITY').map(a => ({
         name: a.title,
         pax: existingTrip.adults || 2,
-        rate: a.sellingPrice || 3500,
-        supplierCost: a.supplierCost || 2400
+        rate: a.sellingPrice!,
+        supplierCost: a.supplierCost
       }));
 
-      const totalAmt = existingTrip.totalSellingPrice || lead.budget || 85000;
+      const totalAmt = existingTrip.totalSellingPrice;
       const newQuote = await createQuote({
         leadId: lead.id,
         customerId: existingTrip.customerId,

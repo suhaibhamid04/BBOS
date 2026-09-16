@@ -152,13 +152,15 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
   }
 
   // 2. Demo Mode / Development Header resolution
-  if (APP_CONFIG.DEMO_MODE && demoUserId && PRESET_MOCK_USERS[demoUserId]) {
+  const demoAllowed = APP_CONFIG.DEMO_MODE && process.env.NODE_ENV !== 'production';
+
+  if (demoAllowed && demoUserId && PRESET_MOCK_USERS[demoUserId]) {
     req.user = PRESET_MOCK_USERS[demoUserId];
     return next();
   }
 
   // 3. Fallback for DEMO_MODE local development when no explicit header provided
-  if (APP_CONFIG.DEMO_MODE) {
+  if (demoAllowed) {
     req.user = PRESET_MOCK_USERS['emp-founder-01'];
     return next();
   }

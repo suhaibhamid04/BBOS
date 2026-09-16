@@ -13,11 +13,26 @@ import {
   BookingQueryService,
   BookingQueryError,
 } from '../../src/services/booking/bookingQueryService.js';
+import {
+  BookingLifecycleService,
+  LifecycleError,
+} from '../services/bookingLifecycleService.js';
+import {
+  ServiceConfirmationService,
+  ConfirmationError,
+} from '../services/serviceConfirmationService.js';
+import {
+  VoucherService,
+  VoucherError,
+} from '../services/voucherService.js';
 
 export const bookingsRouter = Router();
 const quoteConversionService = new QuoteConversionService();
 const paymentService = new PaymentService();
 const bookingQueryService = new BookingQueryService();
+const bookingLifecycleService = new BookingLifecycleService();
+const serviceConfirmationService = new ServiceConfirmationService();
+const voucherService = new VoucherService();
 
 /**
  * Helper to extract current authenticated actor
@@ -49,6 +64,20 @@ function handlePaymentError(error: any, res: Response, context: string) {
   return res.status(500).json({
     error: error.message || `Internal Server Error in ${context}`,
   });
+}
+
+function handleLifecycleError(error: any, res: Response, context: string) {
+  if (error instanceof LifecycleError) {
+    return res.status(error.statusCode).json({ error: error.message, code: error.code });
+  }
+  if (error instanceof ConfirmationError) {
+    return res.status(error.statusCode).json({ error: error.message, code: error.code });
+  }
+  if (error instanceof VoucherError) {
+    return res.status(error.statusCode).json({ error: error.message, code: error.code });
+  }
+  console.error(`API Error in ${context}:`, error);
+  return res.status(500).json({ error: error.message || `Internal Server Error in ${context}` });
 }
 
 function handleBookingQueryError(error: any, res: Response, context: string) {
@@ -291,3 +320,138 @@ bookingsRouter.post(
     }
   }
 );
+
+// =========================================================================
+// PHASE 2B-6: STAGE 2 — BOOKING LIFECYCLE & SERVICE CONFIRMATION ROUTES
+// =========================================================================
+
+/**
+ * POST /api/bookings/:bookingId/dispatch
+ * Transitions booking.status from CONFIRMED → IN_OPERATIONS.
+ * Manual operations dispatch action.
+ *
+ * Authorized roles: Operations, Admin, Founder
+ */
+bookingsRouter.post(
+  '/:bookingId/dispatch',
+  requireRole(['Founder', 'Admin', 'Operations']),
+  async (req: Request, res: Response) => {
+    try {
+      const actor = getActorFromRequest(req);
+      const result = await bookingLifecycleService.dispatchToOperations(req.params.bookingId, actor);
+      return res.status(200).json({ success: true, ...result });
+    } catch (error: any) {
+      return handleLifecycleError(error, res, 'POST /bookings/:bookingId/dispatch');
+    }
+  }
+);
+
+/**
+ * POST /api/bookings/:bookingId/cancel
+ * Cancels a booking. Requires a cancellationReason in the request body.
+ *
+ * Authorized roles: Admin, Founder
+ */
+bookingsRouter.post(
+  '/:bookingId/cancel',
+  requireRole(['Founder', 'Admin']),
+  async (req: Request, res: Response) => {
+    try {
+      const actor = getActorFromRequest(req);
+      const { cancellationReason } = req.body;
+      const result = await bookingLifecycleService.cancelBooking(req.params.bookingId, { cancellationReason }, actor);
+      return res.status(200).json({ success: true, ...result });
+    } catch (error: any) {
+      return handleLifecycleError(error, res, 'POST /bookings/:bookingId/cancel');
+    }
+  }
+);
+
+/**
+ * PATCH /api/bookings/:bookingId/services/accommodations/:serviceId
+ * Updates operational fields on a BookingAccommodation (confirmation code, room numbers, etc.)
+ * Recalculates booking.confirmationProgress atomically.
+ *
+ * Authorized roles: Operations, Admin, Founder
+ */
+bookingsRouter.patch(
+  '/:bookingId/services/accommodations/:serviceId',
+  requireRole(['Founder', 'Admin', 'Operations']),
+  async (req: Request, res: Response) => {
+    try {
+      const { bookingId, serviceId } = req.params;
+      const actor = getActorFromRequest(req);
+      const result = await serviceConfirmationService.confirmAccommodation(bookingId, serviceId, req.body, actor);
+      return res.status(200).json({ success: true, ...result });
+    } catch (error: any) {
+      return handleLifecycleError(error, res, 'PATCH /bookings/:bookingId/services/accommodations/:serviceId');
+    }
+  }
+);
+
+/**
+ * PATCH /api/bookings/:bookingId/services/transports/:serviceId
+ * Updates operational fields on a BookingTransport (driver details, vehicle reg, etc.)
+ * Recalculates booking.confirmationProgress atomically.
+ *
+ * Authorized roles: Operations, Admin, Founder
+ */
+bookingsRouter.patch(
+  '/:bookingId/services/transports/:serviceId',
+  requireRole(['Founder', 'Admin', 'Operations']),
+  async (req: Request, res: Response) => {
+    try {
+      const { bookingId, serviceId } = req.params;
+      const actor = getActorFromRequest(req);
+      const result = await serviceConfirmationService.confirmTransport(bookingId, serviceId, req.body, actor);
+      return res.status(200).json({ success: true, ...result });
+    } catch (error: any) {
+      return handleLifecycleError(error, res, 'PATCH /bookings/:bookingId/services/transports/:serviceId');
+    }
+  }
+);
+
+/**
+ * PATCH /api/bookings/:bookingId/services/activities/:serviceId
+ * Updates operational fields on a BookingActivity (confirmation code, guide assignment, etc.)
+ * Recalculates booking.confirmationProgress atomically.
+ *
+ * Authorized roles: Operations, Admin, Founder
+ */
+bookingsRouter.patch(
+  '/:bookingId/services/activities/:serviceId',
+  requireRole(['Founder', 'Admin', 'Operations']),
+  async (req: Request, res: Response) => {
+    try {
+      const { bookingId, serviceId } = req.params;
+      const actor = getActorFromRequest(req);
+      const result = await serviceConfirmationService.confirmActivity(bookingId, serviceId, req.body, actor);
+      return res.status(200).json({ success: true, ...result });
+    } catch (error: any) {
+      return handleLifecycleError(error, res, 'PATCH /bookings/:bookingId/services/activities/:serviceId');
+    }
+  }
+);
+
+/**
+ * POST /api/bookings/:bookingId/vouchers/generate
+ * Generates one Voucher record per service for a fully-confirmed booking.
+ * Preconditions: booking.status === 'IN_OPERATIONS' AND confirmationProgress.allConfirmed === true
+ * Idempotent: returns existing vouchers if already generated.
+ *
+ * Authorized roles: Operations, Admin, Founder
+ */
+bookingsRouter.post(
+  '/:bookingId/vouchers/generate',
+  requireRole(['Founder', 'Admin', 'Operations']),
+  async (req: Request, res: Response) => {
+    try {
+      const actor = getActorFromRequest(req);
+      const result = await voucherService.generateVouchers(req.params.bookingId, actor);
+      return res.status(200).json({ success: true, ...result });
+    } catch (error: any) {
+      return handleLifecycleError(error, res, 'POST /bookings/:bookingId/vouchers/generate');
+    }
+  }
+);
+
