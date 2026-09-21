@@ -1,14 +1,47 @@
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test';
 
+import { DEMO_RATE_PERIODS, DEMO_ROOM_CATEGORIES } from '../../src/services/accommodationDemoData';
+
 // Mock getAdminDb to bypass actual Firebase Admin SDK in tests
+// Must simulate the full where().where().get() chain for tripCosting
 mock.module('../../server/firebaseAdmin.ts', () => ({
-  getAdminDb: () => ({
-    collection: () => ({
-      doc: () => ({
-        update: async () => Promise.resolve()
-      })
-    })
-  })
+  getAdminDb: () => {
+    return {
+      collection: (colName: string) => {
+        let filters: any[] = [];
+        const mockQuery = {
+          where: (field: string, op: string, val: any) => {
+            filters.push({ field, val });
+            return mockQuery;
+          },
+          get: async () => {
+            let data: any[] = [];
+            if (colName === 'rate_periods') {
+              data = DEMO_RATE_PERIODS;
+            } else if (colName === 'room_categories') {
+              data = DEMO_ROOM_CATEGORIES;
+            }
+            
+            // Apply mock filters (specifically for propertyId and roomCategoryId)
+            for (const f of filters) {
+              data = data.filter(item => (item as any)[f.field] === f.val);
+            }
+            
+            return {
+              docs: data.map(d => ({ data: () => d }))
+            };
+          }
+        };
+        return {
+          doc: () => ({
+            update: async () => Promise.resolve()
+          }),
+          where: mockQuery.where,
+          get: mockQuery.get
+        };
+      }
+    };
+  }
 }));
 
 // We can test the route logic by importing it and calling it directly 
@@ -107,7 +140,7 @@ describe('POST /api/trips/calculate-costs', () => {
     const result = jsonMock.mock.calls[0][0];
     
     expect(result.success).toBe(true);
-    expect(result.data).toBeUndefined(); // Crucial security check: Data is undefined for Sales
+    expect(result.data).toEqual({}); // Crucial security check: Data is stripped of financial metrics for Sales
   });
 
   it('applies October rate for Kareem Residency correctly', async () => {

@@ -631,57 +631,51 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Lead CRUD
   const createLead = async (leadData: Omit<Lead, 'id' | 'createdAt' | 'updatedAt'>): Promise<Lead> => {
-    const newLead: Lead = {
-      ...leadData,
-      id: `lead-${Date.now()}`,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-    setLeads(prev => [newLead, ...prev]);
-    logAuditEvent('LEAD_CREATED', 'LEAD', newLead.id, null, newLead, 'New inbound lead registered');
-
-    if (db) {
-      try {
-        await setDoc(doc(db, 'leads', newLead.id), newLead);
-      } catch (err) {
-        console.warn('Firestore lead create fallback:', err);
-      }
+    try {
+      const res = await fetch('/api/leads', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Demo-User-Id': currentUser.id
+        },
+        body: JSON.stringify(leadData)
+      });
+      if (!res.ok) throw new Error('Failed to create lead');
+      const { data: newLead } = await res.json();
+      setLeads(prev => [newLead, ...prev]);
+      return newLead;
+    } catch (err) {
+      console.error('API create lead failed:', err);
+      throw err;
     }
-    return newLead;
   };
 
   const updateLead = async (id: string, updates: Partial<Lead>) => {
     const prevLead = leads.find(l => l.id === id);
-    const updatedLead = prevLead ? { ...prevLead, ...updates, updatedAt: new Date().toISOString() } : null;
-    if (!updatedLead) return;
-    
-    setLeads(prev => prev.map(l => (l.id === id ? updatedLead : l)));
-    logAuditEvent('LEAD_UPDATED', 'LEAD', id, prevLead, updates, 'Lead details updated');
+    if (!prevLead) return;
 
-    if (db) {
-      try {
-        await setDoc(doc(db, 'leads', id), updatedLead);
-      } catch (err) {
-        console.warn('Firestore lead update fallback:', err);
+    try {
+      const res = await fetch(`/api/leads/${id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Demo-User-Id': currentUser.id
+        },
+        body: JSON.stringify(updates)
+      });
+      if (res.ok) {
+        const { data: updatedLead } = await res.json();
+        setLeads(prev => prev.map(l => (l.id === id ? updatedLead : l)));
+      } else {
+        console.error('Failed to update lead via API');
       }
+    } catch (err) {
+      console.error('API lead update failed:', err);
     }
   };
 
   const updateLeadStatus = async (id: string, status: LeadStatus) => {
-    const prevLead = leads.find(l => l.id === id);
-    const updatedLead = prevLead ? { ...prevLead, status, updatedAt: new Date().toISOString() } : null;
-    if (!updatedLead) return;
-    
-    setLeads(prev => prev.map(l => (l.id === id ? updatedLead : l)));
-    logAuditEvent('LEAD_STATUS_CHANGED', 'LEAD', id, { status: prevLead?.status }, { status }, `Status changed to ${status}`);
-
-    if (db) {
-      try {
-        await setDoc(doc(db, 'leads', id), updatedLead);
-      } catch (err) {
-        console.warn('Firestore lead status update fallback:', err);
-      }
-    }
+    await updateLead(id, { status });
   };
 
   const addLeadNote = async (id: string, note: string) => {
@@ -693,46 +687,51 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const assignLead = async (id: string, employeeId: string, employeeName: string) => {
-    const prevLead = leads.find(l => l.id === id);
     await updateLead(id, { assignedEmployeeId: employeeId, assignedEmployeeName: employeeName });
-    logAuditEvent('LEAD_REASSIGNED', 'LEAD', id, { assignedEmployee: prevLead?.assignedEmployeeName }, { assignedEmployee: employeeName }, `Reassigned to ${employeeName}`);
   };
 
   // Accommodation CRUD
   const addAccommodationProperty = async (propertyData: Omit<AccommodationProperty, 'id' | 'createdAt' | 'updatedAt'>): Promise<AccommodationProperty> => {
-    const newProperty: AccommodationProperty = {
-      ...propertyData,
-      id: `accom-${Date.now()}`,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-    setAccommodationProperties(prev => [newProperty, ...prev]);
-    logAuditEvent('PROPERTY_CREATED', 'INVENTORY', newProperty.id, null, newProperty);
-
-    if (db) {
-      try {
-        await setDoc(doc(db, 'accommodation_properties', newProperty.id), newProperty);
-      } catch (err) {
-        console.warn('Firestore property create notice:', err);
-      }
+    try {
+      const res = await fetch('/api/accommodation/properties', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Demo-User-Id': currentUser.id
+        },
+        body: JSON.stringify(propertyData)
+      });
+      if (!res.ok) throw new Error('Failed to create property');
+      const { data: newProperty } = await res.json();
+      setAccommodationProperties(prev => [newProperty, ...prev]);
+      return newProperty;
+    } catch (err) {
+      console.error('API create property failed:', err);
+      throw err;
     }
-    return newProperty;
   };
 
   const updateAccommodationProperty = async (id: string, updates: Partial<AccommodationProperty>) => {
     const prevProp = accommodationProperties.find(p => p.id === id);
-    const updated = prevProp ? { ...prevProp, ...updates, updatedAt: new Date().toISOString() } : null;
-    if (!updated) return;
+    if (!prevProp) return;
 
-    setAccommodationProperties(prev => prev.map(p => (p.id === id ? updated : p)));
-    logAuditEvent('PROPERTY_UPDATED', 'INVENTORY', id, prevProp, updates);
-
-    if (db) {
-      try {
-        await setDoc(doc(db, 'accommodation_properties', id), updated);
-      } catch (err) {
-        console.warn('Firestore property update notice:', err);
+    try {
+      const res = await fetch(`/api/accommodation/properties/${id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Demo-User-Id': currentUser.id
+        },
+        body: JSON.stringify(updates)
+      });
+      if (res.ok) {
+        const { data: updated } = await res.json();
+        setAccommodationProperties(prev => prev.map(p => (p.id === id ? updated : p)));
+      } else {
+        console.error('Failed to update property via API');
       }
+    } catch (err) {
+      console.error('API update property failed:', err);
     }
   };
 

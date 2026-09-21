@@ -12,6 +12,7 @@ import { activitiesRouter } from './activities.js';
 import { tripsRouter } from './trips.js';
 import { quotesRouter } from './quotes.js';
 import { bookingsRouter } from './bookings.js';
+import { leadsRouter } from './leads.js';
 
 export const apiRouter = Router();
 
@@ -28,6 +29,7 @@ apiRouter.use('/activities', requireRole(inventoryRoles), activitiesRouter);
 apiRouter.use('/trips', tripsRouter);
 apiRouter.use('/quotes', quotesRouter);
 apiRouter.use('/bookings', bookingsRouter);
+apiRouter.use('/leads', leadsRouter);
 
 // Health check endpoint
 apiRouter.get('/health', (req: Request, res: Response) => {

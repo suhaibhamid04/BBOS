@@ -63,8 +63,8 @@ service cloud.firestore {
     match /leads/{leadId} {
       allow read: if isSalesManager() || isAccounts() || 
                   (isSalesExecutive() && (resource.data.assignedEmployeeId == request.auth.uid || resource.data.assignedEmployeeId == ''));
-      allow create, update: if isSalesExecutive();
-      allow delete: if isAdmin();
+      // DIRECT CLIENT MUTATION PROHIBITED FOR ALL ROLES (Server Admin SDK Only)
+      allow create, update, delete: if false;
     }
 
     // 4. Companies Collection
