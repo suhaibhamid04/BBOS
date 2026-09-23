@@ -119,13 +119,15 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
     }
   }, [initialTripId]);
 
-  // Automatically pre-fill from Lead if initialLeadId is provided
+  // Automatically pre-fill from Lead if initialLeadId is provided.
+  // Include `leads` in the dependency array so this re-fires once the leads
+  // array is populated from context (it may be empty on first render).
   useEffect(() => {
-    if (initialLeadId) {
+    if (initialLeadId && leads.length > 0) {
       handleLeadSelect(initialLeadId);
       setIsCreatingTrip(true);
     }
-  }, [initialLeadId]);
+  }, [initialLeadId, leads]);
 
   // Flash toast helper
   const notify = (msg: string) => {

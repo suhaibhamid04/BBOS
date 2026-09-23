@@ -120,6 +120,30 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
     });
   };
 
+  if (activeVehicles.length === 0) {
+    return (
+      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full overflow-hidden">
+        <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+          <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+            <Car className="w-5 h-5 text-[#7056EE]" /> Add Transport
+          </h3>
+        </div>
+        <div className="p-6">
+          <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+            <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-bold text-amber-800">No Active Vehicles Found</p>
+              <p className="text-xs text-amber-700 mt-1">Add active vehicle categories in the Inventory section before adding transport to a trip.</p>
+            </div>
+          </div>
+          <div className="flex justify-end mt-4">
+            <button onClick={onCancel} className="px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">Cancel</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full overflow-hidden flex flex-col max-h-[90vh]">
       <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50 shrink-0">

@@ -136,6 +136,27 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
     });
   };
 
+  if (activeProperties.length === 0) {
+    return (
+      <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm max-w-2xl mx-auto">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+            <Building2 className="w-4 h-4 text-[#7056EE]" />
+            Accommodation Inventory Selection
+          </h3>
+          <button onClick={onCancel} className="text-xs text-slate-500 hover:text-slate-800 font-medium">Cancel</button>
+        </div>
+        <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+          <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-bold text-amber-800">No Active Properties Found</p>
+            <p className="text-xs text-amber-700 mt-1">Add active accommodation properties in the Inventory section before selecting hotels for a trip.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm max-w-2xl mx-auto">
       <div className="flex justify-between items-center mb-4">
@@ -245,8 +266,8 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
                  </div>
               ) : (
                 <>
-                  <div className="flex justify-between items-center mb-2">
-                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Status</span>
+                  <div className="flex justify-between items-center mb-3">
+                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Availability</span>
                     {calculatedRate.needsConfirmation ? (
                       <span className="px-2 py-1 bg-amber-100 text-amber-800 text-[10px] font-bold rounded-md flex items-center gap-1">
                         <AlertTriangle className="w-3 h-3" /> NEEDS CONFIRMATION
@@ -257,16 +278,31 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
                       </span>
                     )}
                   </div>
-                  
-                  {/* NEVER EXPOSE SELLING PRICE AS IT IS A PACKAGE CONCERN NOW */}
-                  <div className="text-center py-2 text-xs font-medium text-slate-600 italic">
-                     Component rate calculated and secured. Package pricing applies.
+
+                  {/* Price summary */}
+                  <div className={`p-3 rounded-lg border ${
+                    calculatedRate.needsConfirmation
+                      ? 'bg-amber-50 border-amber-200'
+                      : 'bg-emerald-50 border-emerald-200'
+                  }`}>
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs font-semibold text-slate-600">Total ({nights} night{nights !== 1 ? 's' : ''})</span>
+                      <span className={`text-base font-black ${
+                        calculatedRate.needsConfirmation ? 'text-amber-800' : 'text-emerald-800'
+                      }`}>
+                        ₹{(calculatedRate.totalAmount ?? calculatedRate.sellingPrice ?? 0).toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                    {calculatedRate.breakdown && (
+                      <p className="text-[10px] text-slate-500 mt-1">{calculatedRate.breakdown}</p>
+                    )}
+                    <p className="text-[10px] text-slate-400 mt-1">{calculatedRate.taxDescription || 'Taxes extra'}</p>
                   </div>
 
                   <button
                     type="button"
                     onClick={handleSelect}
-                    className="w-full mt-4 py-2 bg-[#7056EE] hover:bg-[#5e43dc] text-white font-bold rounded-lg transition-colors text-sm shadow-sm"
+                    className="w-full mt-4 py-2.5 bg-[#7056EE] hover:bg-[#5e43dc] text-white font-bold rounded-lg transition-colors text-sm shadow-sm"
                   >
                     Confirm & Add to Trip
                   </button>
