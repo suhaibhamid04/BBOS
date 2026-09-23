@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { Compass, AlertTriangle, ShieldAlert } from 'lucide-react';
@@ -40,25 +40,18 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
   const [calculatedRate, setCalculatedRate] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const activeActivities = activityMasters.filter(a => a.active);
+  const activeActivities = useMemo(
+    () => activityMasters.filter(a => a.active),
+    [activityMasters]
+  );
 
   useEffect(() => {
     if (activeActivities.length > 0 && !selectedActivityId) {
       setSelectedActivityId(activeActivities[0].id);
     }
-  }, [activeActivities]);
+  }, [activeActivities, selectedActivityId]);
 
-  // When activity changes, we don't automatically know its pricing model unless we fetch the rate period first,
-  // but for the picker UX, we can let the user pick the expected model or default to PER_PERSON.
-  // Ideally the activity master might hint at the pricing model, but for now we let the user define it if it's dynamic.
-
-  useEffect(() => {
-    if (selectedActivityId) {
-      calculateRate();
-    }
-  }, [selectedActivityId, pricingModel, date, adults, children, infants, vehicles, groups, tickets, hours, days, sessions]);
-
-  const calculateRate = async () => {
+  const calculateRate = useCallback(async () => {
     if (!selectedActivityId || !date) return;
     
     setIsCalculating(true);
@@ -75,7 +68,6 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
         body: JSON.stringify({
           activityId: selectedActivityId,
           date,
-          // We pass all params; the engine will use what it needs based on the active rate period's pricingModel
           adults,
           children,
           infants,
@@ -95,7 +87,6 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
       if (data.data.available === false) throw new Error(data.data.error || 'Rate unavailable');
       
       setCalculatedRate(data.data);
-      // Update UI to match the actual pricing model used by the rate
       if (data.data.pricingModel) {
         setPricingModel(data.data.pricingModel);
       }
@@ -104,7 +95,13 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
     } finally {
       setIsCalculating(false);
     }
-  };
+  }, [selectedActivityId, date, adults, children, infants, vehicles, groups, tickets, hours, days, sessions, currentUser.id]);
+
+  useEffect(() => {
+    if (selectedActivityId) {
+      calculateRate();
+    }
+  }, [calculateRate]);
 
   const handleConfirm = () => {
     if (!calculatedRate) return;

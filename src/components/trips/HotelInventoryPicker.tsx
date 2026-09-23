@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { Building2, AlertTriangle, ShieldAlert } from 'lucide-react';
@@ -51,16 +51,29 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
   const [calculatedRate, setCalculatedRate] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const activeProperties = accommodationProperties.filter(p => p.status === 'ACTIVE' && (destinationFilter ? p.location === destinationFilter || p.city === destinationFilter : true));
-  const availableRooms = roomCategories.filter(r => r.propertyId === selectedPropertyId && r.active);
+  const activeProperties = useMemo(
+    () => accommodationProperties.filter(p =>
+      p.status === 'ACTIVE' &&
+      (destinationFilter ? p.location === destinationFilter || p.city === destinationFilter : true)
+    ),
+    [accommodationProperties, destinationFilter]
+  );
 
-  const destinations = Array.from(new Set(accommodationProperties.filter(p => p.status === 'ACTIVE').map(p => p.city)));
+  const availableRooms = useMemo(
+    () => roomCategories.filter(r => r.propertyId === selectedPropertyId && r.active),
+    [roomCategories, selectedPropertyId]
+  );
+
+  const destinations = useMemo(
+    () => Array.from(new Set(accommodationProperties.filter(p => p.status === 'ACTIVE').map(p => p.city))),
+    [accommodationProperties]
+  );
 
   useEffect(() => {
     if (activeProperties.length > 0 && !selectedPropertyId) {
       setSelectedPropertyId(activeProperties[0].id);
     }
-  }, [activeProperties]);
+  }, [activeProperties, selectedPropertyId]);
 
   useEffect(() => {
     if (availableRooms.length > 0) {
@@ -68,15 +81,9 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
     } else {
       setSelectedRoomId('');
     }
-  }, [selectedPropertyId, roomCategories]);
+  }, [selectedPropertyId, availableRooms]);
 
-  useEffect(() => {
-    if (selectedPropertyId && selectedRoomId) {
-      calculateRate();
-    }
-  }, [selectedPropertyId, selectedRoomId, selectedMealPlan, checkInDate, nights, adults, childrenWithBed, childrenWithoutBed]);
-
-  const calculateRate = async () => {
+  const calculateRate = useCallback(async () => {
     if (!selectedPropertyId || !selectedRoomId || !checkInDate || nights < 1) return;
     
     setIsCalculating(true);
@@ -87,7 +94,7 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Demo-User-Id': currentUser.id // Correct auth header for BBOS demo middleware
+          'X-Demo-User-Id': currentUser.id
         },
         body: JSON.stringify({
           propertyId: selectedPropertyId,
@@ -114,7 +121,13 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
     } finally {
       setIsCalculating(false);
     }
-  };
+  }, [selectedPropertyId, selectedRoomId, selectedMealPlan, checkInDate, nights, adults, childrenCount, childrenWithBed, childrenWithoutBed, currentUser.id]);
+
+  useEffect(() => {
+    if (selectedPropertyId && selectedRoomId) {
+      calculateRate();
+    }
+  }, [calculateRate]);
 
   const handleSelect = () => {
     if (!calculatedRate || !calculatedRate.available || !selectedPropertyId || !selectedRoomId) return;

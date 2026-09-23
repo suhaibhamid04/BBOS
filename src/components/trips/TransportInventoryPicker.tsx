@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { Car, AlertTriangle, ShieldAlert } from 'lucide-react';
@@ -36,21 +36,18 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
   const [calculatedRate, setCalculatedRate] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const activeVehicles = vehicleCategories.filter(v => v.active);
+  const activeVehicles = useMemo(
+    () => vehicleCategories.filter(v => v.active),
+    [vehicleCategories]
+  );
 
   useEffect(() => {
     if (activeVehicles.length > 0 && !selectedVehicleId) {
       setSelectedVehicleId(activeVehicles[0].id);
     }
-  }, [activeVehicles]);
+  }, [activeVehicles, selectedVehicleId]);
 
-  useEffect(() => {
-    if (selectedVehicleId && serviceType) {
-      calculateRate();
-    }
-  }, [selectedVehicleId, serviceType, startDate, vehicleDays, nightHalts, occurrences, distanceKm, hours]);
-
-  const calculateRate = async () => {
+  const calculateRate = useCallback(async () => {
     if (!selectedVehicleId || !serviceType || !startDate) return;
     
     setIsCalculating(true);
@@ -88,7 +85,13 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
     } finally {
       setIsCalculating(false);
     }
-  };
+  }, [selectedVehicleId, serviceType, startDate, vehicleDays, nightHalts, occurrences, distanceKm, hours, currentUser.id]);
+
+  useEffect(() => {
+    if (selectedVehicleId && serviceType) {
+      calculateRate();
+    }
+  }, [calculateRate]);
 
   const handleConfirm = () => {
     if (!calculatedRate) return;
