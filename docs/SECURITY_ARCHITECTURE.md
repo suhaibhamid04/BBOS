@@ -113,6 +113,8 @@ Because Firestore documents cannot selectively conceal fields during collection 
 - **Behavior:**
   - When returning trip packages, quotes, or hotel rates to Sales Executives, Operations, or Marketing, all base supplier costs and internal margin computations are recursively stripped from the payload.
   - Sales Managers retain visibility into `grossMargin` and `grossProfit` to authorize customer discounts, but cannot see supplier buy rates.
+  - Reservations can see supplier costs and contracted rates required for supplier-facing work, but cannot see package profit or margin.
+  - Operations cannot see supplier rates, supplier costs, package profit, or margin.
   - Accounts and Founders receive complete ledger access.
 
 ---

@@ -108,7 +108,7 @@ describe('POST /api/trips/calculate-costs', () => {
     const result = jsonMock.mock.calls[0][0];
     
     expect(result.success).toBe(true);
-    expect(result.data.totalCost).toBe(7000); // Successfully ignored 999999
+    expect(result.data.totalSupplierCost).toBe(7000); // Successfully ignored 999999
     expect(result.data.grossProfit).toBe(43000);
     expect(result.data.grossMargin).toBe(86);
   });
@@ -171,7 +171,7 @@ describe('POST /api/trips/calculate-costs', () => {
     const result = jsonMock.mock.calls[0][0];
     
     expect(result.success).toBe(true);
-    expect(result.data.totalCost).toBe(12000);
+    expect(result.data.totalSupplierCost).toBe(12000);
     expect(result.data.grossProfit).toBeNull(); // Because totalSellingPrice was null
     expect(result.data.grossMargin).toBeNull();
   });

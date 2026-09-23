@@ -2,9 +2,10 @@ import React from 'react';
 import { PRESET_USERS } from '../../services/permissions';
 import { useAuth } from '../../context/AuthContext';
 import { Users, Shield, Mail, CheckCircle2, UserCheck, ShieldAlert } from 'lucide-react';
+import { APP_CONFIG } from '../../config';
 
 export const EmployeesView: React.FC = () => {
-  const { currentUser, switchUser } = useAuth();
+  const { currentUser, selectUser } = useAuth();
 
   return (
     <div id="employees-view" className="space-y-6">
@@ -72,17 +73,17 @@ export const EmployeesView: React.FC = () => {
                 <span className="text-[10px] text-emerald-600 font-bold flex items-center">
                   <CheckCircle2 className="w-3 h-3 mr-1" /> Active Account
                 </span>
-                {!isActive ? (
+                {APP_CONFIG.DEMO_MODE && !isActive ? (
                   <button
                     id={`switch-to-user-${user.id}`}
-                    onClick={() => switchUser(user.id)}
+                    onClick={() => selectUser(user.id)}
                     className="px-3 py-1 bg-slate-100 hover:bg-[#7056EE] hover:text-white rounded-lg text-xs font-bold text-slate-700 transition-colors"
                   >
                     Simulate Role
                   </button>
-                ) : (
+                ) : isActive ? (
                   <span className="text-xs font-bold text-[#7056EE]">Active Session</span>
-                )}
+                ) : null}
               </div>
             </div>
           );

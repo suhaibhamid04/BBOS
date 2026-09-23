@@ -558,6 +558,33 @@ describe('BBOS Phase 2B-5 Stage 3 — Pre-Conversion Quote Validation Engine', (
     }
   });
 
+  it('19b. Reservations response keeps supplier costs but strips package profit and margin', async () => {
+    const quote = createBaseQuote();
+    const res = await service.validateQuote(quote, {
+      currentDate: '2026-09-15',
+      userRole: 'Reservations',
+    });
+
+    expect(res.authoritativeTotalSupplierCost).toBe(12800);
+    expect(res.quotedTotalSupplierCost).toBeDefined();
+    expect(res.services.every(item => item.authoritativeSupplierCost !== undefined)).toBe(true);
+    expect(res.estimatedGrossProfit).toBeUndefined();
+    expect(res.estimatedGrossMargin).toBeUndefined();
+  });
+
+  it('19c. Operations response receives neither supplier costs nor profit metrics', async () => {
+    const quote = createBaseQuote();
+    const res = await service.validateQuote(quote, {
+      currentDate: '2026-09-15',
+      userRole: 'Operations',
+    });
+
+    expect(res.authoritativeTotalSupplierCost).toBeUndefined();
+    expect(res.quotedTotalSupplierCost).toBeUndefined();
+    expect(res.estimatedGrossProfit).toBeUndefined();
+    expect(res.estimatedGrossMargin).toBeUndefined();
+  });
+
   // =========================================================================
   // 20. PROTECTED SUPPLIER COST NEVER RETURNED TO SALES IN DISCREPANCIES
   // =========================================================================

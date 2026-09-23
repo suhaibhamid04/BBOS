@@ -134,7 +134,7 @@ export function buildRoleGatedTransportResult(
     available: result.available,
   };
 
-  const canSeeSupplierCost = ['Founder', 'Admin', 'Accounts', 'Operations'].includes(userRole);
+  const canSeeSupplierCost: boolean = ['Founder', 'Admin', 'Accounts', 'Reservations'].includes(userRole);
 
   if (canSeeSupplierCost) {
     safeResult.totalAmount = result.totalAmount;

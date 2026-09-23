@@ -7,6 +7,7 @@ import { APP_CONFIG } from '../../src/config.js';
 import { DEMO_ACCOMMODATION_PROPERTIES, DEMO_ROOM_CATEGORIES, DEMO_RATE_PERIODS } from '../../src/services/accommodationDemoData.js';
 import { calculateStayTotal, buildRoleGatedResult } from '../../src/services/accommodationEngine.js';
 import { AccommodationProperty, RatePeriod, RoomCategory } from '../../src/types/accommodation.js';
+import { sanitizeFinancialData } from '../middleware/financialGuard.js';
 
 // Transport
 import { DEMO_TRANSPORT_RATE_PERIODS, DEMO_TRANSPORT_SUPPLEMENTS } from '../../src/services/transportDemoData.js';
@@ -207,7 +208,7 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
     try {
       const db = getAdminDb();
       await db.collection('trips').doc(tripId).update({
-        totalCost: totalTripCost,
+        totalSupplierCost: totalTripCost,
         grossProfit,
         grossMargin,
         updatedAt: new Date().toISOString()
@@ -217,25 +218,51 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
       console.warn('Could not write to Admin DB (expected in DEMO_MODE without credentials)', (dbErr as Error).message);
     }
 
-    // Return the response. Sales Executive cannot see the financial metrics.
-    if (currentUser.role === 'Sales Executive') {
-      return res.json({
-        success: true,
-        message: 'Costs recalculated securely.'
-      });
-    }
+    // Return the response.
+    const responseData = {
+      totalSupplierCost: totalTripCost,
+      grossProfit,
+      grossMargin
+    };
 
     return res.json({
       success: true,
-      data: {
-        totalCost: totalTripCost,
-        grossProfit,
-        grossMargin
-      }
+      data: sanitizeFinancialData(responseData, currentUser.role)
     });
 
   } catch (error: any) {
     console.error('API Error in /trips/calculate-costs:', error);
     res.status(500).json({ error: error.message || 'Internal Server Error' });
+  }
+});
+
+tripsRouter.get('/', requireRole(['Founder', 'Admin', 'Accounts', 'Operations', 'Sales Manager', 'Sales Executive']), async (req: Request, res: Response) => {
+  try {
+    let trips = [];
+    if (APP_CONFIG.DEMO_MODE) {
+      // In a real app we'd import DEMO_TRIPS, but since it's not easily available here, we'll return empty 
+      // array or rely on the frontend's DEMO_MODE fallback.
+      // Wait, DataContext.tsx uses localStorage or DEMO_TRIPS directly. So if it calls the API, it's NOT DEMO_MODE.
+    }
+    
+    const db = getAdminDb();
+    const snapshot = await db.collection('trips').get();
+    trips = snapshot.docs.map(doc => {
+      const data = doc.data();
+      if ('totalCost' in data) {
+        data.totalSupplierCost = data.totalCost;
+        delete data.totalCost;
+      }
+      return { id: doc.id, ...data };
+    });
+
+    // For Sales Executives, filter to assigned trips? The firestore rules did not filter trips by assignee, so we return all.
+    
+    res.json({
+      success: true,
+      data: sanitizeFinancialData(trips, req.user!.role)
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to fetch trips' });
   }
 });

@@ -4,6 +4,7 @@ import {
   QuoteConversionService,
   ConversionError,
 } from '../services/quoteConversionService.js';
+import { sanitizeFinancialData } from '../middleware/financialGuard.js';
 
 export const quotesRouter = Router();
 const quoteConversionService = new QuoteConversionService();
@@ -41,7 +42,7 @@ quotesRouter.post(
         currentDate,
       });
 
-      return res.status(200).json(result);
+      return res.status(200).json(sanitizeFinancialData(result, actor.role));
     } catch (error: any) {
       if (error instanceof ConversionError) {
         return res.status(error.statusCode).json({
@@ -58,3 +59,26 @@ quotesRouter.post(
     }
   }
 );
+
+quotesRouter.get('/', requireRole(['Founder', 'Admin', 'Accounts', 'Operations', 'Sales Manager', 'Sales Executive']), async (req: Request, res: Response) => {
+  try {
+    const { getAdminDb } = await import('../firebaseAdmin.js');
+    const db = getAdminDb();
+    const snapshot = await db.collection('quotes').get();
+    const quotes = snapshot.docs.map(doc => {
+      const data = doc.data();
+      if ('totalCost' in data) {
+        data.totalSupplierCost = data.totalCost;
+        delete data.totalCost;
+      }
+      return { id: doc.id, ...data };
+    });
+
+    res.json({
+      success: true,
+      data: sanitizeFinancialData(quotes, req.user!.role)
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to fetch quotes' });
+  }
+});

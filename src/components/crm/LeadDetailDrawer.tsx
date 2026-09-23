@@ -159,7 +159,7 @@ export const LeadDetailDrawer: React.FC<LeadDetailDrawerProps> = ({ leadId, onCl
         totalAmount: totalAmt,
         discountAmount: 0,
         finalAmount: totalAmt,
-        totalCost: existingTrip.totalCost || 0,
+        totalSupplierCost: existingTrip.totalSupplierCost || 0,
         grossProfit: existingTrip.grossProfit || 0,
         grossMargin: existingTrip.grossMargin || 0,
         status: 'DRAFT',

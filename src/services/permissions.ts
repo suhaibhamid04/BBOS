@@ -1,4 +1,4 @@
-import { UserRole, RolePermissions } from '../types';
+import { UserProfile, UserRole, RolePermissions } from '../types';
 
 export const ROLE_DEFINITIONS: Record<UserRole, RolePermissions> = {
   Founder: {
@@ -9,6 +9,7 @@ export const ROLE_DEFINITIONS: Record<UserRole, RolePermissions> = {
     canSendQuotes: true,
     canManageMarketing: true,
     canViewFinancials: true,
+    canManageReservations: true,
     canManageOperations: true,
     canManageUsers: true,
     canAccessAiCommand: true,
@@ -31,6 +32,7 @@ export const ROLE_DEFINITIONS: Record<UserRole, RolePermissions> = {
     canSendQuotes: true,
     canManageMarketing: true,
     canViewFinancials: true,
+    canManageReservations: true,
     canManageOperations: true,
     canManageUsers: true,
     canAccessAiCommand: true,
@@ -53,6 +55,7 @@ export const ROLE_DEFINITIONS: Record<UserRole, RolePermissions> = {
     canSendQuotes: true,
     canManageMarketing: false,
     canViewFinancials: true,
+    canManageReservations: false,
     canManageOperations: true,
     canManageUsers: false,
     canAccessAiCommand: true,
@@ -75,6 +78,7 @@ export const ROLE_DEFINITIONS: Record<UserRole, RolePermissions> = {
     canSendQuotes: true,
     canManageMarketing: false,
     canViewFinancials: false,
+    canManageReservations: false,
     canManageOperations: false,
     canManageUsers: false,
     canAccessAiCommand: true,
@@ -89,6 +93,29 @@ export const ROLE_DEFINITIONS: Record<UserRole, RolePermissions> = {
     canManageNegotiatedRates: false,
     leadAccessScope: 'ASSIGNED_ONLY'
   },
+  Reservations: {
+    role: 'Reservations',
+    description: 'Supplier-facing reservation handling, availability, contracted-rate visibility, confirmations, and booking follow-up. Assignment enforcement follows in Stage C.',
+    canViewAllSales: false,
+    canManageLeads: false,
+    canSendQuotes: false,
+    canManageMarketing: false,
+    canViewFinancials: false,
+    canManageReservations: true,
+    canManageOperations: false,
+    canManageUsers: false,
+    canAccessAiCommand: false,
+    canApproveActions: false,
+    canViewAuditLogs: false,
+    canManageSettings: false,
+    canManageTrips: false,
+    canManageBookings: false,
+    canViewMargins: false,
+    canManageAccommodation: false,
+    canViewSupplierRates: true,
+    canManageNegotiatedRates: false,
+    leadAccessScope: 'NONE'
+  },
   Marketing: {
     role: 'Marketing',
     description: 'Ad campaign management, creative generation, seasonal travel strategy, content calendar, and Marketing AI.',
@@ -97,6 +124,7 @@ export const ROLE_DEFINITIONS: Record<UserRole, RolePermissions> = {
     canSendQuotes: false,
     canManageMarketing: true,
     canViewFinancials: false,
+    canManageReservations: false,
     canManageOperations: false,
     canManageUsers: false,
     canAccessAiCommand: true,
@@ -113,12 +141,13 @@ export const ROLE_DEFINITIONS: Record<UserRole, RolePermissions> = {
   },
   Operations: {
     role: 'Operations',
-    description: 'Ground transport logistics, hotel allocations, houseboat bookings, chauffeur coordination, and guest on-tour safety.',
+    description: 'Live-trip execution, arrivals, departures, driver assignments, guest movements, issue handling, and approved operational changes.',
     canViewAllSales: false,
     canManageLeads: false,
     canSendQuotes: false,
     canManageMarketing: false,
     canViewFinancials: false,
+    canManageReservations: false,
     canManageOperations: true,
     canManageUsers: false,
     canAccessAiCommand: true,
@@ -128,8 +157,8 @@ export const ROLE_DEFINITIONS: Record<UserRole, RolePermissions> = {
     canManageTrips: false,
     canManageBookings: true,
     canViewMargins: false,
-    canManageAccommodation: true,
-    canViewSupplierRates: true,
+    canManageAccommodation: false,
+    canViewSupplierRates: false,
     canManageNegotiatedRates: false,
     leadAccessScope: 'NONE'
   },
@@ -141,6 +170,7 @@ export const ROLE_DEFINITIONS: Record<UserRole, RolePermissions> = {
     canSendQuotes: false,
     canManageMarketing: false,
     canViewFinancials: true,
+    canManageReservations: false,
     canManageOperations: false,
     canManageUsers: false,
     canAccessAiCommand: true,
@@ -157,9 +187,11 @@ export const ROLE_DEFINITIONS: Record<UserRole, RolePermissions> = {
   }
 };
 
-export const PRESET_USERS = [
+export const PRESET_USERS: UserProfile[] = [
   {
     id: 'emp-founder-01',
+    employeeId: 'emp-founder-01',
+    firebaseUid: 'demo:emp-founder-01',
     name: 'Suhaib Hamid',
     email: 'suhaib@bookingbridge.com',
     phone: '+91 94190 00001',
@@ -171,6 +203,8 @@ export const PRESET_USERS = [
   },
   {
     id: 'emp-admin-01',
+    employeeId: 'emp-admin-01',
+    firebaseUid: 'demo:emp-admin-01',
     name: 'Nasir Wani',
     email: 'nasir.admin@bookingbridge.com',
     phone: '+91 94190 00002',
@@ -182,39 +216,65 @@ export const PRESET_USERS = [
   },
   {
     id: 'emp-mgr-01',
+    employeeId: 'emp-mgr-01',
+    firebaseUid: 'demo:emp-mgr-01',
     name: 'Sameer Mir',
     email: 'sameer.sales@bookingbridge.com',
     phone: '+91 94190 00003',
     role: 'Sales Manager' as UserRole,
     department: 'Sales & Revenue',
+    salesTeamId: 'sales-team-01',
     active: true,
     createdAt: '2025-01-10T00:00:00Z',
     lastLogin: new Date().toISOString()
   },
   {
     id: 'emp-sales-01',
+    employeeId: 'emp-sales-01',
+    firebaseUid: 'demo:emp-sales-01',
     name: 'Tariq Bhat',
     email: 'tariq.sales@bookingbridge.com',
     phone: '+91 94190 00004',
     role: 'Sales Executive' as UserRole,
     department: 'Sales & Inbound',
+    salesTeamId: 'sales-team-01',
+    managerEmployeeId: 'emp-mgr-01',
     active: true,
     createdAt: '2025-02-01T00:00:00Z',
     lastLogin: new Date().toISOString()
   },
   {
     id: 'emp-sales-02',
+    employeeId: 'emp-sales-02',
+    firebaseUid: 'demo:emp-sales-02',
     name: 'Ayesha Zargar',
     email: 'ayesha.sales@bookingbridge.com',
     phone: '+91 94190 00005',
     role: 'Sales Executive' as UserRole,
     department: 'Sales & Luxury Packages',
+    salesTeamId: 'sales-team-01',
+    managerEmployeeId: 'emp-mgr-01',
     active: true,
     createdAt: '2025-02-15T00:00:00Z',
     lastLogin: new Date().toISOString()
   },
   {
+    id: 'emp-res-01',
+    employeeId: 'emp-res-01',
+    firebaseUid: 'demo:emp-res-01',
+    name: 'Zoya Qadri',
+    email: 'zoya.reservations@bookingbridge.com',
+    phone: '+91 94190 00009',
+    role: 'Reservations',
+    department: 'Reservations & Supplier Relations',
+    active: true,
+    createdAt: '2025-02-18T00:00:00Z',
+    lastLogin: new Date().toISOString()
+  },
+  {
     id: 'emp-mkt-01',
+    employeeId: 'emp-mkt-01',
+    firebaseUid: 'demo:emp-mkt-01',
     name: 'Irfan Dar',
     email: 'irfan.mkt@bookingbridge.com',
     phone: '+91 94190 00006',
@@ -226,6 +286,8 @@ export const PRESET_USERS = [
   },
   {
     id: 'emp-ops-01',
+    employeeId: 'emp-ops-01',
+    firebaseUid: 'demo:emp-ops-01',
     name: 'Bilal Ahmad Shah',
     email: 'bilal.ops@bookingbridge.com',
     phone: '+91 94190 00007',
@@ -237,6 +299,8 @@ export const PRESET_USERS = [
   },
   {
     id: 'emp-acc-01',
+    employeeId: 'emp-acc-01',
+    firebaseUid: 'demo:emp-acc-01',
     name: 'Farooq Lone',
     email: 'farooq.accounts@bookingbridge.com',
     phone: '+91 94190 00008',

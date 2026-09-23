@@ -4,7 +4,7 @@ import { generateMarketingStrategy } from '../ai/marketingAgent.js';
 import { processCommandCenterQuery } from '../ai/commandCenterAgent.js';
 import { validateToolAccess } from '../ai/toolGateway.js';
 import { isAiConfigured } from '../ai/aiClient.js';
-import { authenticate, requireRole } from '../middleware/auth.js';
+import { authenticate, requireRole, toPublicAuthenticatedUser } from '../middleware/auth.js';
 import { sanitizeFinancialData } from '../middleware/financialGuard.js';
 import { accommodationRouter } from './accommodation.js';
 import { transportRouter } from './transport.js';
@@ -20,7 +20,15 @@ export const apiRouter = Router();
 apiRouter.use(authenticate);
 
 // Define roles allowed to interact with inventory/pricing (Excludes Marketing)
-const inventoryRoles: import('../../src/types/index.js').UserRole[] = ['Founder', 'Admin', 'Operations', 'Accounts', 'Sales Manager', 'Sales Executive'];
+const inventoryRoles: import('../../src/types/index.js').UserRole[] = [
+  'Founder',
+  'Admin',
+  'Accounts',
+  'Sales Manager',
+  'Sales Executive',
+  'Reservations',
+  'Operations',
+];
 
 // Mount Sub-Routers
 apiRouter.use('/accommodation', accommodationRouter);
@@ -48,7 +56,7 @@ apiRouter.get('/auth/me', (req: Request, res: Response) => {
     return res.status(401).json({ error: 'Unauthenticated' });
   }
   res.json({
-    user: req.user,
+    user: toPublicAuthenticatedUser(req.user),
   });
 });
 
@@ -99,7 +107,12 @@ apiRouter.post(
 
 // AI Command Center Query Endpoint
 // SECURITY: Role and identity are derived exclusively from req.user, NOT client-supplied body
-apiRouter.post('/ai/command-center', async (req: Request, res: Response) => {
+apiRouter.post(
+  '/ai/command-center',
+  // Reservations AI scope is not defined until Stage C; preserve existing
+  // roles and fail closed for the new role in the interim.
+  requireRole(['Founder', 'Admin', 'Accounts', 'Sales Manager', 'Sales Executive', 'Operations', 'Marketing']),
+  async (req: Request, res: Response) => {
   try {
     const { question, contextData } = req.body;
     if (!question) {
@@ -123,7 +136,8 @@ apiRouter.post('/ai/command-center', async (req: Request, res: Response) => {
     console.error('API Error in /ai/command-center:', error);
     res.status(500).json({ error: error.message || 'Internal Server Error in AI Command Center' });
   }
-});
+  },
+);
 
 // Tool invocation gateway
 // SECURITY: Role is validated against authenticated req.user.role

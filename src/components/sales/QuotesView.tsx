@@ -240,11 +240,11 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
       const discount = Number(editForm.discountAmount) || 0;
       const finalAmt = Math.max(0, sellingTotal - discount);
 
-      // Use the authoritative totalCost stored in the quote (which came from the Trip)
+      // Use the authoritative totalSupplierCost stored in the quote (which came from the Trip)
       // Do NOT recalculate it from missing client-side supplierCost fields
-      const totalCost = editForm.totalCost || 0;
+      const totalSupplierCost = editForm.totalSupplierCost || 0;
 
-      const grossProfit = finalAmt - totalCost;
+      const grossProfit = finalAmt - totalSupplierCost;
       const grossMargin = finalAmt > 0 ? Number(((grossProfit / finalAmt) * 100).toFixed(1)) : 0;
 
       const updated = await updateQuote(
@@ -254,7 +254,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
           totalAmount: sellingTotal,
           discountAmount: discount,
           finalAmount: finalAmt,
-          totalCost,
+          totalSupplierCost,
           grossProfit,
           grossMargin,
           salesEmployeeId: editForm.salesEmployeeId || currentUser.id
@@ -566,7 +566,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
             <div>
               <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">Contracted Cost</p>
               {canSeeSupplierCosts ? (
-                <p className="text-lg font-black text-slate-700">₹{editForm.totalCost?.toLocaleString('en-IN') || 0}</p>
+                <p className="text-lg font-black text-slate-700">₹{editForm.totalSupplierCost?.toLocaleString('en-IN') || 0}</p>
               ) : (
                 <p className="text-xs font-bold text-slate-400 italic py-1">[Protected by RBAC]</p>
               )}
@@ -744,7 +744,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
                         children: editForm.children || 0,
                         tripType: 'Leisure',
                         budget: editForm.finalAmount,
-                        totalCost: editForm.totalCost || 0,
+                        totalSupplierCost: editForm.totalSupplierCost || 0,
                         totalSellingPrice: editForm.finalAmount
                       });
                       setEditForm({ ...editForm, tripId: newTrip.id });

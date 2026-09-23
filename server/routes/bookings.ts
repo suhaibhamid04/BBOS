@@ -25,6 +25,7 @@ import {
   VoucherService,
   VoucherError,
 } from '../services/voucherService.js';
+import { sanitizeFinancialData } from '../middleware/financialGuard.js';
 
 export const bookingsRouter = Router();
 const quoteConversionService = new QuoteConversionService();
@@ -111,7 +112,7 @@ bookingsRouter.get(
 
       return res.status(200).json({
         success: true,
-        data: snapshot,
+        data: sanitizeFinancialData(snapshot, actor.role),
       });
     } catch (error: any) {
       if (error instanceof ConversionError) {
@@ -157,7 +158,7 @@ bookingsRouter.get(
 
       return res.status(200).json({
         success: true,
-        ...result,
+        ...sanitizeFinancialData(result, actor.role),
       });
     } catch (error: any) {
       return handleBookingQueryError(error, res, 'GET /bookings');
@@ -187,7 +188,7 @@ bookingsRouter.get(
 
       return res.status(200).json({
         success: true,
-        data: result,
+        data: sanitizeFinancialData(result, actor.role),
       });
     } catch (error: any) {
       return handleBookingQueryError(error, res, 'GET /bookings/:bookingId');

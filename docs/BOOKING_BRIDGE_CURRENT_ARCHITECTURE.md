@@ -238,7 +238,7 @@ All types defined in `src/types/index.ts` (695 lines, 40+ interfaces/types):
 
 | Type | Values |
 |---|---|
-| UserRole | `Founder`, `Admin`, `Sales Manager`, `Sales Executive`, `Marketing`, `Operations`, `Accounts` |
+| UserRole | `Founder`, `Admin`, `Accounts`, `Sales Manager`, `Sales Executive`, `Reservations`, `Operations`, `Marketing` |
 | LeadStatus | `NEW`, `CONTACTED`, `QUALIFIED`, `QUOTE_SENT`, `NEGOTIATION`, `BOOKED`, `LOST`, `NURTURE` |
 | TripStatus | `DRAFT`, `ITINERARY_READY`, `QUOTE_READY`, `QUOTE_SENT`, `ACCEPTED`, `BOOKED`, `IN_OPERATIONS`, `COMPLETED`, `CANCELLED` |
 | BookingStatus | `PENDING_PAYMENT`, `CONFIRMED`, `IN_OPERATIONS`, `TRAVELLING`, `COMPLETED`, `CANCELLED` |
@@ -288,13 +288,13 @@ match /{document=**} {
 
 Authentication is **hybrid mock + Firebase**:
 
-1. **Mock System (Primary):** 8 preset users defined in `src/services/permissions.ts` (`PRESET_USERS`). The `RoleSwitcherModal` allows instant persona switching. Active user persisted to `localStorage` key `booking_bridge_active_user`.
+1. **Demo System (explicit DEMO_MODE only):** Preset users are defined in `src/services/permissions.ts` (`PRESET_USERS`). Persona switching and browser persistence are disabled outside explicit demo mode.
 
-2. **Firebase Auth (Secondary/Optional):** `AuthContext.tsx` imports Firebase Auth (`signInWithEmailAndPassword`, `createUserWithEmailAndPassword`). The `onAuthStateChanged` listener syncs Firebase user email/name to the current mock user. Firebase Auth status tracked via `isFirebaseAuthenticated` boolean but **not enforced** for any access control.
+2. **Production Firebase Auth:** `AuthContext.tsx` obtains a Firebase token and resolves the authoritative active employee, role, and stable BBOS employee ID through `/api/auth/me`.
 
 ### RBAC System
 
-7 roles defined in `ROLE_DEFINITIONS` with 14 permission flags:
+8 roles are defined in `ROLE_DEFINITIONS`; `UserRole` is derived from the canonical `USER_ROLES` constant. The table below is the legacy seven-role snapshot and is superseded by `phase-2b-7a-stage-b-roles-organizational-model.md` and the live governance view.
 
 | Permission | Founder | Admin | Sales Mgr | Sales Exec | Marketing | Operations | Accounts |
 |---|---|---|---|---|---|---|---|
@@ -314,7 +314,7 @@ Authentication is **hybrid mock + Firebase**:
 | canViewMargins | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ |
 | leadAccessScope | ALL | ALL | ALL | ASSIGNED | NONE | NONE | ALL |
 
-> **Issue:** Permissions are only enforced at the **UI navigation level** (sidebar visibility). There is no backend/API authorization middleware.
+> Frontend permissions are UX/navigation controls only. Express authentication and route guards remain authoritative; Stage C will replace remaining hardcoded lists with scope-aware policy.
 
 ---
 

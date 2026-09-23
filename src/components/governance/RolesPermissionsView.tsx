@@ -1,18 +1,10 @@
 import React from 'react';
-import { UserRole } from '../../types';
+import { USER_ROLES } from '../../types';
 import { ROLE_DEFINITIONS } from '../../services/permissions';
 import { Shield, Check, X } from 'lucide-react';
 
 export const RolesPermissionsView: React.FC = () => {
-  const roles: UserRole[] = [
-    'Founder',
-    'Admin',
-    'Sales Manager',
-    'Sales Executive',
-    'Marketing',
-    'Operations',
-    'Accounts',
-  ];
+  const roles = USER_ROLES;
 
   const permissionKeys: { key: keyof typeof ROLE_DEFINITIONS['Founder']; label: string }[] = [
     { key: 'canViewAllSales', label: 'View Full Sales Pipeline & All Leads' },
@@ -20,6 +12,7 @@ export const RolesPermissionsView: React.FC = () => {
     { key: 'canSendQuotes', label: 'Draft & Send Tour Quotations' },
     { key: 'canManageMarketing', label: 'Manage Ad Campaigns & Creatives' },
     { key: 'canViewFinancials', label: 'View Margins, Net Profit & Accounts' },
+    { key: 'canManageReservations', label: 'Access Reservations Inventory Workspace' },
     { key: 'canManageOperations', label: 'Manage Fleet, Hotels & Ground Vouchers' },
     { key: 'canManageUsers', label: 'Manage Team Members & Access Roles' },
     { key: 'canAccessAiCommand', label: 'Access AI Command Center & Copilots' },

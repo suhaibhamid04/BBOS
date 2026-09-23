@@ -60,8 +60,8 @@ describe('1. Financial Data Sanitization (Data Layer Protection)', () => {
     expect((managerView.itinerary[0].hotel as any).supplierCost).toBeUndefined();
   });
 
-  it('Sales Executive, Marketing, and Operations MUST NOT receive supplier cost or margin metrics', () => {
-    const restrictedRoles: UserRole[] = ['Sales Executive', 'Marketing', 'Operations'];
+  it('Sales Executive and Marketing MUST NOT receive supplier cost or margin metrics', () => {
+    const restrictedRoles: UserRole[] = ['Sales Executive', 'Marketing'];
 
     for (const role of restrictedRoles) {
       const sanitized = sanitizeFinancialData(sampleTripCostPayload, role);
@@ -75,6 +75,29 @@ describe('1. Financial Data Sanitization (Data Layer Protection)', () => {
       expect((sanitized as any).supplierPayment).toBeUndefined();
       expect((sanitized.itinerary[0].hotel as any).supplierCost).toBeUndefined();
     }
+  });
+
+  it('Operations MUST NOT receive supplier costs or margin metrics', () => {
+    const sanitized = sanitizeFinancialData(sampleTripCostPayload, 'Operations');
+    expect(sanitized.sellingPrice).toBe(85000);
+    
+    // Margin metrics must be stripped
+    expect((sanitized as any).grossProfit).toBeUndefined();
+    expect((sanitized as any).grossMargin).toBeUndefined();
+
+    expect((sanitized as any).supplierCost).toBeUndefined();
+    expect((sanitized as any).internalCost).toBeUndefined();
+    expect((sanitized as any).supplierPayment).toBeUndefined();
+    expect((sanitized.itinerary[0].hotel as any).supplierCost).toBeUndefined();
+  });
+
+  it('Reservations receives supplier costs but not unrestricted profit or margin', () => {
+    const sanitized = sanitizeFinancialData(sampleTripCostPayload, 'Reservations');
+    expect((sanitized as any).supplierCost).toBe(52000);
+    expect((sanitized as any).internalCost).toBe(49000);
+    expect((sanitized.itinerary[0].hotel as any).supplierCost).toBe(12000);
+    expect((sanitized as any).grossProfit).toBeUndefined();
+    expect((sanitized as any).grossMargin).toBeUndefined();
   });
 });
 

@@ -180,7 +180,7 @@ interface DataContextType {
   updateAccommodationProperty: (id: string, updates: Partial<AccommodationProperty>) => Promise<void>;
 
   // Trip & Itinerary actions
-  createTrip: (tripData: Omit<Trip, 'id' | 'createdAt' | 'updatedAt' | 'status' | 'grossProfit' | 'grossMargin' | 'totalCost' | 'totalSellingPrice'> & { budget?: number; totalCost?: number; totalSellingPrice?: number }, initialDaysCount?: number, fromPackageId?: string) => Promise<Trip>;
+  createTrip: (tripData: Omit<Trip, 'id' | 'createdAt' | 'updatedAt' | 'status' | 'grossProfit' | 'grossMargin' | 'totalSupplierCost' | 'totalSellingPrice'> & { budget?: number; totalSupplierCost?: number; totalSellingPrice?: number }, initialDaysCount?: number, fromPackageId?: string) => Promise<Trip>;
   updateTrip: (id: string, updates: Partial<Trip>) => Promise<void>;
   addItineraryDay: (tripId: string, dayData?: Partial<ItineraryDay>) => Promise<ItineraryDay>;
   updateItineraryDay: (id: string, updates: Partial<ItineraryDay>) => Promise<void>;
@@ -451,6 +451,34 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const loadData = async () => {
       setIsLoading(true);
       try {
+        const fetchApi = async (endpoint: string) => {
+          if (APP_CONFIG.DEMO_MODE) return [];
+          
+          const headers: any = {
+            'Content-Type': 'application/json',
+            'X-Demo-User-Id': currentUser?.id || ''
+          };
+
+          if (auth && auth.currentUser) {
+            try {
+              const token = await auth.currentUser.getIdToken();
+              headers['Authorization'] = `Bearer ${token}`;
+            } catch (err) {
+              console.warn('Could not get Firebase ID token:', err);
+            }
+          }
+
+          const res = await fetch(endpoint, { headers });
+          if (!res.ok) throw new Error(`API fetch failed: ${res.statusText}`);
+          const json = await res.json();
+          return json.data || [];
+        };
+
+        const canReadInventory = true; // All roles need inventory for TripBuilder
+        // UX/data-loading optimization only. Firestore/API rules remain the
+        // authority. Reservations needs supplier rates; Operations does not.
+        const canReadRates = ['Founder', 'Admin', 'Accounts', 'Reservations'].includes(currentUser?.role as any);
+
         const [
           fetchedLeads, fetchedCustomers, fetchedCompanies, fetchedTasks,
           fetchedConversations, fetchedMessages, fetchedQuotes, fetchedBookings,
@@ -461,13 +489,23 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           fetchedActMasters, fetchedActRates
         ] = await Promise.all([
           LeadRepo.getAll(), CustomerRepo.getAll(), CompanyRepo.getAll(), TaskRepo.getAll(),
-          ConversationRepo.getAll(), MessageRepo.getAll(), QuoteRepo.getAll(), BookingRepo.getAll(),
+          ConversationRepo.getAll(), MessageRepo.getAll(), fetchApi('/api/quotes'), fetchApi('/api/bookings'),
           AiRecommendationRepo.getAll(), AiActionRepo.getAll(), ApprovalRepo.getAll(), AuditLogRepo.getAll(),
           PackageRepo.getAll(),
-          TripRepo.getAll(), HotelRepo.getAll(), TransportRepo.getAll(), DriverRepo.getAll(), ActivityRepo.getAll(), SupplierRepo.getAll(), VoucherRepo.getAll(),
-          AccommodationPropertyRepo.getAll(), RoomCategoryRepo.getAll(), RatePeriodRepo.getAll(), NegotiatedRateRepo.getAll(),
-          VehicleCategoryRepo.getAll(), DestinationRepo.getAll(), TransportRouteRepo.getAll(), TransportRatePeriodRepo.getAll(), TransportSupplementRepo.getAll(),
-          ActivityMasterRepo.getAll(), ActivityRatePeriodRepo.getAll()
+          fetchApi('/api/trips'), 
+          canReadInventory ? HotelRepo.getAll() : Promise.resolve([]), 
+          canReadInventory ? TransportRepo.getAll() : Promise.resolve([]), 
+          DriverRepo.getAll(), 
+          canReadInventory ? ActivityRepo.getAll() : Promise.resolve([]), 
+          SupplierRepo.getAll(), VoucherRepo.getAll(),
+          AccommodationPropertyRepo.getAll(), RoomCategoryRepo.getAll(), 
+          canReadRates ? RatePeriodRepo.getAll() : Promise.resolve([]), 
+          canReadRates ? NegotiatedRateRepo.getAll() : Promise.resolve([]),
+          VehicleCategoryRepo.getAll(), DestinationRepo.getAll(), TransportRouteRepo.getAll(), 
+          canReadRates ? TransportRatePeriodRepo.getAll() : Promise.resolve([]), 
+          canReadRates ? TransportSupplementRepo.getAll() : Promise.resolve([]),
+          ActivityMasterRepo.getAll(), 
+          canReadRates ? ActivityRatePeriodRepo.getAll() : Promise.resolve([])
         ]);
         
         setLeads(fetchedLeads as any);
@@ -897,12 +935,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Trip & Itinerary Operations
   const createTrip = async (
-    tripData: Omit<Trip, 'id' | 'createdAt' | 'updatedAt' | 'status' | 'grossProfit' | 'grossMargin' | 'totalCost' | 'totalSellingPrice'> & { budget?: number; totalCost?: number; totalSellingPrice?: number },
+    tripData: Omit<Trip, 'id' | 'createdAt' | 'updatedAt' | 'status' | 'grossProfit' | 'grossMargin' | 'totalSupplierCost' | 'totalSellingPrice'> & { budget?: number; totalSupplierCost?: number; totalSellingPrice?: number },
     initialDaysCount?: number,
     fromPackageId?: string
   ): Promise<Trip> => {
     const tripId = `trip-${Date.now()}`;
-    const initialCost = tripData.totalCost || 0;
+    const initialCost = tripData.totalSupplierCost || 0;
     const initialPrice = tripData.totalSellingPrice || tripData.budget || 0;
     const profit = initialPrice - initialCost;
     const margin = initialPrice > 0 ? Number(((profit / initialPrice) * 100).toFixed(1)) : 0;
@@ -912,7 +950,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       id: tripId,
       status: 'DRAFT',
       currency: tripData.currency || 'INR',
-      totalCost: initialCost,
+      totalSupplierCost: initialCost,
       totalSellingPrice: initialPrice,
       grossProfit: profit,
       grossMargin: margin,
@@ -1027,7 +1065,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setTrips(prev =>
           prev.map(t => (t.id === tripId ? { 
             ...t, 
-            totalCost: data.data.totalCost, 
+            totalSupplierCost: data.data.totalSupplierCost, 
             grossProfit: data.data.grossProfit, 
             grossMargin: data.data.grossMargin, 
             updatedAt: new Date().toISOString() 

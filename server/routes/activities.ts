@@ -3,6 +3,7 @@ import { requireRole } from '../middleware/auth.js';
 import { calculateActivityCost, buildRoleGatedActivityResult } from '../../src/services/activityEngine.js';
 import { DEMO_ACTIVITY_RATE_PERIODS } from '../../src/services/activityDemoData.js';
 import { APP_CONFIG } from '../../src/config.js';
+import { sanitizeFinancialData } from '../middleware/financialGuard.js';
 
 export const activitiesRouter = Router();
 
@@ -69,13 +70,13 @@ activitiesRouter.post('/calculate-rate', async (req: Request, res: Response) => 
     
     res.json({
       success: true,
-      data: {
+      data: sanitizeFinancialData({
         ...safeResult,
         supplierCost: safeResult.totalAmount, // This will be undefined for Sales Execs
         pricingModel: activeRate.pricingModel,
         needsConfirmation: activeRate.availabilityStatus === 'NEEDS_CONFIRMATION' || activeRate.availabilityStatus === 'ON_REQUEST',
         taxDescription: 'GST INCLUDED'
-      }
+      }, userRole)
     });
 
   } catch (error: any) {

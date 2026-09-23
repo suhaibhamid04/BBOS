@@ -406,11 +406,8 @@ export function calculateStayTotal(
 // ROLE-GATED RESULT BUILDER (runs server-side)
 // =====================================================
 
-/** Roles that can see full supplier cost data */
-const FULL_FINANCIAL_ACCESS_ROLES: UserRole[] = ['Founder', 'Admin', 'Accounts'];
-
-/** Roles that can see rate data but not negotiate */
-const RATE_VIEW_ROLES: UserRole[] = ['Founder', 'Admin', 'Accounts', 'Operations'];
+/** Supplier rates/costs are operational inputs, not package profit authority. */
+const SUPPLIER_RATE_ACCESS_ROLES: UserRole[] = ['Founder', 'Admin', 'Accounts', 'Reservations'];
 
 /**
  * Builds a RateCalculationResult, stripping supplier/margin fields
@@ -462,7 +459,7 @@ export function buildRoleGatedResult(
   };
 
   // Add supplier/financial data ONLY for authorized roles
-  if (FULL_FINANCIAL_ACCESS_ROLES.includes(userRole)) {
+  if (SUPPLIER_RATE_ACCESS_ROLES.includes(userRole)) {
     result.supplierCostPerNight = supplierCostPerNight;
     result.totalSupplierCost = totalSupplierCost;
 
@@ -484,7 +481,7 @@ export function sanitizePropertyForRole(
   property: Record<string, any>,
   userRole: UserRole
 ): Record<string, any> {
-  const INTERNAL_NOTES_VISIBLE_ROLES: UserRole[] = ['Founder', 'Admin', 'Operations', 'Accounts'];
+  const INTERNAL_NOTES_VISIBLE_ROLES: UserRole[] = ['Founder', 'Admin', 'Accounts', 'Reservations'];
 
   if (INTERNAL_NOTES_VISIBLE_ROLES.includes(userRole)) {
     return property;
@@ -499,12 +496,12 @@ export function sanitizePropertyForRole(
  * Checks if a user role has access to view raw supplier rate data.
  */
 export function canAccessRateData(userRole: UserRole): boolean {
-  return RATE_VIEW_ROLES.includes(userRole);
+  return SUPPLIER_RATE_ACCESS_ROLES.includes(userRole);
 }
 
 /**
  * Checks if a user role has access to view negotiated rate data.
  */
 export function canAccessNegotiatedRates(userRole: UserRole): boolean {
-  return FULL_FINANCIAL_ACCESS_ROLES.includes(userRole);
+  return SUPPLIER_RATE_ACCESS_ROLES.includes(userRole);
 }

@@ -1,8 +1,9 @@
 import { Router, Request, Response } from 'express';
 import { requireRole } from '../middleware/auth.js';
-import { calculateTransportCost, buildRoleGatedTransportResult } from '../../src/services/transportEngine.js';
+import { calculateTransportCost } from '../../src/services/transportEngine.js';
 import { DEMO_TRANSPORT_RATE_PERIODS, DEMO_TRANSPORT_SUPPLEMENTS } from '../../src/services/transportDemoData.js';
 import { APP_CONFIG } from '../../src/config.js';
+import { sanitizeFinancialData } from '../middleware/financialGuard.js';
 
 export const transportRouter = Router();
 
@@ -74,19 +75,17 @@ transportRouter.post('/calculate-rate', async (req: Request, res: Response) => {
       }
     });
 
-    const safeResult = buildRoleGatedTransportResult(calculationResult, userRole);
-    
     res.json({
       success: true,
-      data: {
-        ...safeResult,
-        baseSupplierCost: safeResult.breakdown?.baseVehicleCost,
-        supplementCost: safeResult.breakdown?.additionalChargesTotal,
-        supplierCost: safeResult.totalAmount, // This will be undefined for Sales Execs
+      data: sanitizeFinancialData({
+        ...calculationResult,
+        baseSupplierCost: calculationResult.breakdown?.baseVehicleCost,
+        supplementCost: calculationResult.breakdown?.additionalChargesTotal,
+        supplierCost: calculationResult.totalAmount,
         availabilityStatus: activeRate.availabilityStatus,
         needsConfirmation: activeRate.availabilityStatus === 'NEEDS_CONFIRMATION' || activeRate.availabilityStatus === 'ON_REQUEST',
         taxDescription: 'GST INCLUDED'
-      }
+      }, userRole)
     });
 
   } catch (error: any) {

@@ -1,16 +1,42 @@
 import { BookingComponentStatus, VoucherStatus } from './booking';
 
-export type UserRole =
-  | 'Founder'
-  | 'Admin'
-  | 'Sales Manager'
-  | 'Sales Executive'
-  | 'Marketing'
-  | 'Operations'
-  | 'Accounts';
+export const USER_ROLES = [
+  'Founder',
+  'Admin',
+  'Accounts',
+  'Sales Manager',
+  'Sales Executive',
+  'Reservations',
+  'Operations',
+  'Marketing',
+] as const;
+
+export type UserRole = (typeof USER_ROLES)[number];
+
+export function isUserRole(value: unknown): value is UserRole {
+  return typeof value === 'string' && (USER_ROLES as readonly string[]).includes(value);
+}
+
+export interface AuthenticatedEmployeeIdentity {
+  firebaseUid: string;
+  employeeId: string;
+  role: UserRole;
+  name: string;
+  email: string;
+  active: true;
+  salesTeamId?: string;
+  managerEmployeeId?: string;
+  phone?: string;
+  department?: string;
+  createdAt?: string;
+  lastLogin?: string;
+  isDemo?: boolean;
+}
 
 export interface UserProfile {
   id: string;
+  employeeId: string;
+  firebaseUid: string;
   name: string;
   email: string;
   phone: string;
@@ -20,6 +46,22 @@ export interface UserProfile {
   active: boolean;
   createdAt: string;
   lastLogin: string;
+  salesTeamId?: string;
+  managerEmployeeId?: string;
+}
+
+/**
+ * Minimal organizational unit for future TEAM-scoped sales authorization.
+ * Membership remains on the employee via `salesTeamId`; this model identifies
+ * the stable team and its accountable Sales Manager.
+ */
+export interface SalesTeam {
+  id: string;
+  name: string;
+  managerEmployeeId: string;
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface RolePermissions {
@@ -30,6 +72,8 @@ export interface RolePermissions {
   canSendQuotes: boolean;
   canManageMarketing: boolean;
   canViewFinancials: boolean;
+  /** UX capability only; server authorization remains authoritative. */
+  canManageReservations: boolean;
   canManageOperations: boolean;
   canManageUsers: boolean;
   canAccessAiCommand: boolean;
@@ -359,7 +403,7 @@ export interface Quote {
   discountAmount: number;
   finalAmount: number;
   // Role-gated financials
-  totalCost?: number;
+  totalSupplierCost?: number;
   grossProfit?: number;
   grossMargin?: number;
   status: QuoteStatus;
@@ -407,12 +451,13 @@ export interface Trip {
   tripType: TripType | string;
   status: TripStatus;
   currency: string;
-  totalCost: number;
+  totalSupplierCost: number;
   totalSellingPrice: number;
   grossProfit: number;
   grossMargin: number;
   budget?: number;
   assignedSalesEmployeeId?: string;
+  assignedReservationsEmployeeId?: string;
   assignedOperationsEmployeeId?: string;
   createdAt: string;
   updatedAt: string;

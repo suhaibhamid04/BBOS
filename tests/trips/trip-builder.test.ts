@@ -6,7 +6,7 @@ import { describe, it, expect } from 'bun:test';
 import { Trip, ItineraryDay, ItineraryItem, Customer } from '../../src/types/index.js';
 
 describe('Trip Builder & Costing Engine Calculations', () => {
-  it('correctly calculates totalCost, totalSellingPrice, grossProfit, and grossMargin', () => {
+  it('correctly calculates totalSupplierCost, totalSellingPrice, grossProfit, and grossMargin', () => {
     const items: ItineraryItem[] = [
       {
         id: 'item-1',
@@ -37,26 +37,26 @@ describe('Trip Builder & Costing Engine Calculations', () => {
       }
     ];
 
-    let totalCost = 0;
+    let totalSupplierCost = 0;
     let totalSellingPrice = 0;
     for (const it of items) {
-      totalCost += it.supplierCost || 0;
+      totalSupplierCost += it.supplierCost || 0;
       totalSellingPrice += it.sellingPrice || 0;
     }
 
-    const grossProfit = totalSellingPrice - totalCost;
+    const grossProfit = totalSellingPrice - totalSupplierCost;
     const grossMargin = totalSellingPrice > 0 ? Number(((grossProfit / totalSellingPrice) * 100).toFixed(1)) : 0;
 
-    expect(totalCost).toBe(21100);
+    expect(totalSupplierCost).toBe(21100);
     expect(totalSellingPrice).toBe(29700);
     expect(grossProfit).toBe(8600);
     expect(grossMargin).toBe(29.0);
   });
 
   it('safely handles zero selling price without division by zero', () => {
-    const totalCost = 5000;
+    const totalSupplierCost = 5000;
     const totalSellingPrice = 0;
-    const grossProfit = totalSellingPrice - totalCost;
+    const grossProfit = totalSellingPrice - totalSupplierCost;
     const grossMargin = totalSellingPrice > 0 ? Number(((grossProfit / totalSellingPrice) * 100).toFixed(1)) : 0;
 
     expect(grossMargin).toBe(0);
@@ -132,7 +132,7 @@ describe('Trip Form Validation & Customer Resolution QA', () => {
       children: 0,
       tripType: 'Honeymoon',
       status: 'DRAFT',
-      totalCost: 30000,
+      totalSupplierCost: 30000,
       totalSellingPrice: 45000,
       grossProfit: 15000,
       grossMargin: 33.3,
@@ -183,7 +183,7 @@ describe('Trip Form Validation & Customer Resolution QA', () => {
       children: 0,
       tripType: 'Adventure',
       status: 'DRAFT',
-      totalCost: 20000,
+      totalSupplierCost: 20000,
       totalSellingPrice: 35000,
       grossProfit: 15000,
       grossMargin: 42.9,

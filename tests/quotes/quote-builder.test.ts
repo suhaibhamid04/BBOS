@@ -24,25 +24,25 @@ describe('Quote Builder & Pricing Engine Calculations', () => {
     ];
 
     let totalSelling = 0;
-    let totalCost = 0;
+    let totalSupplierCost = 0;
 
     hotels.forEach(h => {
       totalSelling += h.rate;
-      totalCost += h.supplierCost;
+      totalSupplierCost += h.supplierCost;
     });
 
     transports.forEach(t => {
       totalSelling += t.rate;
-      totalCost += t.supplierCost;
+      totalSupplierCost += t.supplierCost;
     });
 
     const discount = 4000;
     const finalAmount = totalSelling - discount;
-    const grossProfit = finalAmount - totalCost;
+    const grossProfit = finalAmount - totalSupplierCost;
     const grossMargin = finalAmount > 0 ? Number(((grossProfit / finalAmount) * 100).toFixed(1)) : 0;
 
     expect(totalSelling).toBe(100000);
-    expect(totalCost).toBe(70000);
+    expect(totalSupplierCost).toBe(70000);
     expect(finalAmount).toBe(96000);
     expect(grossProfit).toBe(26000);
     expect(grossMargin).toBe(27.1);
@@ -109,7 +109,7 @@ describe('Client Preview Data Sanitization Protection', () => {
       totalAmount: 120000,
       discountAmount: 10000,
       finalAmount: 110000,
-      totalCost: 75000,
+      totalSupplierCost: 75000,
       grossProfit: 35000,
       grossMargin: 31.8,
       status: 'SENT',
@@ -150,7 +150,7 @@ describe('Client Preview Data Sanitization Protection', () => {
     };
 
     // Assert that protected fields are completely undefined in client preview
-    expect((clientPreview as any).totalCost).toBeUndefined();
+    expect((clientPreview as any).totalSupplierCost).toBeUndefined();
     expect((clientPreview as any).grossProfit).toBeUndefined();
     expect((clientPreview as any).grossMargin).toBeUndefined();
     expect((clientPreview as any).internalNotes).toBeUndefined();

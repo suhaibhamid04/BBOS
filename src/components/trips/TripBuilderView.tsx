@@ -375,7 +375,7 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
           tripType: tripForm.tripType,
           currency: tripForm.currency,
           budget: Number(tripForm.budget),
-          totalCost: 0,
+          totalSupplierCost: 0,
           totalSellingPrice: Number(tripForm.budget) || 0,
           assignedSalesEmployeeId: tripForm.assignedSalesEmployeeId || currentUser.id
         },
@@ -665,7 +665,7 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
             <div>
               <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">Supplier Cost</p>
               {canSeeSupplierCosts ? (
-                <p className="text-lg font-black text-slate-900">₹{activeTrip.totalCost?.toLocaleString('en-IN') || 0}</p>
+                <p className="text-lg font-black text-slate-900">₹{activeTrip.totalSupplierCost?.toLocaleString('en-IN') || 0}</p>
               ) : (
                 <p className="text-xs font-bold text-slate-400 italic py-1">[Protected by RBAC]</p>
               )}

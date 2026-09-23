@@ -33,6 +33,10 @@ service cloud.firestore {
       return isAuthenticated() && (getUserRole() == 'Sales Executive' || getUserRole() == 'SALES_EXECUTIVE' || isSalesManager());
     }
 
+    function isReservations() {
+      return isAuthenticated() && (getUserRole() == 'Reservations' || getUserRole() == 'RESERVATIONS' || isAdmin());
+    }
+
     function isOperations() {
       return isAuthenticated() && (getUserRole() == 'Operations' || getUserRole() == 'OPERATIONS' || isAdmin());
     }
@@ -171,30 +175,29 @@ service cloud.firestore {
 
     // Rate Management — STRICLTY GATED
     match /rate_periods/{rateId} {
-      // Readable by Operations, Accounts, and Leadership
-      allow read: if isOperations() || isAccounts() || isAdmin();
-      // Manageable by Operations and Leadership
-      allow create, update: if isOperations() || isAdmin();
+      // Readable by Reservations, Accounts, and Leadership (not Operations)
+      allow read: if isReservations() || isAccounts();
+      // Reservations overrides remain deferred until Stage C DTO/audit policy.
+      allow create, update: if isAdmin();
       allow delete: if isAdmin();
     }
 
     match /rate_supplements/{supplementId} {
-      allow read: if isOperations() || isAccounts() || isAdmin();
-      allow create, update: if isOperations() || isAdmin();
+      allow read: if isReservations() || isAccounts();
+      allow create, update: if isAdmin();
       allow delete: if isAdmin();
     }
 
     match /negotiated_rates/{rateId} {
-      // Readable by Accounts and Leadership
-      allow read: if isAccounts() || isAdmin();
-      // Manageable by Accounts and Leadership
-      allow create, update: if isAccounts() || isAdmin();
+      // Readable by Reservations, Accounts, and Leadership
+      allow read: if isReservations() || isAccounts();
+      allow create, update: if isAccounts();
       allow delete: if isAdmin();
     }
 
     match /rate_history/{historyId} {
-      allow read: if isAccounts() || isAdmin();
-      allow create: if isAccounts() || isOperations() || isAdmin();
+      allow read: if isReservations() || isAccounts();
+      allow create: if isAccounts();
       allow update, delete: if false; // Immutable audit log
     }
 
@@ -221,20 +224,20 @@ service cloud.firestore {
     }
 
     match /transport_rate_periods/{docId} {
-      allow read: if isOperations() || isAccounts() || isAdmin();
-      allow create, update: if isOperations() || isAdmin();
+      allow read: if isReservations() || isAccounts();
+      allow create, update: if isAdmin();
       allow delete: if isAdmin();
     }
 
     match /transport_supplements/{docId} {
-      allow read: if isOperations() || isAccounts() || isAdmin();
-      allow create, update: if isOperations() || isAdmin();
+      allow read: if isReservations() || isAccounts();
+      allow create, update: if isAdmin();
       allow delete: if isAdmin();
     }
 
     match /negotiated_transport_rates/{docId} {
-      allow read: if isAccounts() || isAdmin();
-      allow create, update: if isAccounts() || isAdmin();
+      allow read: if isReservations() || isAccounts();
+      allow create, update: if isAccounts();
       allow delete: if isAdmin();
     }
 
@@ -245,26 +248,26 @@ service cloud.firestore {
     }
 
     match /activity_rate_periods/{docId} {
-      allow read: if isOperations() || isAccounts() || isAdmin();
-      allow create, update: if isOperations() || isAdmin();
+      allow read: if isReservations() || isAccounts();
+      allow create, update: if isAdmin();
       allow delete: if isAdmin();
     }
 
     match /negotiated_activity_rates/{docId} {
-      allow read: if isAccounts() || isAdmin();
-      allow create, update: if isAccounts() || isAdmin();
+      allow read: if isReservations() || isAccounts();
+      allow create, update: if isAccounts();
       allow delete: if isAdmin();
     }
 
     match /transport_rate_history/{docId} {
-      allow read: if isAccounts() || isAdmin();
-      allow create: if isAuthenticated();
+      allow read: if isReservations() || isAccounts();
+      allow create: if isAccounts();
       allow update, delete: if false;
     }
 
     match /activity_rate_history/{docId} {
-      allow read: if isAccounts() || isAdmin();
-      allow create: if isAuthenticated();
+      allow read: if isReservations() || isAccounts();
+      allow create: if isAccounts();
       allow update, delete: if false;
     }
 

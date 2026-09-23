@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useData } from '../../context/DataContext';
+import { getRoleNavigationVisibility } from '../../services/navigationAccess';
 
 export type NavSectionKey =
   | 'dashboard'
@@ -116,6 +117,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const pendingTasksCount = tasks.filter(t => t.status !== 'COMPLETED').length;
   const pendingApprovalsCount = approvals.filter(a => a.status === 'PENDING').length;
   const hotLeadsCount = leads.filter(l => l.priority === 'HIGH' || l.priority === 'URGENT').length;
+  const navigation = getRoleNavigationVisibility(permissions);
 
   const allNavGroups: NavGroup[] = [
     {
@@ -127,7 +129,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         { key: 'notifications', label: 'Notifications', icon: Bell },
       ]
     },
-    {
+    ...(navigation.crm ? [{
       title: 'CRM',
       items: [
         { key: 'leads', label: 'Leads', icon: Flame, badge: hotLeadsCount > 0 ? `${hotLeadsCount} hot` : undefined, badgeColor: 'bg-[#F0A608]/15 text-amber-900 font-semibold' },
@@ -135,8 +137,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         { key: 'companies', label: 'Companies', icon: Building2 },
         { key: 'conversations', label: 'Conversations', icon: MessageSquare },
       ]
-    },
-    {
+    }] : []),
+    ...(navigation.sales ? [{
       title: 'SALES',
       items: [
         { key: 'sales-workspace', label: 'My Workspace', icon: LayoutDashboard },
@@ -144,23 +146,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
         { key: 'quotes', label: 'Quotes', icon: FileText },
         ...(permissions.canAccessAiCommand ? [{ key: 'sales-ai', label: 'AI Sales Head', icon: Sparkles, badge: 'Manager', badgeColor: 'bg-[#7056EE]/15 text-[#7056EE]' } as any] : []),
       ]
-    },
-    ...(permissions.canManageTrips || permissions.canManageBookings ? [{
+    }] : []),
+    ...(navigation.tripsAndBookings ? [{
       title: 'TRIPS & BOOKINGS',
       items: [
         ...(permissions.canManageTrips ? [{ key: 'trips', label: 'Trip Builder', icon: Plane } as any] : []),
-        ...(permissions.canManageBookings ? [{ key: 'bookings', label: 'Bookings', icon: CheckSquare } as any] : []),
+        ...(navigation.bookings ? [{ key: 'bookings', label: 'Bookings', icon: CheckSquare } as any] : []),
       ]
     }] : []),
-    ...(permissions.canManageAccommodation || permissions.canManageNegotiatedRates || permissions.canManageOperations ? [{
+    ...(navigation.inventory ? [{
       title: 'INVENTORY',
       items: [
-        ...(permissions.canManageAccommodation || permissions.canManageNegotiatedRates ? [{ key: 'accommodation', label: 'Accommodation', icon: Building2 } as any] : []),
-        ...(permissions.canManageOperations ? [{ key: 'transport', label: 'Transport', icon: Plane } as any] : []),
-        ...(permissions.canManageOperations ? [{ key: 'activities', label: 'Activities', icon: Sparkles } as any] : []),
+        ...(navigation.accommodation ? [{ key: 'accommodation', label: 'Accommodation', icon: Building2 } as any] : []),
+        ...(navigation.transport ? [{ key: 'transport', label: 'Transport', icon: Plane } as any] : []),
+        ...(navigation.activities ? [{ key: 'activities', label: 'Activities', icon: Sparkles } as any] : []),
       ]
     }] : []),
-    ...(permissions.canManageOperations ? [{
+    ...(navigation.operations ? [{
       title: 'OPERATIONS',
       items: [
         { key: 'operations-dashboard', label: 'Ops Dashboard', icon: Compass } as any,

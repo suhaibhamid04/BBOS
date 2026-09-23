@@ -423,7 +423,7 @@ describe('BBOS Phase 2B-5 Stage 4 — Quote-to-Booking Conversion Engine', () =>
     // Accommodation
     const acc = fullBooking?.accommodations[0] as any;
     expect(acc.supplierCost).toBeUndefined();
-    expect(acc.totalCost).toBeUndefined();
+    expect(acc.totalSupplierCost).toBeUndefined();
     expect(acc.grossProfit).toBeUndefined();
     expect(acc.grossMargin).toBeUndefined();
     expect(acc.supplierBuyRate).toBeUndefined();
@@ -431,13 +431,13 @@ describe('BBOS Phase 2B-5 Stage 4 — Quote-to-Booking Conversion Engine', () =>
     // Transport
     const trans = fullBooking?.transports[0] as any;
     expect(trans.supplierCost).toBeUndefined();
-    expect(trans.totalCost).toBeUndefined();
+    expect(trans.totalSupplierCost).toBeUndefined();
     expect(trans.supplierBuyRate).toBeUndefined();
 
     // Activity
     const act = fullBooking?.activities[0] as any;
     expect(act.supplierCost).toBeUndefined();
-    expect(act.totalCost).toBeUndefined();
+    expect(act.totalSupplierCost).toBeUndefined();
     expect(act.supplierBuyRate).toBeUndefined();
   });
 
@@ -692,7 +692,7 @@ describe('BBOS Phase 2B-5 Stage 4 — Quote-to-Booking Conversion Engine', () =>
   // 26. Client-supplied financial fields are ignored/rejected
   it('26. Client-supplied grossProfit and grossMargin fields are ignored', async () => {
     const quote = createBaseQuote({
-      totalCost: 100, // Fake totalCost
+      totalSupplierCost: 100, // Fake totalSupplierCost
     } as any);
     storage.rawSet('quotes', quote.id, quote);
 

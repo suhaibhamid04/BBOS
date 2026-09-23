@@ -238,7 +238,7 @@ export class QuoteValidationService {
       rateChangedServices,
       missingRateServices,
       authoritativeTotalSupplierCost,
-      quotedTotalSupplierCost: quote.totalCost || quotedTotalSupplierCost,
+      quotedTotalSupplierCost: quote.totalSupplierCost || quotedTotalSupplierCost,
       totalSellingPrice,
       estimatedGrossProfit,
       estimatedGrossMargin,
@@ -257,8 +257,8 @@ export class QuoteValidationService {
   }
 
   /**
-   * Sanitizes the validation result based on user role to guarantee
-   * that Sales Executive and Marketing never receive supplier cost data.
+   * Separates supplier-rate diagnostics from package profitability. Reservations
+   * can use supplier costs for booking work but cannot see profit or margin.
    */
   sanitizeValidationResultForRole(
     result: QuoteValidationResult,
@@ -266,6 +266,7 @@ export class QuoteValidationService {
   ): QuoteValidationResult {
     const isLeadershipOrAccounts = role === 'Founder' || role === 'Admin' || role === 'Accounts';
     const isSalesManager = role === 'Sales Manager';
+    const isReservations = role === 'Reservations';
 
     if (isLeadershipOrAccounts) {
       // Full diagnostic view
@@ -274,6 +275,12 @@ export class QuoteValidationService {
 
     // Deep clone to avoid mutating in-place
     const sanitized: QuoteValidationResult = JSON.parse(JSON.stringify(result));
+
+    if (isReservations) {
+      delete sanitized.estimatedGrossProfit;
+      delete sanitized.estimatedGrossMargin;
+      return sanitized;
+    }
 
     if (isSalesManager) {
       // Sales Manager can see gross margin and profit, but raw supplier costs are stripped

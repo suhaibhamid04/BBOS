@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { UserRole } from '../../types';
-import { ROLE_DEFINITIONS, PRESET_USERS } from '../../services/permissions';
+import { ROLE_DEFINITIONS } from '../../services/permissions';
 import { Shield, Check, User, Sparkles, X, LogIn, Lock } from 'lucide-react';
+import { APP_CONFIG } from '../../config';
 
 interface RoleSwitcherModalProps {
   isOpen: boolean;
@@ -10,8 +10,10 @@ interface RoleSwitcherModalProps {
 }
 
 export const RoleSwitcherModal: React.FC<RoleSwitcherModalProps> = ({ isOpen, onClose }) => {
-  const { currentUser, switchRole, selectUser, availableUsers, loginWithFirebase, isFirebaseAuthenticated } = useAuth();
-  const [activeTab, setActiveTab] = useState<'SWITCH_PERSONA' | 'FIREBASE_AUTH'>('SWITCH_PERSONA');
+  const { currentUser, selectUser, availableUsers, loginWithFirebase, isFirebaseAuthenticated } = useAuth();
+  const [activeTab, setActiveTab] = useState<'SWITCH_PERSONA' | 'FIREBASE_AUTH'>(
+    APP_CONFIG.DEMO_MODE ? 'SWITCH_PERSONA' : 'FIREBASE_AUTH',
+  );
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState('');
@@ -43,8 +45,14 @@ export const RoleSwitcherModal: React.FC<RoleSwitcherModalProps> = ({ isOpen, on
               </div>
             </div>
             <div>
-              <h2 className="text-base font-bold tracking-tight text-white">Access Control & Role Simulator</h2>
-              <p className="text-xs text-slate-400">Switch personas instantly to verify Role-Based Access Control (RBAC)</p>
+              <h2 className="text-base font-bold tracking-tight text-white">
+                {APP_CONFIG.DEMO_MODE ? 'Access Control & Role Simulator' : 'Firebase Authentication'}
+              </h2>
+              <p className="text-xs text-slate-400">
+                {APP_CONFIG.DEMO_MODE
+                  ? 'Switch personas instantly to verify Role-Based Access Control (RBAC)'
+                  : 'Production role and employee identity are resolved by the BBOS server'}
+              </p>
             </div>
           </div>
           <button
@@ -58,18 +66,20 @@ export const RoleSwitcherModal: React.FC<RoleSwitcherModalProps> = ({ isOpen, on
 
         {/* Tab Selector */}
         <div className="flex border-b border-slate-200 bg-slate-50 px-5 pt-3 space-x-4">
-          <button
-            id="tab-switch-persona"
-            onClick={() => setActiveTab('SWITCH_PERSONA')}
-            className={`pb-3 text-xs font-semibold border-b-2 transition-all flex items-center space-x-2 ${
-              activeTab === 'SWITCH_PERSONA'
-                ? 'border-[#7056EE] text-[#7056EE]'
-                : 'border-transparent text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <User className="w-4 h-4" />
-            <span>Select Team Member Persona ({availableUsers.length})</span>
-          </button>
+          {APP_CONFIG.DEMO_MODE && (
+            <button
+              id="tab-switch-persona"
+              onClick={() => setActiveTab('SWITCH_PERSONA')}
+              className={`pb-3 text-xs font-semibold border-b-2 transition-all flex items-center space-x-2 ${
+                activeTab === 'SWITCH_PERSONA'
+                  ? 'border-[#7056EE] text-[#7056EE]'
+                  : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <User className="w-4 h-4" />
+              <span>Select Team Member Persona ({availableUsers.length})</span>
+            </button>
+          )}
           <button
             id="tab-firebase-auth"
             onClick={() => setActiveTab('FIREBASE_AUTH')}
@@ -89,7 +99,7 @@ export const RoleSwitcherModal: React.FC<RoleSwitcherModalProps> = ({ isOpen, on
 
         {/* Modal Content */}
         <div className="p-6 max-h-[70vh] overflow-y-auto space-y-4">
-          {activeTab === 'SWITCH_PERSONA' ? (
+          {activeTab === 'SWITCH_PERSONA' && APP_CONFIG.DEMO_MODE ? (
             <div className="space-y-3">
               <p className="text-xs text-slate-500 font-medium">
                 Select an operational persona to simulate UI permissions, AI capabilities, and data access scope:
@@ -141,7 +151,7 @@ export const RoleSwitcherModal: React.FC<RoleSwitcherModalProps> = ({ isOpen, on
               <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900">
                 <p className="font-semibold">Firebase Authentication Integration</p>
                 <p className="mt-0.5 text-amber-800">
-                  Firebase project is connected. You can log in with an existing Firebase Auth account or continue testing in Instant Role Mode.
+                  Firebase project is connected. BBOS role and employee access are resolved from the server-side employee record after login.
                 </p>
               </div>
 

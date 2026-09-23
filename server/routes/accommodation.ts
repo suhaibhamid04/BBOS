@@ -7,6 +7,7 @@ import {
   canAccessNegotiatedRates,
   sanitizePropertyForRole
 } from '../../src/services/accommodationEngine.js';
+import { sanitizeFinancialData } from '../middleware/financialGuard.js';
 import { DEMO_RATE_PERIODS, DEMO_ACCOMMODATION_PROPERTIES, DEMO_ROOM_CATEGORIES } from '../../src/services/accommodationDemoData.js';
 import { APP_CONFIG } from '../../src/config.js';
 
@@ -18,6 +19,9 @@ import {
   RatePeriodRepo,
   NegotiatedRateRepo
 } from '../../src/services/db/repositories.js';
+
+import { getAdminDb } from '../firebaseAdmin.js';
+import { AccommodationProperty } from '../../src/types/index.js';
 
 export const accommodationRouter = Router();
 
@@ -56,6 +60,109 @@ accommodationRouter.get('/properties/:id', async (req: Request, res: Response) =
     res.json({ success: true, data: sanitizePropertyForRole(property, req.user!.role) });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Failed to fetch property' });
+  }
+});
+
+// ============================================================================
+// PROPERTY MANAGEMENT (CRUD)
+// ============================================================================
+const accommRoles: import('../../src/types/index.js').UserRole[] = ['Founder', 'Admin', 'Operations'];
+
+accommodationRouter.post('/properties', requireRole(accommRoles), async (req: Request, res: Response) => {
+  try {
+    const actor = req.user!;
+    const db = getAdminDb();
+    
+    // Allowlist explicitly for accommodation master data
+    const {
+      name, city, location, description, propertyType, starCategory, 
+      status, amenities, photos, contactName, contactPhone, contactEmail,
+      address, internalNotes, preferredProperty, currency, availabilityStatus
+    } = req.body;
+    
+    const newProperty: Partial<AccommodationProperty> = {
+      name, city, location, description, propertyType, starCategory,
+      status, amenities, photos, contactName, contactPhone, contactEmail,
+      address, internalNotes, preferredProperty, currency, availabilityStatus,
+      id: `accom-${Date.now()}`,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    
+    await db.collection('accommodation_properties').doc(newProperty.id!).set(newProperty);
+    
+    const auditLog = {
+      id: `audit-${Date.now()}`,
+      action: 'PROPERTY_CREATED',
+      entityType: 'INVENTORY',
+      entityId: newProperty.id!,
+      actor: { id: actor.id, name: actor.name, role: actor.role },
+      before: null,
+      after: newProperty,
+      summary: `Property ${newProperty.name} created`,
+      timestamp: new Date().toISOString()
+    };
+    await db.collection('audit_logs').doc(auditLog.id).set(auditLog);
+    
+    res.json({ success: true, data: newProperty });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to create property' });
+  }
+});
+
+accommodationRouter.patch('/properties/:id', requireRole(accommRoles), async (req: Request, res: Response) => {
+  try {
+    const propertyId = req.params.id;
+    const actor = req.user!;
+    const updates = req.body;
+    
+    const db = getAdminDb();
+    const propRef = db.collection('accommodation_properties').doc(propertyId);
+    const docSnap = await propRef.get();
+    
+    if (!docSnap.exists) {
+      return res.status(404).json({ error: 'Property not found' });
+    }
+    
+    const existingProperty = docSnap.data() as AccommodationProperty;
+    
+    const allowedFields = [
+      'name', 'city', 'location', 'description', 'propertyType', 'starCategory', 
+      'status', 'amenities', 'photos', 'contactName', 'contactPhone', 'contactEmail',
+      'address', 'internalNotes', 'preferredProperty', 'currency', 'availabilityStatus'
+    ];
+    
+    const safeUpdates: Partial<AccommodationProperty> = {};
+    for (const key of allowedFields) {
+      if (key in updates && updates[key] !== undefined) {
+        (safeUpdates as any)[key] = updates[key];
+      }
+    }
+    
+    if (Object.keys(safeUpdates).length === 0) {
+      return res.status(400).json({ error: 'No valid fields provided for update.' });
+    }
+    
+    safeUpdates.updatedAt = new Date().toISOString();
+    
+    await propRef.update(safeUpdates);
+    
+    const auditLog = {
+      id: `audit-${Date.now()}`,
+      action: 'PROPERTY_UPDATED',
+      entityType: 'INVENTORY',
+      entityId: propertyId,
+      actor: { id: actor.id, name: actor.name, role: actor.role },
+      before: existingProperty,
+      after: { ...existingProperty, ...safeUpdates },
+      summary: `Property ${existingProperty.name} updated`,
+      timestamp: new Date().toISOString()
+    };
+    await db.collection('audit_logs').doc(auditLog.id).set(auditLog);
+    
+    res.json({ success: true, data: { ...existingProperty, ...safeUpdates } });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to update property' });
   }
 });
 
@@ -185,17 +292,17 @@ accommodationRouter.post('/calculate-rate', async (req: Request, res: Response) 
       }
     }
 
-    // 4. Role-Gated Sanitize (The Core Security Guarantee)
+    // 4. Generate authoritative result and sanitize (The Core Security Guarantee)
     const result = buildRoleGatedResult(
       stayCalc,
       appliedStandardRate,
       appliedNegotiatedRate,
       propertyName,
       roomCategoryName,
-      userRole
+      'Admin' // Generate full payload so the authoritative middleware can sanitize
     );
 
-    res.json({ success: true, data: result });
+    res.json({ success: true, data: sanitizeFinancialData(result, userRole) });
   } catch (error: any) {
     console.error('API Error in /accommodation/calculate-rate:', error);
     res.status(500).json({ error: error.message || 'Internal Server Error' });
@@ -207,7 +314,7 @@ accommodationRouter.post('/calculate-rate', async (req: Request, res: Response) 
 // ============================================================================
 
 accommodationRouter.get('/properties/:id/rates', 
-  requireRole(['Founder', 'Admin', 'Accounts', 'Operations']),
+  requireRole(['Founder', 'Admin', 'Accounts', 'Reservations']),
   async (req: Request, res: Response) => {
     try {
       let rates = [];
@@ -217,14 +324,14 @@ accommodationRouter.get('/properties/:id/rates',
         const allRates = await RatePeriodRepo.getAll();
         rates = allRates.filter(r => r.propertyId === req.params.id);
       }
-      res.json({ success: true, data: rates });
+      res.json({ success: true, data: sanitizeFinancialData(rates, req.user!.role) });
     } catch (error: any) {
       res.status(500).json({ error: error.message || 'Failed to fetch rates' });
     }
 });
 
 accommodationRouter.get('/properties/:id/negotiated-rates', 
-  requireRole(['Founder', 'Admin', 'Accounts']),
+  requireRole(['Founder', 'Admin', 'Accounts', 'Reservations']),
   async (req: Request, res: Response) => {
     try {
       let rates = [];
@@ -234,7 +341,7 @@ accommodationRouter.get('/properties/:id/negotiated-rates',
         const allRates = await NegotiatedRateRepo.getAll();
         rates = allRates.filter(r => r.propertyId === req.params.id);
       }
-      res.json({ success: true, data: rates });
+      res.json({ success: true, data: sanitizeFinancialData(rates, req.user!.role) });
     } catch (error: any) {
       res.status(500).json({ error: error.message || 'Failed to fetch negotiated rates' });
     }
