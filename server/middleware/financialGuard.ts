@@ -38,15 +38,20 @@ const PROFIT_MARGIN_KEYS = [
   'estimatedGrossMargin'
 ];
 
-const FULL_FINANCIAL_ROLES: readonly UserRole[] = ['Founder', 'Admin', 'Accounts'];
-const SUPPLIER_COST_ROLES: readonly UserRole[] = [
-  ...FULL_FINANCIAL_ROLES,
-  'Reservations',
-];
-const PROFIT_MARGIN_ROLES: readonly UserRole[] = [
-  ...FULL_FINANCIAL_ROLES,
-  'Sales Manager',
-];
+type FinancialVisibility = 'FULL' | 'SUPPLIER_ONLY' | 'PROFIT_ONLY' | 'REDACTED';
+
+// Defense-in-depth for legacy endpoints. Stage C detail endpoints use the
+// resource-aware DTO policy after authorization instead of this coarse matrix.
+const ROLE_FINANCIAL_VISIBILITY: Record<UserRole, FinancialVisibility> = {
+  Founder: 'FULL',
+  Admin: 'FULL',
+  Accounts: 'FULL',
+  'Sales Manager': 'PROFIT_ONLY',
+  'Sales Executive': 'REDACTED',
+  Reservations: 'SUPPLIER_ONLY',
+  Operations: 'REDACTED',
+  Marketing: 'REDACTED',
+};
 
 /**
  * Strips confidential supplier cost, profit, and internal margin data based on UserRole.
@@ -65,13 +70,14 @@ export function sanitizeFinancialData<T>(data: T, userRole: UserRole | string | 
   // guarantee that a stored role is recognized, so unknown roles must receive
   // the most restrictive response rather than falling through to full access.
   const recognizedRole = isUserRole(userRole) ? userRole : undefined;
+  const visibility = recognizedRole ? ROLE_FINANCIAL_VISIBILITY[recognizedRole] : 'REDACTED';
 
   if (data instanceof Date) {
     return new Date(data.getTime()) as unknown as T;
   }
 
   // Full financial access
-  if (recognizedRole && FULL_FINANCIAL_ROLES.includes(recognizedRole)) {
+  if (visibility === 'FULL') {
     return data;
   }
 
@@ -84,13 +90,13 @@ export function sanitizeFinancialData<T>(data: T, userRole: UserRole | string | 
   for (const [key, value] of Object.entries(data as Record<string, any>)) {
     // 1. Supplier costs use an explicit allowlist so new/unknown roles fail closed.
     if (SUPPLIER_COST_KEYS.includes(key) &&
-        (!recognizedRole || !SUPPLIER_COST_ROLES.includes(recognizedRole))) {
+        visibility !== 'SUPPLIER_ONLY') {
       continue;
     }
 
     // 2. Profit/margin uses a separate allowlist; Reservations is excluded.
     if (PROFIT_MARGIN_KEYS.includes(key) &&
-        (!recognizedRole || !PROFIT_MARGIN_ROLES.includes(recognizedRole))) {
+        visibility !== 'PROFIT_ONLY') {
       continue;
     }
 

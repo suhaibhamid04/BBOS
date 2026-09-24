@@ -77,6 +77,8 @@ export interface Booking {
   travelEndDate: string;   // ISO Date YYYY-MM-DD
   assignedSalesEmployeeId?: string;
   assignedSalesManagerId?: string;
+  /** Immutable sales-team snapshot copied from the commercial resource. */
+  salesTeamId?: string;
   /** Stable BBOS employeeId; future Stage C access will be ASSIGNED-scoped. */
   assignedReservationsEmployeeId?: string;
   assignedOperationsEmployeeId?: string;

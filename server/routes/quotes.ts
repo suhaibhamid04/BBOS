@@ -5,6 +5,12 @@ import {
   ConversionError,
 } from '../services/quoteConversionService.js';
 import { sanitizeFinancialData } from '../middleware/financialGuard.js';
+import { APP_CONFIG } from '../../src/config.js';
+import { DEMO_QUOTES } from '../../src/services/demoData.js';
+import { getAdminDb } from '../firebaseAdmin.js';
+import { assertAuthorizedResource, ResourceAuthorizationError } from '../authorization/assertAuthorizedResource.js';
+import { quoteResourceContext } from '../authorization/resourceContext.js';
+import { buildResourceDto } from '../authorization/resourceDto.js';
 
 export const quotesRouter = Router();
 const quoteConversionService = new QuoteConversionService();
@@ -82,3 +88,49 @@ quotesRouter.get('/', requireRole(['Founder', 'Admin', 'Accounts', 'Operations',
     res.status(500).json({ error: error.message || 'Failed to fetch quotes' });
   }
 });
+
+/** Stage C proof path: resource authorization precedes financial projection. */
+quotesRouter.get(
+  '/:id',
+  requireRole(['Founder', 'Admin', 'Accounts', 'Sales Manager', 'Sales Executive']),
+  async (req: Request, res: Response) => {
+    try {
+      const quoteId = req.params.id;
+      let quote: Record<string, any> | undefined;
+
+      if (APP_CONFIG.DEMO_MODE) {
+        quote = DEMO_QUOTES.find(candidate => candidate.id === quoteId) as unknown as Record<string, any> | undefined;
+      } else {
+        const snapshot = await getAdminDb().collection('quotes').doc(quoteId).get();
+        if (snapshot.exists) quote = { ...snapshot.data(), id: snapshot.id };
+      }
+
+      if (!quote) return res.status(404).json({ error: 'Quote not found', code: 'QUOTE_NOT_FOUND' });
+
+      const normalizedQuote = { ...quote };
+      if ('totalCost' in normalizedQuote && normalizedQuote.totalSupplierCost === undefined) {
+        normalizedQuote.totalSupplierCost = normalizedQuote.totalCost;
+        delete normalizedQuote.totalCost;
+      }
+
+      const principal = req.user!;
+      const authorization = assertAuthorizedResource(
+        principal,
+        'QUOTE',
+        'READ_DETAIL',
+        quoteResourceContext(normalizedQuote),
+      );
+
+      return res.status(200).json({
+        success: true,
+        data: buildResourceDto(principal, 'QUOTE', normalizedQuote, authorization),
+      });
+    } catch (error) {
+      if (error instanceof ResourceAuthorizationError) {
+        return res.status(error.statusCode).json({ error: error.message, code: error.code });
+      }
+      console.error('API Error in GET /quotes/:id:', error);
+      return res.status(500).json({ error: 'Failed to fetch quote' });
+    }
+  },
+);

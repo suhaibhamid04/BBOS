@@ -388,6 +388,7 @@ export class QuoteConversionService {
         travelStartDate,
         travelEndDate,
         assignedSalesEmployeeId: freshQuote.salesEmployeeId || actor.id,
+        ...(freshQuote.salesTeamId ? { salesTeamId: freshQuote.salesTeamId } : {}),
         schemaVersion: '2B-5',
         createdAt: now,
         updatedAt: now,

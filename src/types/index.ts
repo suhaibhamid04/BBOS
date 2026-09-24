@@ -417,6 +417,8 @@ export interface Quote {
   termsAndConditions?: string;
   salesEmployeeId?: string;
   salesEmployeeName?: string;
+  /** Immutable sales-team snapshot used for TEAM-scoped authorization. */
+  salesTeamId?: string;
   version: number;
   versionHistory?: QuoteVersion[];
   isDemo?: boolean;
@@ -457,6 +459,8 @@ export interface Trip {
   grossMargin: number;
   budget?: number;
   assignedSalesEmployeeId?: string;
+  /** Immutable sales-team snapshot used for TEAM-scoped authorization. */
+  salesTeamId?: string;
   assignedReservationsEmployeeId?: string;
   assignedOperationsEmployeeId?: string;
   createdAt: string;

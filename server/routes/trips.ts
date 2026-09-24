@@ -2,6 +2,10 @@ import { Router, Request, Response } from 'express';
 import { requireRole } from '../middleware/auth.js';
 import { getAdminDb } from '../firebaseAdmin.js';
 import { APP_CONFIG } from '../../src/config.js';
+import { DEMO_TRIPS } from '../../src/services/demoData.js';
+import { assertAuthorizedResource, ResourceAuthorizationError } from '../authorization/assertAuthorizedResource.js';
+import { tripResourceContext } from '../authorization/resourceContext.js';
+import { buildResourceDto } from '../authorization/resourceDto.js';
 
 // Accommodation
 import { DEMO_ACCOMMODATION_PROPERTIES, DEMO_ROOM_CATEGORIES, DEMO_RATE_PERIODS } from '../../src/services/accommodationDemoData.js';
@@ -266,3 +270,52 @@ tripsRouter.get('/', requireRole(['Founder', 'Admin', 'Accounts', 'Operations', 
     res.status(500).json({ error: error.message || 'Failed to fetch trips' });
   }
 });
+
+/**
+ * Representative Stage C integration. Unlike the legacy list endpoint, this
+ * detail path authorizes the concrete trip before applying its response DTO.
+ */
+tripsRouter.get(
+  '/:id',
+  requireRole(['Founder', 'Admin', 'Accounts', 'Sales Manager', 'Sales Executive', 'Reservations', 'Operations']),
+  async (req: Request, res: Response) => {
+    try {
+      const tripId = req.params.id;
+      let trip: Record<string, any> | undefined;
+
+      if (APP_CONFIG.DEMO_MODE) {
+        trip = DEMO_TRIPS.find(candidate => candidate.id === tripId) as unknown as Record<string, any> | undefined;
+      } else {
+        const snapshot = await getAdminDb().collection('trips').doc(tripId).get();
+        if (snapshot.exists) trip = { ...snapshot.data(), id: snapshot.id };
+      }
+
+      if (!trip) return res.status(404).json({ error: 'Trip not found', code: 'TRIP_NOT_FOUND' });
+
+      const normalizedTrip = { ...trip };
+      if ('totalCost' in normalizedTrip && normalizedTrip.totalSupplierCost === undefined) {
+        normalizedTrip.totalSupplierCost = normalizedTrip.totalCost;
+        delete normalizedTrip.totalCost;
+      }
+
+      const principal = req.user!;
+      const authorization = assertAuthorizedResource(
+        principal,
+        'TRIP',
+        'READ_DETAIL',
+        tripResourceContext(normalizedTrip),
+      );
+
+      return res.status(200).json({
+        success: true,
+        data: buildResourceDto(principal, 'TRIP', normalizedTrip, authorization),
+      });
+    } catch (error) {
+      if (error instanceof ResourceAuthorizationError) {
+        return res.status(error.statusCode).json({ error: error.message, code: error.code });
+      }
+      console.error('API Error in GET /trips/:id:', error);
+      return res.status(500).json({ error: 'Failed to fetch trip' });
+    }
+  },
+);

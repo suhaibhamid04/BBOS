@@ -460,8 +460,9 @@ export const DEMO_QUOTES: Quote[] = [
     updatedAt: '2026-08-21T15:30:00Z',
     version: 1,
     versionHistory: [],
-    salesEmployeeId: 'emp-01',
+    salesEmployeeId: 'emp-sales-01',
     salesEmployeeName: 'Suhaib Hamid',
+    salesTeamId: 'sales-team-01',
     hotels: [
       {
         hotelId: 'hotel-lalit-srinagar',
@@ -556,6 +557,8 @@ export const DEMO_BOOKINGS: Booking[] = [
     amountPending: 0,
     paymentStatus: 'PAID',
     status: 'COMPLETED',
+    assignedSalesEmployeeId: 'emp-sales-01',
+    salesTeamId: 'sales-team-01',
     assignedReservationsEmployeeId: 'emp-res-01',
     schemaVersion: '2B-5',
     createdAt: '2026-04-12T10:00:00Z',
@@ -866,6 +869,7 @@ export const DEMO_TRIPS: Trip[] = [
     grossMargin: 32.8,
     budget: 120000,
     assignedSalesEmployeeId: 'emp-sales-01',
+    salesTeamId: 'sales-team-01',
     assignedReservationsEmployeeId: 'emp-res-01',
     createdAt: '2026-08-20T10:00:00Z',
     updatedAt: '2026-08-20T10:00:00Z',
