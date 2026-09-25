@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from 'bun:test';
 import { sanitizeFinancialData } from '../../server/middleware/financialGuard.js';
+import { authorizeResource } from '../../server/authorization/policyEngine.js';
 import { validateToolAccess } from '../../server/ai/toolGateway.js';
 import { UserRole } from '../../src/types/index.js';
 
@@ -47,17 +48,21 @@ describe('1. Financial Data Sanitization (Data Layer Protection)', () => {
     expect(accountsView.grossMargin).toBe(38.8);
   });
 
-  it('Sales Manager can see gross margin and profit, but raw supplier costs are stripped', () => {
-    const managerView = sanitizeFinancialData(sampleTripCostPayload, 'Sales Manager');
+  it('Sales Manager TEAM receives supplier cost, selling price, profit, and margin', () => {
+    const managerDecision = authorizeResource(
+      { employeeId: 'manager-1', firebaseUid: 'firebase-manager-1', role: 'Sales Manager', active: true, salesTeamId: 'team-a' },
+      'TRIP',
+      'READ_DETAIL',
+      { ownerEmployeeId: 'exec-1', salesTeamId: 'team-a', status: 'DRAFT' },
+    );
+    const managerView = sanitizeFinancialData(sampleTripCostPayload, 'Sales Manager', managerDecision);
     expect(managerView.sellingPrice).toBe(85000);
     expect(managerView.grossMargin).toBe(38.8);
     expect(managerView.grossProfit).toBe(33000);
-    
-    // Base supplier costs must be stripped
-    expect((managerView as any).supplierCost).toBeUndefined();
-    expect((managerView as any).internalCost).toBeUndefined();
-    expect((managerView as any).supplierPayment).toBeUndefined();
-    expect((managerView.itinerary[0].hotel as any).supplierCost).toBeUndefined();
+    expect(managerView.supplierCost).toBe(52000);
+    expect(managerView.internalCost).toBe(49000);
+    expect(managerView.supplierPayment).toBeDefined();
+    expect(managerView.itinerary[0].hotel.supplierCost).toBe(12000);
   });
 
   it('Sales Executive and Marketing MUST NOT receive supplier cost or margin metrics', () => {
@@ -134,7 +139,10 @@ describe('2. Tool Invocation Gateway (RBAC Execution Guards)', () => {
 });
 
 describe('3. Firestore Security Rules Specification Verification', () => {
-  it('Documents security invariants enforced by firestore.rules', () => {
+  it('Documents security invariants enforced by firestore.rules', async () => {
+    const rules = await Bun.file('firestore.rules').text();
+    const quoteRules = rules.match(/match \/quotes\/\{quoteId\} \{([\s\S]*?)\n    \}/)?.[1] || '';
+    const auditRules = rules.match(/match \/audit_logs\/\{logId\} \{([\s\S]*?)\n    \}/)?.[1] || '';
     const securityInvariants = {
       unauthenticatedAccessDenied: true,
       auditLogsImmutableAndAppendOnly: true,
@@ -142,12 +150,19 @@ describe('3. Firestore Security Rules Specification Verification', () => {
       employeePermissionsModifiableOnlyByAdminOrFounder: true,
       employeeDeletionRestrictedToFounder: true,
       auditLogsReadableOnlyByAdminAndAccounts: true,
-      catchAllRuleDeniesUnlistedPaths: true
+      catchAllRuleDeniesUnlistedPaths: true,
+      quotesAreServerOnly: /allow read, create, update, delete: if false;/.test(quoteRules),
+      quoteAuditEventsAreServerOnly:
+        auditRules.includes('QUOTE_CREATED') &&
+        auditRules.includes('QUOTE_UPDATED') &&
+        auditRules.includes('QUOTE_CONVERTED_TO_BOOKING'),
     };
 
     expect(securityInvariants.unauthenticatedAccessDenied).toBe(true);
     expect(securityInvariants.auditLogsImmutableAndAppendOnly).toBe(true);
     expect(securityInvariants.messagesAppendOnly).toBe(true);
     expect(securityInvariants.employeePermissionsModifiableOnlyByAdminOrFounder).toBe(true);
+    expect(securityInvariants.quotesAreServerOnly).toBe(true);
+    expect(securityInvariants.quoteAuditEventsAreServerOnly).toBe(true);
   });
 });

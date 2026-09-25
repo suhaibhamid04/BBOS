@@ -54,7 +54,6 @@ export const LeadRepo = new FirestoreRepository<any>('leads');
 export const ConversationRepo = new FirestoreRepository<any>('conversations');
 export const MessageRepo = new FirestoreRepository<any>('messages');
 export const TaskRepo = new FirestoreRepository<any>('tasks');
-export const QuoteRepo = new FirestoreRepository<any>('quotes');
 export const BookingRepo = new FirestoreRepository<any>('bookings');
 export const TripRepo = new FirestoreRepository<any>('trips');
 export const ItineraryDayRepo = new FirestoreRepository<any>('itinerary_days');

@@ -11,8 +11,10 @@ export interface BookingWithServices {
 
 export interface ConversionTransaction {
   get(collectionName: string, docId: string): Promise<any | null>;
+  findByField(collectionName: string, field: string, value: unknown, limit?: number): Promise<any[]>;
   set(collectionName: string, docId: string, data: any): void;
   update(collectionName: string, docId: string, data: any): void;
+  delete(collectionName: string, docId: string): void;
 }
 
 export interface ConversionStorageProvider {
@@ -113,6 +115,7 @@ export class InMemoryConversionStorageProvider implements ConversionStorageProvi
       const readVersions = new Map<string, number>();
       const stagedSets = new Map<string, { collection: string; id: string; data: any }>();
       const stagedUpdates = new Map<string, { collection: string; id: string; data: any }>();
+      const stagedDeletes = new Map<string, { collection: string; id: string }>();
 
       const txn: ConversionTransaction = {
         get: async (collectionName: string, docId: string) => {
@@ -128,10 +131,24 @@ export class InMemoryConversionStorageProvider implements ConversionStorageProvi
             const base = this.rawGet(collectionName, docId) || {};
             return { ...base, ...stagedUpdates.get(key)!.data };
           }
+          if (stagedDeletes.has(key)) return null;
 
           const currentVer = this.docVersions.get(key) || 0;
           readVersions.set(key, currentVer);
           return this.rawGet(collectionName, docId);
+        },
+
+        findByField: async (collectionName: string, field: string, value: unknown, limit = 2) => {
+          await new Promise(r => setTimeout(r, 2));
+          const matches: any[] = [];
+          for (const [docId, storedValue] of this.getCollection(collectionName).entries()) {
+            if (storedValue?.[field] !== value) continue;
+            const key = this.getKey(collectionName, docId);
+            readVersions.set(key, this.docVersions.get(key) || 0);
+            matches.push(JSON.parse(JSON.stringify(storedValue)));
+            if (matches.length >= limit) break;
+          }
+          return matches;
         },
 
         set: (collectionName: string, docId: string, data: any) => {
@@ -142,6 +159,11 @@ export class InMemoryConversionStorageProvider implements ConversionStorageProvi
         update: (collectionName: string, docId: string, data: any) => {
           const key = this.getKey(collectionName, docId);
           stagedUpdates.set(key, { collection: collectionName, id: docId, data: JSON.parse(JSON.stringify(data)) });
+        },
+
+        delete: (collectionName: string, docId: string) => {
+          const key = this.getKey(collectionName, docId);
+          stagedDeletes.set(key, { collection: collectionName, id: docId });
         },
       };
 
@@ -170,6 +192,12 @@ export class InMemoryConversionStorageProvider implements ConversionStorageProvi
         }
         for (const item of stagedUpdates.values()) {
           this.rawUpdate(item.collection, item.id, item.data);
+        }
+        for (const item of stagedDeletes.values()) {
+          const collection = this.getCollection(item.collection);
+          collection.delete(item.id);
+          this.globalVersion++;
+          this.docVersions.set(this.getKey(item.collection, item.id), this.globalVersion);
         }
 
         return result;
@@ -258,7 +286,7 @@ export class FirestoreConversionStorageProvider implements ConversionStorageProv
   async getQuote(quoteId: string): Promise<any | null> {
     const db = getAdminDb();
     const snap = await db.collection('quotes').doc(quoteId).get();
-    return snap.exists ? snap.data() : null;
+    return snap.exists ? { ...snap.data(), id: snap.id } : null;
   }
 
   async runTransaction<T>(updateFunction: (transaction: ConversionTransaction) => Promise<T>): Promise<T> {
@@ -270,7 +298,12 @@ export class FirestoreConversionStorageProvider implements ConversionStorageProv
             ? db.doc(`${collectionName}/${docId}`)
             : db.collection(collectionName).doc(docId);
           const snap = await firestoreTx.get(docRef);
-          return snap.exists ? snap.data() : null;
+          return snap.exists ? { ...snap.data(), id: snap.id } : null;
+        },
+        async findByField(collectionName: string, field: string, value: unknown, limit = 2) {
+          const query = db.collection(collectionName).where(field, '==', value).limit(limit);
+          const snapshot = await firestoreTx.get(query);
+          return snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
         },
         set(collectionName: string, docId: string, data: any) {
           const docRef = collectionName.includes('/')
@@ -283,6 +316,12 @@ export class FirestoreConversionStorageProvider implements ConversionStorageProv
             ? db.doc(`${collectionName}/${docId}`)
             : db.collection(collectionName).doc(docId);
           firestoreTx.update(docRef, data);
+        },
+        delete(collectionName: string, docId: string) {
+          const docRef = collectionName.includes('/')
+            ? db.doc(`${collectionName}/${docId}`)
+            : db.collection(collectionName).doc(docId);
+          firestoreTx.delete(docRef);
         },
       };
       return updateFunction(txnWrapper);

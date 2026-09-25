@@ -14,27 +14,43 @@ describe('BBOS Phase 2B-5 Stage 4 — Quote-to-Booking Conversion Engine', () =>
   let service: QuoteConversionService;
 
   const salesExecActor: ConversionActor = {
-    id: 'emp-sales-01',
+    id: 'compat-sales-01',
+    employeeId: 'emp-sales-01',
     uid: 'sales-uid-01',
     name: 'Tariq Bhat',
     email: 'tariq.sales@bookingbridge.com',
     role: 'Sales Executive',
+    active: true,
+    salesTeamId: 'sales-team-01',
   };
 
   const founderActor: ConversionActor = {
-    id: 'emp-founder-01',
+    id: 'compat-founder-01',
+    employeeId: 'emp-founder-01',
     uid: 'founder-uid-01',
     name: 'Suhaib Hamid',
     email: 'suhaib@bookingbridge.com',
     role: 'Founder',
+    active: true,
   };
 
   const accountsActor: ConversionActor = {
-    id: 'emp-acc-01',
+    id: 'compat-acc-01',
+    employeeId: 'emp-acc-01',
     uid: 'acc-uid-01',
     name: 'Farooq Lone',
     email: 'farooq.accounts@bookingbridge.com',
     role: 'Accounts',
+    active: true,
+  };
+
+  const salesManagerActor: ConversionActor = {
+    id: 'compat-manager-01',
+    employeeId: 'emp-manager-01',
+    name: 'Team Manager',
+    role: 'Sales Manager',
+    active: true,
+    salesTeamId: 'sales-team-01',
   };
 
   const createBaseQuote = (overrides?: Partial<Quote>): Quote => ({
@@ -54,6 +70,8 @@ describe('BBOS Phase 2B-5 Stage 4 — Quote-to-Booking Conversion Engine', () =>
     validUntil: '2026-10-31',
     createdAt: '2026-09-01T10:00:00Z',
     version: 1,
+    salesEmployeeId: 'emp-sales-01',
+    salesTeamId: 'sales-team-01',
     hotels: [
       {
         id: 'q-hotel-1',
@@ -122,6 +140,9 @@ describe('BBOS Phase 2B-5 Stage 4 — Quote-to-Booking Conversion Engine', () =>
     });
 
     expect(result.success).toBe(true);
+    expect(result.booking.assignedSalesEmployeeId).toBe(salesExecActor.employeeId);
+    expect(result.booking.salesTeamId).toBe(salesExecActor.salesTeamId);
+    expect(salesExecActor.id).not.toBe(salesExecActor.employeeId);
     expect(result.booking).toBeDefined();
     expect(result.booking.id).toBeDefined();
     expect(result.booking.bookingReference.startsWith('BB-')).toBe(true);
@@ -739,5 +760,108 @@ describe('BBOS Phase 2B-5 Stage 4 — Quote-to-Booking Conversion Engine', () =>
     const logs = storage.getAllAuditLogs();
     const audit = logs.find(l => l.action === 'QUOTE_CONVERTED_TO_BOOKING');
     expect(audit).toBeUndefined();
+  });
+
+  it('29. Executive conversion is OWN-only and denial performs zero mutation', async () => {
+    const otherExecutive: ConversionActor = {
+      ...salesExecActor,
+      id: 'compat-sales-02',
+      employeeId: 'emp-sales-02',
+    };
+
+    let error: any;
+    try {
+      await service.convertQuoteToBooking('quote-stage4-01', otherExecutive, {
+        currentDate: '2026-09-15',
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error?.statusCode).toBe(403);
+    expect(error?.code).toBe('RESOURCE_ACCESS_DENIED');
+    expect(storage.getAllBookings()).toHaveLength(0);
+    expect(storage.getAllConversions()).toHaveLength(0);
+    expect(storage.getAllAuditLogs()).toHaveLength(0);
+    expect(storage.rawGet('quotes', 'quote-stage4-01').status).toBe('SENT');
+  });
+
+  it('30. Sales Manager conversion is TEAM-only', async () => {
+    const allowed = await service.convertQuoteToBooking('quote-stage4-01', salesManagerActor, {
+      currentDate: '2026-09-15',
+    });
+    expect(allowed.success).toBe(true);
+
+    storage = new InMemoryConversionStorageProvider({ quotes: [createBaseQuote()] });
+    service = new QuoteConversionService(storage, new DefaultInventoryDataProvider());
+    const otherTeamManager: ConversionActor = {
+      ...salesManagerActor,
+      id: 'compat-manager-02',
+      employeeId: 'emp-manager-02',
+      salesTeamId: 'sales-team-02',
+    };
+
+    await expect(service.convertQuoteToBooking('quote-stage4-01', otherTeamManager, {
+      currentDate: '2026-09-15',
+    })).rejects.toMatchObject({ statusCode: 403, code: 'RESOURCE_ACCESS_DENIED' });
+    expect(storage.getAllBookings()).toHaveLength(0);
+  });
+
+  it('31. Missing owner or team metadata fails closed before conversion', async () => {
+    for (const quote of [
+      createBaseQuote({ salesEmployeeId: undefined }),
+      createBaseQuote({ salesTeamId: undefined }),
+    ]) {
+      storage = new InMemoryConversionStorageProvider({ quotes: [quote] });
+      service = new QuoteConversionService(storage, new DefaultInventoryDataProvider());
+      let error: any;
+      try {
+        await service.convertQuoteToBooking(quote.id, salesExecActor, { currentDate: '2026-09-15' });
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error?.statusCode).toBeGreaterThanOrEqual(400);
+      expect(storage.getAllBookings()).toHaveLength(0);
+      expect(storage.getAllConversions()).toHaveLength(0);
+    }
+  });
+
+  it('32. Operations cannot convert Quotes', async () => {
+    const operations: ConversionActor = {
+      id: 'compat-ops-01',
+      employeeId: 'emp-ops-01',
+      name: 'Operations User',
+      role: 'Operations',
+      active: true,
+    };
+    await expect(service.convertQuoteToBooking('quote-stage4-01', operations, {
+      currentDate: '2026-09-15',
+    })).rejects.toMatchObject({ statusCode: 403 });
+    expect(storage.getAllBookings()).toHaveLength(0);
+  });
+
+  it('33. Existing approval-required policy context blocks conversion without inventing a threshold', async () => {
+    const quote = createBaseQuote({
+      requiresLowMarginApproval: true,
+      approval: { required: true, state: 'PENDING' },
+    });
+    storage.rawSet('quotes', quote.id, quote);
+
+    await expect(service.convertQuoteToBooking(quote.id, salesExecActor, {
+      currentDate: '2026-09-15',
+    })).rejects.toMatchObject({ statusCode: 403, code: 'RESOURCE_ACCESS_DENIED' });
+    expect(storage.getAllBookings()).toHaveLength(0);
+  });
+
+  it('34. PENDING_APPROVAL is not a convertible workflow state', async () => {
+    const quote = createBaseQuote({ status: 'PENDING_APPROVAL' });
+    storage.rawSet('quotes', quote.id, quote);
+
+    await expect(service.convertQuoteToBooking(quote.id, salesExecActor, {
+      currentDate: '2026-09-15',
+    })).rejects.toMatchObject({ statusCode: 403, code: 'RESOURCE_ACCESS_DENIED' });
+    expect(storage.getAllBookings()).toHaveLength(0);
+    expect(storage.getAllConversions()).toHaveLength(0);
+    expect(storage.getAllAuditLogs()).toHaveLength(0);
   });
 });

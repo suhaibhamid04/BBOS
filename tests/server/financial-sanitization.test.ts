@@ -1,7 +1,5 @@
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test';
-import { Request, Response } from 'express';
 import express from 'express';
-import { bookingsRouter } from '../../server/routes/bookings';
 import { accommodationRouter } from '../../server/routes/accommodation';
 import { transportRouter } from '../../server/routes/transport';
 import { tripsRouter } from '../../server/routes/trips';
@@ -39,36 +37,12 @@ const mockBookingData = {
   }
 };
 
-import { BookingQueryService } from '../../src/services/booking/bookingQueryService';
-
-BookingQueryService.prototype.getBookingDetail = async () => (mockBookingData as any);
-
 describe('TICKET-001 & TICKET-009: API Financial Data Sanitization', () => {
-  let req: Partial<Request>;
-  let res: Partial<Response>;
-  let jsonMock: any;
-  let statusMock: any;
-  let handler: any;
-
-  beforeEach(() => {
-    jsonMock = mock((data: any) => data);
-    statusMock = mock((code: number) => ({ json: jsonMock }));
-    res = { json: jsonMock, status: statusMock };
-    const route = (bookingsRouter as any).stack.find((r: any) => r.route && r.route.path === '/:bookingId' && r.route.methods.get);
-    handler = route.route.stack[route.route.stack.length - 1].handle;
-  });
-
-  afterEach(() => {
-    mock.restore();
-  });
-
   const getApiResponseForRole = async (role: string) => {
-    req = {
-      params: { bookingId: 'bkg-1' },
-      user: { id: 'usr-1', uid: 'uid-1', role, name: 'Test' } as any
-    };
-    await handler(req as Request, res as Response, () => {});
-    return jsonMock.mock.calls[0][0].data;
+    // Legacy endpoints without a resource authorization decision must remain
+    // fail-closed. Stage D3A Booking endpoints are tested separately through
+    // their explicit resource-scoped Booking DTOs.
+    return sanitizeFinancialData(mockBookingData, role);
   };
 
   it('1. Founder receives authorized financial fields', async () => {
@@ -96,10 +70,10 @@ describe('TICKET-001 & TICKET-009: API Financial Data Sanitization', () => {
     expect(data.quoteItems[0].supplierCost).toBeUndefined();
   });
 
-  it('5. Sales Manager receives allowed margin fields', async () => {
+  it('5. Unscoped legacy Sales Manager response fails closed without a resource decision', async () => {
     const data = await getApiResponseForRole('Sales Manager');
-    expect(data.grossProfit).toBe(10000);
-    expect(data.grossMargin).toBe(20);
+    expect(data.grossProfit).toBeUndefined();
+    expect(data.grossMargin).toBeUndefined();
   });
 
   it('6. Sales Executive does not receive supplierCost', async () => {
@@ -214,7 +188,29 @@ describe('HTTP Integration Tests for calculate-rate and calculate-costs', () => 
     app = express();
     app.use(express.json());
     app.use((req: any, res: any, next: any) => {
-      req.user = { id: 'usr-1', role: req.headers['x-role'] as string };
+      const role = req.headers['x-role'] as UserRole;
+      const identityByRole: Record<UserRole, { employeeId: string; salesTeamId?: string }> = {
+        Founder: { employeeId: 'emp-founder-01' },
+        Admin: { employeeId: 'emp-admin-01' },
+        Accounts: { employeeId: 'emp-acc-01' },
+        'Sales Manager': { employeeId: 'emp-mgr-01', salesTeamId: 'sales-team-01' },
+        'Sales Executive': { employeeId: 'emp-sales-01', salesTeamId: 'sales-team-01' },
+        Reservations: { employeeId: 'emp-res-01' },
+        Operations: { employeeId: 'emp-ops-01' },
+        Marketing: { employeeId: 'emp-mkt-01' },
+      };
+      const identity = identityByRole[role];
+      req.user = {
+        id: `compat:${identity.employeeId}`,
+        uid: identity.employeeId,
+        firebaseUid: `firebase:${identity.employeeId}`,
+        employeeId: identity.employeeId,
+        role,
+        active: true,
+        name: role,
+        email: `${identity.employeeId}@example.com`,
+        ...identity,
+      };
       next();
     });
     app.use('/api/accommodation', accommodationRouter);
@@ -261,7 +257,7 @@ describe('HTTP Integration Tests for calculate-rate and calculate-costs', () => 
   };
 
   const tripsPayload = {
-    tripId: 'trip-1',
+    tripId: 'trip-demo-01',
     items: []
   };
 
@@ -328,24 +324,22 @@ describe('HTTP Integration Tests for calculate-rate and calculate-costs', () => 
     expect(res.data.supplementCost).toBeUndefined();
   });
 
-  it('Sales Executive: Trips calculate-costs hides supplier costs but keeps malformed fields safe', async () => {
+  it('Sales Executive OWN: Trips calculate-costs returns full authorized financials', async () => {
     const res = await fetchAsRole('/api/trips/calculate-costs', tripsPayload, 'Sales Executive');
     expect(res.success).toBe(true);
-    expect(res.data.totalSupplierCost).toBeUndefined();
+    expect(res.data.totalSupplierCost).toBe(0);
+    expect(res.data.grossProfit).toBe(82500);
+    expect(res.data.grossMargin).toBe(100);
   });
 
-  it('Operations: Trips calculate-costs hides supplier costs and margins', async () => {
+  it('Operations: Trips calculate-costs is denied before calculation', async () => {
     const res = await fetchAsRole('/api/trips/calculate-costs', tripsPayload, 'Operations');
-    expect(res.success).toBe(true);
-    expect(res.data.totalSupplierCost).toBeUndefined();
-    expect(res.data.grossProfit).toBeUndefined();
+    expect(res.code).toBe('RESOURCE_ACCESS_DENIED');
   });
 
-  it('Reservations: Trips calculate-costs shows supplier costs but hides margins', async () => {
+  it('Reservations: Trips calculate-costs is denied commercial mutation authority', async () => {
     const res = await fetchAsRole('/api/trips/calculate-costs', tripsPayload, 'Reservations');
-    expect(res.success).toBe(true);
-    expect(res.data.totalSupplierCost).toBeDefined();
-    expect(res.data.grossProfit).toBeUndefined();
+    expect(res.code).toBe('RESOURCE_ACCESS_DENIED');
   });
 
   it('Admin: Trips calculate-costs shows everything', async () => {

@@ -35,6 +35,7 @@ function makeBooking(overrides: Partial<Booking> = {}): Booking {
     amountPending: 0,
     travelStartDate: '2026-12-01',
     travelEndDate: '2026-12-07',
+    assignedReservationsEmployeeId: 'emp-res-01',
     confirmationProgress: {
       totalServices: 3,
       confirmedServices: 0,
@@ -53,7 +54,7 @@ function makeAccommodation(overrides: Partial<BookingAccommodation> = {}): Booki
   return {
     id: 'acc-01', bookingId: 'book-01', tripId: 'trip-01', customerId: 'cust-01',
     propertyId: 'prop-01', propertyName: 'Test Hotel', roomCategoryId: 'rc-01', roomCategoryName: 'Deluxe',
-    mealPlan: 'BB', checkInDate: '2026-12-01', checkOutDate: '2026-12-04', nightsCount: 3,
+    mealPlan: 'CP', checkInDate: '2026-12-01', checkOutDate: '2026-12-04', nightsCount: 3,
     roomsCount: 1, adultsCount: 2, childrenCount: 0,
     supplierId: 'sup-01', confirmationStatus: 'REQUESTED', voucherStatus: 'PENDING',
     schemaVersion: '2B-5', createdAt: '2026-09-01T00:00:00Z', updatedAt: '2026-09-01T00:00:00Z',
@@ -83,16 +84,17 @@ function makeActivity(overrides: Partial<BookingActivity> = {}): BookingActivity
   };
 }
 
-const opsActor = { id: 'emp-ops-01', name: 'Ops Manager', role: 'Operations' as const };
-const adminActor = { id: 'emp-admin-01', name: 'Admin User', role: 'Admin' as const };
-const salesActor = { id: 'emp-sales-01', name: 'Sales Exec', role: 'Sales Executive' as const };
+const opsActor = { id: 'emp-ops-01', employeeId: 'emp-ops-01', active: true, name: 'Ops Manager', role: 'Operations' as const };
+const adminActor = { id: 'emp-admin-01', employeeId: 'emp-admin-01', active: true, name: 'Admin User', role: 'Admin' as const };
+const salesActor = { id: 'emp-sales-01', employeeId: 'emp-sales-01', active: true, name: 'Sales Exec', role: 'Sales Executive' as const };
+const reservationsActor = { id: 'emp-res-01', employeeId: 'emp-res-01', active: true, name: 'Reservations User', role: 'Reservations' as const };
 
 // ── ServiceConfirmationService Tests ─────────────────────────────────────────
 
 describe('BBOS Phase 2B-6 Stage 2 — Service Confirmation Service', () => {
 
   describe('1. confirmAccommodation', () => {
-    it('1.1 updates operational fields and sets confirmationStatus to CONFIRMED', async () => {
+    it('1.1 records a supplier confirmation and sets confirmationStatus to CONFIRMED', async () => {
       const storage = new InMemoryConfirmationStorageProvider({
         bookings: [makeBooking()],
         accommodations: [makeAccommodation()],
@@ -104,16 +106,15 @@ describe('BBOS Phase 2B-6 Stage 2 — Service Confirmation Service', () => {
       const result = await svc.confirmAccommodation('book-01', 'acc-01', {
         confirmationStatus: 'CONFIRMED',
         supplierConfirmationCode: 'HRS-12345',
-        supplierContactName: 'Mr. Patel',
-        operationalNotes: 'Early check-in requested',
-      }, opsActor);
+        supplierNotes: 'Early check-in requested',
+      }, reservationsActor);
 
       expect(result.success).toBe(true);
       const updated = storage.getAccommodationSync('acc-01')!;
       expect(updated.confirmationStatus).toBe('CONFIRMED');
       expect(updated.supplierConfirmationCode).toBe('HRS-12345');
-      expect(updated.supplierContactName).toBe('Mr. Patel');
-      expect(updated.operationalNotes).toBe('Early check-in requested');
+      expect(updated.supplierNotes).toBe('Early check-in requested');
+      expect(updated.supplierConfirmation?.updatedByEmployeeId).toBe('emp-res-01');
     });
 
     it('1.2 recomputes confirmationProgress after accommodation is confirmed', async () => {
@@ -125,7 +126,9 @@ describe('BBOS Phase 2B-6 Stage 2 — Service Confirmation Service', () => {
       });
       const svc = new ServiceConfirmationService(storage);
 
-      const result = await svc.confirmAccommodation('book-01', 'acc-01', { confirmationStatus: 'CONFIRMED' }, opsActor);
+      const result = await svc.confirmAccommodation('book-01', 'acc-01', {
+        confirmationStatus: 'CONFIRMED', supplierConfirmationCode: 'HRS-12345',
+      }, reservationsActor);
 
       expect(result.confirmationProgress.confirmedServices).toBe(1);
       expect(result.confirmationProgress.totalServices).toBe(3);
@@ -152,7 +155,7 @@ describe('BBOS Phase 2B-6 Stage 2 — Service Confirmation Service', () => {
       const svc = new ServiceConfirmationService(storage);
 
       await expect(svc.confirmAccommodation('book-01', 'acc-01', { confirmationStatus: 'CONFIRMED' }, salesActor))
-        .rejects.toMatchObject({ statusCode: 403, code: 'FORBIDDEN' });
+        .rejects.toMatchObject({ statusCode: 403, code: 'ROLE_DENIED' });
     });
 
     it('1.5 rejects update on a cancelled booking', async () => {
@@ -162,8 +165,10 @@ describe('BBOS Phase 2B-6 Stage 2 — Service Confirmation Service', () => {
       });
       const svc = new ServiceConfirmationService(storage);
 
-      await expect(svc.confirmAccommodation('book-01', 'acc-01', { confirmationStatus: 'CONFIRMED' }, opsActor))
-        .rejects.toMatchObject({ statusCode: 422, code: 'BOOKING_CANCELLED' });
+      await expect(svc.confirmAccommodation('book-01', 'acc-01', {
+        confirmationStatus: 'CONFIRMED', supplierConfirmationCode: 'HRS-12345',
+      }, adminActor))
+        .rejects.toMatchObject({ statusCode: 422, code: 'BOOKING_NOT_COMMERCIALLY_READY' });
     });
 
     it('1.6 rejects cross-booking IDOR (serviceId belongs to different booking)', async () => {
@@ -173,7 +178,9 @@ describe('BBOS Phase 2B-6 Stage 2 — Service Confirmation Service', () => {
       });
       const svc = new ServiceConfirmationService(storage);
 
-      await expect(svc.confirmAccommodation('book-01', 'acc-01', { confirmationStatus: 'CONFIRMED' }, opsActor))
+      await expect(svc.confirmAccommodation('book-01', 'acc-01', {
+        confirmationStatus: 'CONFIRMED', supplierConfirmationCode: 'HRS-12345',
+      }, reservationsActor))
         .rejects.toMatchObject({ statusCode: 404, code: 'SERVICE_NOT_FOUND' });
     });
 
@@ -186,15 +193,17 @@ describe('BBOS Phase 2B-6 Stage 2 — Service Confirmation Service', () => {
       });
       const svc = new ServiceConfirmationService(storage);
 
-      // Even if attacker sends commercial fields, they must be silently dropped
-      await svc.confirmAccommodation('book-01', 'acc-01', {
-        confirmationStatus: 'CONFIRMED',
+      await expect(svc.confirmAccommodation('book-01', 'acc-01', {
+        confirmationStatus: 'CONFIRMED', supplierConfirmationCode: 'HRS-12345',
         ...(({ propertyId: 'HACKED', checkInDate: '2020-01-01' } as any)),
-      } as any, opsActor);
+      } as any, reservationsActor)).rejects.toMatchObject({
+        statusCode: 400, code: 'PROTECTED_CONFIRMATION_FIELD',
+      });
 
       const updated = storage.getAccommodationSync('acc-01')!;
       expect(updated.propertyId).toBe('prop-01'); // unchanged
       expect(updated.checkInDate).toBe('2026-12-01'); // unchanged
+      expect(storage.getMutationCount()).toBe(0);
     });
 
     it('1.8 writes an audit log for each accommodation confirmation', async () => {
@@ -206,11 +215,13 @@ describe('BBOS Phase 2B-6 Stage 2 — Service Confirmation Service', () => {
       });
       const svc = new ServiceConfirmationService(storage);
 
-      await svc.confirmAccommodation('book-01', 'acc-01', { confirmationStatus: 'CONFIRMED' }, opsActor);
+      await svc.confirmAccommodation('book-01', 'acc-01', {
+        confirmationStatus: 'CONFIRMED', supplierConfirmationCode: 'HRS-12345',
+      }, reservationsActor);
 
       const logs = storage.getAllAuditLogs();
       expect(logs).toHaveLength(1);
-      expect(logs[0].action).toBe('SERVICE_ACCOMMODATION_CONFIRMED');
+      expect(logs[0].action).toBe('SUPPLIER_ACCOMMODATION_CONFIRMATION_UPDATED');
     });
   });
 

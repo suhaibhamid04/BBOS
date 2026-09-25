@@ -85,21 +85,18 @@ export const LeadDetailView: React.FC<Props> = ({ leadId, onNavigate }) => {
         roomType: h.description || 'Standard Room',
         mealPlan: 'MAP',
         nights: 1,
-        rate: h.sellingPrice!,
-        supplierCost: h.supplierCost
+        rate: h.sellingPrice!
       }));
       const transports = itineraryItems.filter(i => i.type === 'TRANSPORT').map(t => ({
         vehicleType: t.title,
         route: t.description || 'Airport Transit & Sightseeing',
         days: 1,
-        rate: t.sellingPrice!,
-        supplierCost: t.supplierCost
+        rate: t.sellingPrice!
       }));
       const activities = itineraryItems.filter(i => i.type === 'ACTIVITY').map(a => ({
         name: a.title,
         pax: existingTrip.adults || 2,
-        rate: a.sellingPrice!,
-        supplierCost: a.supplierCost
+        rate: a.sellingPrice!
       }));
 
       const totalAmt = existingTrip.totalSellingPrice;
@@ -119,9 +116,6 @@ export const LeadDetailView: React.FC<Props> = ({ leadId, onNavigate }) => {
         totalAmount: totalAmt,
         discountAmount: 0,
         finalAmount: totalAmt,
-        totalSupplierCost: existingTrip.totalSupplierCost || 0,
-        grossProfit: existingTrip.grossProfit || 0,
-        grossMargin: existingTrip.grossMargin || 0,
         status: 'DRAFT',
         validUntil: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
         hotels,
@@ -139,8 +133,6 @@ export const LeadDetailView: React.FC<Props> = ({ leadId, onNavigate }) => {
           'Detours or services outside agreed itinerary'
         ],
         termsAndConditions: '30% advance deposit to confirm booking. 70% balance payable 7 days prior to arrival.',
-        salesEmployeeId: currentUser.id,
-        salesEmployeeName: currentUser.name
       });
 
       onNavigate('quotes', newQuote.id);
@@ -195,8 +187,6 @@ export const LeadDetailView: React.FC<Props> = ({ leadId, onNavigate }) => {
         ],
         exclusions: ['Airfare', 'Personal expenses', 'Tips and extra meals'],
         termsAndConditions: '30% advance deposit to confirm. Balance payable 7 days prior to arrival.',
-        salesEmployeeId: currentUser.id,
-        salesEmployeeName: currentUser.name
       });
 
       onNavigate('quotes', newQuote.id);

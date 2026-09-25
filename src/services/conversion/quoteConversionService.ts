@@ -14,16 +14,25 @@ import { QuoteValidationService } from '../quoteValidation/quoteValidationServic
 import { InventoryDataProvider, DefaultInventoryDataProvider } from '../quoteValidation/inventoryProvider';
 import {
   ConversionStorageProvider,
+  ConversionTransaction,
   InMemoryConversionStorageProvider,
   FirestoreConversionStorageProvider,
 } from './conversionStorageProvider';
+import { authorizeResource } from '../../../server/authorization/policyEngine.js';
+import { quoteResourceContext } from '../../../server/authorization/resourceContext.js';
 
 export interface ConversionActor {
+  /** Legacy compatibility alias; never use for ownership authorization. */
   id: string;
+  /** Stable BBOS business identity used for ownership and audit records. */
+  employeeId: string;
   uid?: string;
   name: string;
   email?: string;
   role: UserRole;
+  active: boolean;
+  salesTeamId?: string;
+  firebaseUid?: string;
   isDemo?: boolean;
 }
 
@@ -37,6 +46,11 @@ export interface QuoteConversionResult {
   confirmationProgress?: ConfirmationProgress;
   quoteStatus: 'ACCEPTED';
   message: string;
+}
+
+export interface FinancialSnapshotActor {
+  employeeId: string;
+  role: UserRole;
 }
 
 export class ConversionError extends Error {
@@ -64,7 +78,6 @@ export function generateValidationFingerprint(quote: Quote, validationResult: an
 
 export interface QuoteConversionOptions {
   currentDate?: string;
-  quoteData?: Quote;
 }
 
 export class QuoteConversionService {
@@ -93,6 +106,13 @@ export class QuoteConversionService {
   ): Promise<QuoteConversionResult> {
     const currentDate = options?.currentDate || new Date().toISOString().split('T')[0];
 
+    if (!actor || typeof actor.employeeId !== 'string' || actor.employeeId.trim() === '') {
+      throw new ConversionError(403, 'INVALID_ACTOR_IDENTITY', 'A stable BBOS employee identity is required.');
+    }
+    if (actor.active !== true) {
+      throw new ConversionError(403, 'INVALID_ACTOR_IDENTITY', 'An active BBOS employee identity is required.');
+    }
+
     // 1. Mandatory Role Check (Sales Executive, Sales Manager, Admin, Founder)
     const allowedRoles: UserRole[] = ['Founder', 'Admin', 'Sales Manager', 'Sales Executive'];
     if (!allowedRoles.includes(actor.role)) {
@@ -104,10 +124,14 @@ export class QuoteConversionService {
     }
 
     // 2. Pre-transaction Quote Resolution & Stage 3 Gate
-    let quote: Quote | null = options?.quoteData || (await this.storageProvider.getQuote(quoteId));
+    const quote: Quote | null = await this.storageProvider.getQuote(quoteId);
     if (!quote) {
       throw new ConversionError(404, 'QUOTE_NOT_FOUND', `Quote with ID "${quoteId}" not found.`);
     }
+
+    this.assertConversionAuthorization(quote, actor);
+    this.assertAttributionMetadata(quote);
+    this.assertConversionWorkflow(quote, currentDate);
 
     // Ignore/reject any client-supplied supplier cost or financial aggregates
     // The server exclusively evaluates authoritative inventory data.
@@ -151,10 +175,15 @@ export class QuoteConversionService {
     // - commit atomically
     const txnResult = await this.storageProvider.runTransaction(async (txn) => {
       // Step A: Read quote
-      const freshQuote: Quote | null = (await txn.get('quotes', quoteId)) || quote;
+      const freshQuote: Quote | null = await txn.get('quotes', quoteId);
       if (!freshQuote) {
         throw new ConversionError(404, 'QUOTE_NOT_FOUND', `Quote ${quoteId} does not exist.`);
       }
+
+      // Re-authorize the transaction snapshot so no authorization-relevant
+      // state can change between the initial read and the atomic write.
+      this.assertConversionAuthorization(freshQuote, actor);
+      this.assertAttributionMetadata(freshQuote);
 
       // Step B: Read quote_conversions/{quoteId}_v{version}
       const existingConversion = await txn.get('quote_conversions', conversionKey);
@@ -168,16 +197,16 @@ export class QuoteConversionService {
         };
       }
 
+      if (
+        freshQuote.version !== quote.version ||
+        freshQuote.updatedAt !== quote.updatedAt ||
+        freshQuote.salesEmployeeId !== quote.salesEmployeeId ||
+        freshQuote.salesTeamId !== quote.salesTeamId
+      ) {
+        throw new ConversionError(409, 'QUOTE_CHANGED', 'Quote changed during conversion. Reload and try again.');
+      }
+
       // Step C: Re-check quote version/status/conversion eligibility
-      if (freshQuote.status === 'DRAFT') {
-        throw new ConversionError(422, 'INVALID_QUOTE_STATUS', 'DRAFT quote cannot be converted to a booking.');
-      }
-      if (freshQuote.status === 'REJECTED') {
-        throw new ConversionError(422, 'INVALID_QUOTE_STATUS', 'REJECTED quote cannot be converted to a booking.');
-      }
-      if (freshQuote.status === 'EXPIRED') {
-        throw new ConversionError(422, 'INVALID_QUOTE_STATUS', 'EXPIRED quote cannot be converted to a booking.');
-      }
       if (freshQuote.status === 'ACCEPTED' && (freshQuote as any).convertedBookingId) {
         // Quote was already accepted into a booking
         const existingBooking = await txn.get('bookings', (freshQuote as any).convertedBookingId);
@@ -187,12 +216,10 @@ export class QuoteConversionService {
           booking: existingBooking,
         };
       }
+      this.assertConversionWorkflow(freshQuote, currentDate);
+      await this.assertTripCostingCompleteForConversion(txn, freshQuote);
 
       // Step D: Revalidate all authoritative assumptions
-      if (freshQuote.validUntil && freshQuote.validUntil < currentDate) {
-        throw new ConversionError(422, 'QUOTE_EXPIRED', `Quote validity expired on ${freshQuote.validUntil}.`);
-      }
-
       // Step E: Prepare identifiers and models
       const bookingId = `book-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
       const bookingReference = generateBookingReference();
@@ -220,6 +247,7 @@ export class QuoteConversionService {
             bookingId,
             tripId: freshQuote.tripId || '',
             customerId: freshQuote.customerId,
+            sourceQuoteServiceId: serviceId,
             propertyId: item.propertyId || item.hotelId || '',
             propertyName: item.hotelName || '',
             roomCategoryId: item.roomCategoryId || '',
@@ -361,7 +389,7 @@ export class QuoteConversionService {
         quoteVersion,
         bookingId,
         bookingReference,
-        convertedBy: actor.id,
+        convertedBy: actor.employeeId,
         convertedAt: now,
       });
 
@@ -387,8 +415,8 @@ export class QuoteConversionService {
         confirmationProgress,
         travelStartDate,
         travelEndDate,
-        assignedSalesEmployeeId: freshQuote.salesEmployeeId || actor.id,
-        ...(freshQuote.salesTeamId ? { salesTeamId: freshQuote.salesTeamId } : {}),
+        assignedSalesEmployeeId: freshQuote.salesEmployeeId!,
+        salesTeamId: freshQuote.salesTeamId!,
         schemaVersion: '2B-5',
         createdAt: now,
         updatedAt: now,
@@ -439,7 +467,7 @@ export class QuoteConversionService {
         lineItems,
         rateValidationFingerprint: generateValidationFingerprint(freshQuote, validationResult),
         createdAt: now,
-        createdBy: actor.id,
+        createdBy: actor.employeeId,
       };
 
       txn.set(`bookings/${bookingId}/financial_snapshot`, snapshotId, financialSnapshot);
@@ -468,6 +496,37 @@ export class QuoteConversionService {
           updatedAt: now,
         });
       }
+
+      // Keep the security audit in the same transaction as the conversion so a
+      // successful conversion can never be committed without its audit record.
+      const auditLog: AuditLog = {
+        id: `audit-quote-conversion-${conversionKey}`,
+        timestamp: now,
+        actorType: 'HUMAN',
+        actorId: actor.employeeId,
+        actorName: `${actor.name} (${actor.role})`,
+        action: 'QUOTE_CONVERTED_TO_BOOKING',
+        entityType: 'BOOKING',
+        entityId: booking.id,
+        before: { quoteStatus: freshQuote.status },
+        after: {
+          quoteStatus: 'ACCEPTED',
+          bookingId: booking.id,
+          bookingReference: booking.bookingReference,
+          quoteId: freshQuote.id,
+          quoteVersion,
+          totalSellingPrice: booking.totalSellingPrice,
+          serviceCounts: {
+            total: booking.confirmationProgress?.totalServices,
+            confirmed: booking.confirmationProgress?.confirmedServices,
+            requested: booking.confirmationProgress?.requestedServices,
+          },
+          conversionResult: 'SUCCESS',
+        },
+        reason: `Quote ${freshQuote.id} v${quoteVersion} converted to booking ${booking.bookingReference}`,
+      };
+
+      txn.set('audit_logs', auditLog.id, auditLog);
 
       return {
         isDuplicate: false,
@@ -501,37 +560,7 @@ export class QuoteConversionService {
       };
     }
 
-    // 5. Audit Logging (Only after successful non-duplicate commit)
-    const auditLog: AuditLog = {
-      id: `audit-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      timestamp: now,
-      actorType: 'HUMAN',
-      actorId: actor.uid || actor.id,
-      actorName: `${actor.name} (${actor.role})`,
-      action: 'QUOTE_CONVERTED_TO_BOOKING',
-      entityType: 'BOOKING',
-      entityId: txnResult.booking.id,
-      before: { quoteStatus: quote.status },
-      after: {
-        quoteStatus: 'ACCEPTED',
-        bookingId: txnResult.booking.id,
-        bookingReference: txnResult.booking.bookingReference,
-        quoteId: quote.id,
-        quoteVersion,
-        totalSellingPrice: txnResult.booking.totalSellingPrice,
-        serviceCounts: {
-          total: txnResult.booking.confirmationProgress?.totalServices,
-          confirmed: txnResult.booking.confirmationProgress?.confirmedServices,
-          requested: txnResult.booking.confirmationProgress?.requestedServices,
-        },
-        conversionResult: 'SUCCESS',
-      },
-      reason: `Quote ${quote.id} v${quoteVersion} converted to booking ${txnResult.booking.bookingReference}`,
-    };
-
-    await this.storageProvider.logAuditEvent(auditLog);
-
-    // 6. Role-Safe Response
+    // 5. Role-Safe Response
     // Strictly ZERO financial snapshot data or supplier buy costs in the conversion response!
     return {
       success: true,
@@ -547,12 +576,67 @@ export class QuoteConversionService {
   }
 
   /**
+   * D2B guard for Trip-priced Quotes. A pending or subsequently changed
+   * itinerary cannot be converted using a stale supplier-cost snapshot.
+   * Legacy Quotes without a Trip cost source retain their existing conversion
+   * semantics until an explicit migration is approved.
+   */
+  private async assertTripCostingCompleteForConversion(txn: ConversionTransaction, quote: Quote): Promise<void> {
+    if (!quote.tripId || quote.supplierCostSource?.type !== 'TRIP') return;
+    const trip = await txn.get('trips', quote.tripId);
+    if (
+      !trip || trip.costingStatus !== 'CALCULATED' ||
+      trip.updatedAt !== quote.supplierCostSource.asOf
+    ) {
+      throw new ConversionError(
+        422,
+        'TRIP_COSTING_INCOMPLETE',
+        'The linked Trip itinerary has pending or stale supplier costing. Recalculate the Trip and refresh the Quote before conversion.',
+      );
+    }
+  }
+
+  private assertConversionAuthorization(quote: Quote, actor: ConversionActor): void {
+    const decision = authorizeResource(actor, 'QUOTE', 'CONVERT_TO_BOOKING', quoteResourceContext(quote));
+    if (!decision.allowed) {
+      throw new ConversionError(
+        403,
+        'RESOURCE_ACCESS_DENIED',
+        'Forbidden: You are not authorized to convert this Quote.',
+        decision,
+      );
+    }
+  }
+
+  private assertConversionWorkflow(quote: Quote, currentDate: string): void {
+    if (!(['SENT', 'VIEWED', 'ACCEPTED'] as string[]).includes(quote.status)) {
+      throw new ConversionError(
+        422,
+        'INVALID_QUOTE_STATUS',
+        `Quote status ${quote.status || 'UNKNOWN'} cannot be converted to a booking.`,
+      );
+    }
+    if (quote.validUntil && quote.validUntil < currentDate) {
+      throw new ConversionError(422, 'QUOTE_EXPIRED', `Quote validity expired on ${quote.validUntil}.`);
+    }
+  }
+
+  private assertAttributionMetadata(quote: Quote): void {
+    if (!quote.salesEmployeeId) {
+      throw new ConversionError(422, 'MISSING_QUOTE_OWNER', 'Quote owner metadata is required before conversion.');
+    }
+    if (!quote.salesTeamId) {
+      throw new ConversionError(422, 'MISSING_QUOTE_TEAM', 'Quote sales-team metadata is required before conversion.');
+    }
+  }
+
+  /**
    * Dedicated financial diagnostic retrieval endpoint for authorized roles.
    * Founder, Admin, and Accounts ONLY.
    */
   async getBookingFinancialSnapshot(
     bookingId: string,
-    actor: ConversionActor
+    actor: FinancialSnapshotActor
   ): Promise<FinancialSnapshot> {
     const authorizedRoles: UserRole[] = ['Founder', 'Admin', 'Accounts'];
     if (!authorizedRoles.includes(actor.role)) {

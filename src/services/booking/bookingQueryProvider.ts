@@ -1,5 +1,6 @@
 import { getAdminDb } from '../../../server/firebaseAdmin';
-import { Booking, BookingAccommodation, BookingTransport, BookingActivity } from '../../types/booking';
+import type { QueryConstraint } from '../../../server/authorization/policyTypes';
+import { Booking, BookingAccommodation, BookingTransport, BookingActivity, FinancialSnapshot } from '../../types/booking';
 import { BookingListFilter, BookingListResponse } from '../../types/bookingApi';
 
 export interface BookingWithServices {
@@ -7,14 +8,12 @@ export interface BookingWithServices {
   accommodations: BookingAccommodation[];
   transports: BookingTransport[];
   activities: BookingActivity[];
+  financialSnapshot: FinancialSnapshot | null;
 }
 
-export type RoleFilter = 
-  | { field: string; op: '==' | 'in'; value: any }
-  | { type: 'OR'; conditions: { field: string; op: '==' | 'in'; value: any }[] };
-
 export interface BookingQueryProvider {
-  listBookings(filter: BookingListFilter, roleFilters: RoleFilter[]): Promise<BookingListResponse>;
+  listBookings(filter: BookingListFilter, scopeConstraints: QueryConstraint[]): Promise<BookingListResponse>;
+  getBooking(bookingId: string): Promise<Booking | null>;
   getBookingWithServices(bookingId: string): Promise<BookingWithServices | null>;
 }
 
@@ -26,6 +25,7 @@ export class InMemoryBookingQueryProvider implements BookingQueryProvider {
     accommodations?: BookingAccommodation[];
     transports?: BookingTransport[];
     activities?: BookingActivity[];
+    financialSnapshots?: FinancialSnapshot[];
   }) {
     if (initialData?.bookings) {
       for (const b of initialData.bookings) {
@@ -47,6 +47,11 @@ export class InMemoryBookingQueryProvider implements BookingQueryProvider {
         this.rawSet('booking_activities', a.id, a);
       }
     }
+    if (initialData?.financialSnapshots) {
+      for (const snapshot of initialData.financialSnapshots) {
+        this.rawSet(`bookings/${snapshot.bookingId}/financial_snapshot`, snapshot.id, snapshot);
+      }
+    }
   }
 
   private getCollection(collection: string): Map<string, any> {
@@ -63,34 +68,17 @@ export class InMemoryBookingQueryProvider implements BookingQueryProvider {
     col.set(id, JSON.parse(JSON.stringify(data)));
   }
 
-  async listBookings(filter: BookingListFilter, roleFilters: RoleFilter[]): Promise<BookingListResponse> {
+  async listBookings(filter: BookingListFilter, scopeConstraints: QueryConstraint[]): Promise<BookingListResponse> {
     const col = this.getCollection('bookings');
     let results = Array.from(col.values()) as Booking[];
 
-    // 1. Apply role filters
-    if (roleFilters.length > 0) {
-      results = results.filter((b: any) => {
-        for (const rf of roleFilters) {
-          if ('type' in rf && rf.type === 'OR') {
-            const orMatched = rf.conditions.some(cond => {
-              const bVal = b[cond.field];
-              if (cond.op === '==') return bVal === cond.value;
-              if (cond.op === 'in') return cond.value.includes(bVal);
-              return false;
-            });
-            if (!orMatched) return false;
-          } else if ('field' in rf) {
-            const bVal = b[rf.field];
-            if (rf.op === '==') {
-              if (bVal !== rf.value) return false;
-            } else if (rf.op === 'in') {
-              if (!rf.value.includes(bVal)) return false;
-            }
-          }
-        }
-        return true;
-      });
-    }
+    // 1. Apply the centralized policy constraints before user filters.
+    results = results.filter((booking: any) => scopeConstraints.every(constraint => {
+      const value = booking[constraint.field];
+      return constraint.operator === '=='
+        ? value === constraint.value
+        : Array.isArray(constraint.value) && constraint.value.includes(value);
+    }));
 
     // 2. Apply explicit filters
     if (filter.status) {
@@ -100,11 +88,7 @@ export class InMemoryBookingQueryProvider implements BookingQueryProvider {
       results = results.filter(b => b.paymentStatus === filter.paymentStatus);
     }
     if (filter.query) {
-      const q = filter.query.toLowerCase();
-      results = results.filter(b => 
-        b.bookingReference.toLowerCase().includes(q) || 
-        (b.customerName && b.customerName.toLowerCase().includes(q))
-      );
+      results = results.filter(b => b.bookingReference === filter.query);
     }
 
     // 3. Sort deterministic (createdAt DESC)
@@ -120,15 +104,21 @@ export class InMemoryBookingQueryProvider implements BookingQueryProvider {
     }
 
     const limit = filter.limit || 20;
-    const paginated = results.slice(startIndex, startIndex + limit);
-    const hasMore = startIndex + limit < results.length;
-    const nextCursor = hasMore ? paginated[paginated.length - 1].id : null;
+    const paginated = results.slice(startIndex, startIndex + limit + 1);
+    const hasMore = paginated.length > limit;
+    const page = hasMore ? paginated.slice(0, limit) : paginated;
+    const nextCursor = hasMore ? page[page.length - 1].id : null;
 
     return {
-      data: paginated,
+      data: page,
       nextCursor,
       hasMore,
     };
+  }
+
+  async getBooking(bookingId: string): Promise<Booking | null> {
+    const booking = this.getCollection('bookings').get(bookingId);
+    return booking ? JSON.parse(JSON.stringify(booking)) : null;
   }
 
   async getBookingWithServices(bookingId: string): Promise<BookingWithServices | null> {
@@ -138,35 +128,27 @@ export class InMemoryBookingQueryProvider implements BookingQueryProvider {
     const accommodations = Array.from(this.getCollection('booking_accommodations').values()).filter(a => a.bookingId === bookingId) as BookingAccommodation[];
     const transports = Array.from(this.getCollection('booking_transports').values()).filter(t => t.bookingId === bookingId) as BookingTransport[];
     const activities = Array.from(this.getCollection('booking_activities').values()).filter(a => a.bookingId === bookingId) as BookingActivity[];
+    const snapshots = Array.from(this.getCollection(`bookings/${bookingId}/financial_snapshot`).values()) as FinancialSnapshot[];
+    snapshots.sort((a, b) => b.snapshotVersion - a.snapshotVersion);
 
     return {
       booking: JSON.parse(JSON.stringify(booking)),
       accommodations: JSON.parse(JSON.stringify(accommodations)),
       transports: JSON.parse(JSON.stringify(transports)),
       activities: JSON.parse(JSON.stringify(activities)),
+      financialSnapshot: snapshots[0] ? JSON.parse(JSON.stringify(snapshots[0])) : null,
     };
   }
 }
 
-import { Filter } from 'firebase-admin/firestore';
-
 export class FirestoreBookingQueryProvider implements BookingQueryProvider {
-  async listBookings(filter: BookingListFilter, roleFilters: RoleFilter[]): Promise<BookingListResponse> {
+  async listBookings(filter: BookingListFilter, scopeConstraints: QueryConstraint[]): Promise<BookingListResponse> {
     const db = getAdminDb();
     let query: any = db.collection('bookings');
 
-    // Apply role filters
-    for (const rf of roleFilters) {
-      if ('type' in rf && rf.type === 'OR') {
-        const filters = rf.conditions.map(cond => 
-          cond.op === '==' 
-            ? Filter.where(cond.field, '==', cond.value)
-            : Filter.where(cond.field, 'in', cond.value)
-        );
-        query = query.where(Filter.or(...filters));
-      } else if ('field' in rf) {
-        query = query.where(rf.field, rf.op, rf.value);
-      }
+    // Apply centralized policy scope before any database read.
+    for (const constraint of scopeConstraints) {
+      query = query.where(constraint.field, constraint.operator, constraint.value);
     }
 
     // Apply explicit filters
@@ -190,7 +172,7 @@ export class FirestoreBookingQueryProvider implements BookingQueryProvider {
     query = query.orderBy('createdAt', 'desc');
 
     const limit = filter.limit || 20;
-    query = query.limit(limit);
+    query = query.limit(limit + 1);
 
     if (filter.cursor) {
       const cursorDoc = await db.collection('bookings').doc(filter.cursor).get();
@@ -200,9 +182,10 @@ export class FirestoreBookingQueryProvider implements BookingQueryProvider {
     }
 
     const snap = await query.get();
-    const data = snap.docs.map((doc: any) => doc.data() as Booking);
+    const rows = snap.docs.map((doc: any) => ({ ...doc.data(), id: doc.id }) as Booking);
     
-    const hasMore = data.length === limit;
+    const hasMore = rows.length > limit;
+    const data = hasMore ? rows.slice(0, limit) : rows;
     const nextCursor = hasMore ? data[data.length - 1].id : null;
 
     return {
@@ -212,24 +195,34 @@ export class FirestoreBookingQueryProvider implements BookingQueryProvider {
     };
   }
 
+  async getBooking(bookingId: string): Promise<Booking | null> {
+    const document = await getAdminDb().collection('bookings').doc(bookingId).get();
+    return document.exists ? ({ ...document.data(), id: document.id } as Booking) : null;
+  }
+
   async getBookingWithServices(bookingId: string): Promise<BookingWithServices | null> {
     const db = getAdminDb();
     const bookingDoc = await db.collection('bookings').doc(bookingId).get();
     if (!bookingDoc.exists) return null;
 
-    const booking = bookingDoc.data() as Booking;
+    const booking = { ...bookingDoc.data(), id: bookingDoc.id } as Booking;
 
-    const [accSnap, transSnap, actSnap] = await Promise.all([
+    const [accSnap, transSnap, actSnap, financialSnap] = await Promise.all([
       db.collection('booking_accommodations').where('bookingId', '==', bookingId).get(),
       db.collection('booking_transports').where('bookingId', '==', bookingId).get(),
       db.collection('booking_activities').where('bookingId', '==', bookingId).get(),
+      db.collection('bookings').doc(bookingId).collection('financial_snapshot')
+        .orderBy('snapshotVersion', 'desc').limit(1).get(),
     ]);
 
     return {
       booking,
-      accommodations: accSnap.docs.map((d: any) => d.data() as BookingAccommodation),
-      transports: transSnap.docs.map((d: any) => d.data() as BookingTransport),
-      activities: actSnap.docs.map((d: any) => d.data() as BookingActivity),
+      accommodations: accSnap.docs.map((d: any) => ({ ...d.data(), id: d.id }) as BookingAccommodation),
+      transports: transSnap.docs.map((d: any) => ({ ...d.data(), id: d.id }) as BookingTransport),
+      activities: actSnap.docs.map((d: any) => ({ ...d.data(), id: d.id }) as BookingActivity),
+      financialSnapshot: financialSnap.empty
+        ? null
+        : ({ ...financialSnap.docs[0].data(), id: financialSnap.docs[0].id } as FinancialSnapshot),
     };
   }
 }

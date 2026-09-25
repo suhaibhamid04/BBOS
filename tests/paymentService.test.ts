@@ -13,17 +13,17 @@ import { resolve } from 'path';
 
 describe('BBOS Phase 2B-5D Stage 5 — Minimal Payment Processing & State Machine', () => {
   // Actors
-  const founder: PaymentActor = { id: 'emp-founder-01', name: 'Suhaib Hamid', role: 'Founder' };
-  const admin: PaymentActor = { id: 'emp-admin-01', name: 'Nasir Wani', role: 'Admin' };
-  const accounts1: PaymentActor = { id: 'emp-acc-01', name: 'Farooq Lone', role: 'Accounts' };
-  const accounts2: PaymentActor = { id: 'emp-acc-02', name: 'Zahoor Mir', role: 'Accounts' };
-  const salesManager1: PaymentActor = { id: 'emp-mgr-01', name: 'Sameer Mir', role: 'Sales Manager' };
-  const salesManager2: PaymentActor = { id: 'emp-mgr-02', name: 'Other Manager', role: 'Sales Manager' };
-  const salesExec1: PaymentActor = { id: 'emp-sales-01', name: 'Tariq Bhat', role: 'Sales Executive' };
-  const salesExec2: PaymentActor = { id: 'emp-sales-02', name: 'Ayesha Zargar', role: 'Sales Executive' };
-  const ops1: PaymentActor = { id: 'emp-ops-01', name: 'Bilal Ahmad Shah', role: 'Operations' };
-  const ops2: PaymentActor = { id: 'emp-ops-02', name: 'Other Ops', role: 'Operations' };
-  const marketing: PaymentActor = { id: 'emp-mkt-01', name: 'Irfan Dar', role: 'Marketing' };
+  const founder: PaymentActor = { id: 'compat-founder', employeeId: 'emp-founder-01', name: 'Suhaib Hamid', role: 'Founder' };
+  const admin: PaymentActor = { id: 'compat-admin', employeeId: 'emp-admin-01', name: 'Nasir Wani', role: 'Admin' };
+  const accounts1: PaymentActor = { id: 'compat-acc-01', employeeId: 'emp-acc-01', name: 'Farooq Lone', role: 'Accounts' };
+  const accounts2: PaymentActor = { id: 'compat-acc-02', employeeId: 'emp-acc-02', name: 'Zahoor Mir', role: 'Accounts' };
+  const salesManager1: PaymentActor = { id: 'compat-mgr-01', employeeId: 'emp-mgr-01', name: 'Sameer Mir', role: 'Sales Manager' };
+  const salesManager2: PaymentActor = { id: 'compat-mgr-02', employeeId: 'emp-mgr-02', name: 'Other Manager', role: 'Sales Manager' };
+  const salesExec1: PaymentActor = { id: 'compat-sales-01', employeeId: 'emp-sales-01', name: 'Tariq Bhat', role: 'Sales Executive' };
+  const salesExec2: PaymentActor = { id: 'compat-sales-02', employeeId: 'emp-sales-02', name: 'Ayesha Zargar', role: 'Sales Executive' };
+  const ops1: PaymentActor = { id: 'compat-ops-01', employeeId: 'emp-ops-01', name: 'Bilal Ahmad Shah', role: 'Operations' };
+  const ops2: PaymentActor = { id: 'compat-ops-02', employeeId: 'emp-ops-02', name: 'Other Ops', role: 'Operations' };
+  const marketing: PaymentActor = { id: 'compat-mkt-01', employeeId: 'emp-mkt-01', name: 'Irfan Dar', role: 'Marketing' };
 
   let storage: InMemoryPaymentStorageProvider;
   let service: PaymentService;
@@ -123,7 +123,8 @@ describe('BBOS Phase 2B-5D Stage 5 — Minimal Payment Processing & State Machin
       expect(payment.bookingId).toBe('bk-01');
       expect(payment.amount).toBe(20000);
       expect(payment.status).toBe('RECORDED');
-      expect(payment.recordedBy).toBe(salesExec1.id);
+      expect(payment.recordedBy).toBe(salesExec1.employeeId);
+      expect(salesExec1.id).not.toBe(salesExec1.employeeId);
       expect(payment.verifiedBy).toBeUndefined();
 
       // Top-level booking aggregates MUST remain unchanged
@@ -432,7 +433,7 @@ describe('BBOS Phase 2B-5D Stage 5 — Minimal Payment Processing & State Machin
       const result = await service.verifyPayment('bk-01', p.id, accounts1);
       expect(result.success).toBe(true);
       expect(result.payment.status).toBe('VERIFIED');
-      expect(result.payment.verifiedBy).toBe(accounts1.id);
+      expect(result.payment.verifiedBy).toBe(accounts1.employeeId);
       expect(result.payment.verifiedByName).toBe(accounts1.name);
 
       expect(result.booking.amountReceived).toBe(20000);
@@ -456,7 +457,7 @@ describe('BBOS Phase 2B-5D Stage 5 — Minimal Payment Processing & State Machin
       const result = await service.verifyPayment('bk-01', p.id, admin);
       expect(result.success).toBe(true);
       expect(result.payment.status).toBe('VERIFIED');
-      expect(result.payment.verifiedBy).toBe(admin.id);
+      expect(result.payment.verifiedBy).toBe(admin.employeeId);
     });
 
     it('15. Unverified RECORDED payment is excluded from booking aggregates', async () => {
@@ -748,7 +749,7 @@ describe('BBOS Phase 2B-5D Stage 5 — Minimal Payment Processing & State Machin
       );
       expect(voidRes.success).toBe(true);
       expect(voidRes.payment.status).toBe('VOIDED');
-      expect(voidRes.payment.voidedBy).toBe(admin.id);
+      expect(voidRes.payment.voidedBy).toBe(admin.employeeId);
       expect(voidRes.payment.voidReason).toBe('Accidental duplicate clearance in error');
     });
 

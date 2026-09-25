@@ -116,6 +116,44 @@ export interface LineItemCostSnapshot {
   rateVerifiedAt: string;
 }
 
+export interface SupplierRateDiscrepancy {
+  frozenSupplierUnitRate: number;
+  confirmedSupplierUnitRate: number;
+  difference: number;
+  reason: string;
+  recordedAt: string;
+  recordedByEmployeeId: string;
+  requiresCommercialApproval: true;
+  approvalStatus: 'REQUIRED';
+}
+
+/** Server-authored record of the supplier response for one accommodation. */
+export interface AccommodationSupplierConfirmation {
+  bookingReference: string;
+  serviceId: string;
+  supplierId: string;
+  propertyId: string;
+  propertyName: string;
+  status: BookingComponentStatus;
+  confirmationReference?: string;
+  confirmedRoomCategoryId: string;
+  confirmedRoomCategoryName: string;
+  confirmedMealPlan: MealPlanType;
+  confirmedCheckInDate: string;
+  confirmedCheckOutDate: string;
+  confirmedGuestNames: string[];
+  confirmedRoomsCount: number;
+  confirmedAdultsCount: number;
+  confirmedChildrenCount: number;
+  supplierNotes?: string;
+  confirmedAt?: string;
+  confirmedByEmployeeId?: string;
+  updatedAt: string;
+  updatedByEmployeeId: string;
+  rateDiscrepancy?: SupplierRateDiscrepancy;
+  requiresCommercialApproval: boolean;
+}
+
 export interface FinancialSnapshot {
   id: string;
   bookingId: string;
@@ -148,6 +186,8 @@ export interface BookingAccommodation {
   bookingId: string;
   tripId: string;
   customerId: string;
+  /** Quote line identifier used to resolve the immutable financial snapshot. */
+  sourceQuoteServiceId?: string;
 
   // [A] Commercial / Sales-Safe Fields (Readable: Sales, Ops, Accounts)
   propertyId: string;
@@ -173,6 +213,7 @@ export interface BookingAccommodation {
   allocatedRoomNumbers?: string[];
   operationalNotes?: string;
   supplierNotes?: string;
+  supplierConfirmation?: AccommodationSupplierConfirmation;
   voucherId?: string;
   voucherStatus: VoucherStatus;
 

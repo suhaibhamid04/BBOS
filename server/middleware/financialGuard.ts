@@ -1,4 +1,5 @@
 import { isUserRole, UserRole } from '../../src/types/index.js';
+import type { AuthorizationDecision } from '../authorization/policyTypes.js';
 
 const SUPPLIER_COST_KEYS = [
   'supplierCost',
@@ -38,7 +39,7 @@ const PROFIT_MARGIN_KEYS = [
   'estimatedGrossMargin'
 ];
 
-type FinancialVisibility = 'FULL' | 'SUPPLIER_ONLY' | 'PROFIT_ONLY' | 'REDACTED';
+type FinancialVisibility = 'FULL' | 'SUPPLIER_ONLY' | 'SCOPED_SALES' | 'REDACTED';
 
 // Defense-in-depth for legacy endpoints. Stage C detail endpoints use the
 // resource-aware DTO policy after authorization instead of this coarse matrix.
@@ -46,8 +47,8 @@ const ROLE_FINANCIAL_VISIBILITY: Record<UserRole, FinancialVisibility> = {
   Founder: 'FULL',
   Admin: 'FULL',
   Accounts: 'FULL',
-  'Sales Manager': 'PROFIT_ONLY',
-  'Sales Executive': 'REDACTED',
+  'Sales Manager': 'SCOPED_SALES',
+  'Sales Executive': 'SCOPED_SALES',
   Reservations: 'SUPPLIER_ONLY',
   Operations: 'REDACTED',
   Marketing: 'REDACTED',
@@ -57,11 +58,16 @@ const ROLE_FINANCIAL_VISIBILITY: Record<UserRole, FinancialVisibility> = {
  * Strips confidential supplier cost, profit, and internal margin data based on UserRole.
  * - Founder, Admin, Accounts: Full financial visibility.
  * - Reservations: Can view supplier costs/rates, but profit/margin analytics are redacted.
- * - Sales Manager: Can view selling price and gross margin, but supplier base costs are restricted.
- * - Sales Executive, Operations, Marketing: Base costs, supplier disbursements, and margin analytics are redacted.
+ * - Sales Manager TEAM and Sales Executive OWN: full financial visibility only
+ *   when an allowed Stage C resource decision is supplied.
+ * - Unscoped Sales, Operations, and Marketing: financial data is redacted.
  * - Customer (fallback): Everything redacted.
  */
-export function sanitizeFinancialData<T>(data: T, userRole: UserRole | string | null | undefined): T {
+export function sanitizeFinancialData<T>(
+  data: T,
+  userRole: UserRole | string | null | undefined,
+  resourceAuthorization?: AuthorizationDecision,
+): T {
   if (!data || typeof data !== 'object') {
     return data;
   }
@@ -70,7 +76,15 @@ export function sanitizeFinancialData<T>(data: T, userRole: UserRole | string | 
   // guarantee that a stored role is recognized, so unknown roles must receive
   // the most restrictive response rather than falling through to full access.
   const recognizedRole = isUserRole(userRole) ? userRole : undefined;
-  const visibility = recognizedRole ? ROLE_FINANCIAL_VISIBILITY[recognizedRole] : 'REDACTED';
+  const configuredVisibility = recognizedRole ? ROLE_FINANCIAL_VISIBILITY[recognizedRole] : 'REDACTED';
+  const visibility: Exclude<FinancialVisibility, 'SCOPED_SALES'> = configuredVisibility === 'SCOPED_SALES'
+    ? resourceAuthorization?.allowed === true &&
+      resourceAuthorization.code === 'ALLOWED' &&
+      ((recognizedRole === 'Sales Executive' && resourceAuthorization.scope === 'OWN') ||
+       (recognizedRole === 'Sales Manager' && resourceAuthorization.scope === 'TEAM'))
+      ? 'FULL'
+      : 'REDACTED'
+    : configuredVisibility;
 
   if (data instanceof Date) {
     return new Date(data.getTime()) as unknown as T;
@@ -82,7 +96,7 @@ export function sanitizeFinancialData<T>(data: T, userRole: UserRole | string | 
   }
 
   if (Array.isArray(data)) {
-    return data.map((item) => sanitizeFinancialData(item, recognizedRole)) as unknown as T;
+    return data.map((item) => sanitizeFinancialData(item, recognizedRole, resourceAuthorization)) as unknown as T;
   }
 
   const sanitized: Record<string, any> = {};
@@ -96,12 +110,12 @@ export function sanitizeFinancialData<T>(data: T, userRole: UserRole | string | 
 
     // 2. Profit/margin uses a separate allowlist; Reservations is excluded.
     if (PROFIT_MARGIN_KEYS.includes(key) &&
-        visibility !== 'PROFIT_ONLY') {
+        (visibility === 'REDACTED' || visibility === 'SUPPLIER_ONLY')) {
       continue;
     }
 
     if (value && typeof value === 'object') {
-      sanitized[key] = sanitizeFinancialData(value, recognizedRole);
+      sanitized[key] = sanitizeFinancialData(value, recognizedRole, resourceAuthorization);
     } else {
       sanitized[key] = value;
     }

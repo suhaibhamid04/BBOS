@@ -419,6 +419,22 @@ export interface Quote {
   salesEmployeeName?: string;
   /** Immutable sales-team snapshot used for TEAM-scoped authorization. */
   salesTeamId?: string;
+  /** Server-controlled employee attribution. */
+  createdByEmployeeId?: string;
+  updatedByEmployeeId?: string;
+  /** Server-issued provenance for the authoritative supplier-cost aggregate. */
+  supplierCostSource?: {
+    type: 'TRIP';
+    sourceId: string;
+    asOf: string;
+  };
+  /** Future low-margin approval hook. D1 does not choose a threshold. */
+  requiresLowMarginApproval?: boolean;
+  approval?: {
+    required: boolean;
+    state?: string;
+  };
+  convertedBookingId?: string;
   version: number;
   versionHistory?: QuoteVersion[];
   isDemo?: boolean;
@@ -439,6 +455,13 @@ export type TripStatus =
   | 'COMPLETED'
   | 'CANCELLED';
 
+/**
+ * Server-owned meaning of the Trip supplier-cost aggregate. `PENDING` means
+ * itinerary changes have not yet been priced by the authoritative engine;
+ * `CALCULATED` may legitimately have a zero supplier cost.
+ */
+export type TripCostingStatus = 'PENDING' | 'CALCULATED';
+
 export interface Trip {
   id: string;
   customerId: string;
@@ -454,6 +477,7 @@ export interface Trip {
   status: TripStatus;
   currency: string;
   totalSupplierCost: number;
+  costingStatus?: TripCostingStatus;
   totalSellingPrice: number;
   grossProfit: number;
   grossMargin: number;
@@ -463,6 +487,8 @@ export interface Trip {
   salesTeamId?: string;
   assignedReservationsEmployeeId?: string;
   assignedOperationsEmployeeId?: string;
+  createdByEmployeeId?: string;
+  updatedByEmployeeId?: string;
   createdAt: string;
   updatedAt: string;
   isDemo?: boolean;

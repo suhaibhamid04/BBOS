@@ -42,6 +42,7 @@ function getActorFromRequest(req: Request): PaymentActor {
   const currentUser = req.user!;
   return {
     id: currentUser.id,
+    employeeId: currentUser.employeeId,
     uid: currentUser.uid,
     name: currentUser.name,
     email: currentUser.email,
@@ -138,14 +139,15 @@ bookingsRouter.get(
  * GET /api/bookings
  * Retrieves a paginated list of bookings authorized for the actor.
  * 
- * Authorized roles: Founder, Admin, Accounts, Sales Manager, Sales Executive, Operations
+ * Coarse role admission only; BookingQueryService applies authoritative
+ * ALL/TEAM/OWN/ASSIGNED resource scope and explicit DTO projection.
  */
 bookingsRouter.get(
   '/',
-  requireRole(['Founder', 'Admin', 'Accounts', 'Sales Manager', 'Sales Executive', 'Operations']),
+  requireRole(['Founder', 'Admin', 'Accounts', 'Sales Manager', 'Sales Executive', 'Reservations', 'Operations']),
   async (req: Request, res: Response) => {
     try {
-      const actor = getActorFromRequest(req);
+      const actor = req.user!;
       const filter = {
         status: req.query.status as any,
         paymentStatus: req.query.paymentStatus as any,
@@ -158,7 +160,7 @@ bookingsRouter.get(
 
       return res.status(200).json({
         success: true,
-        ...sanitizeFinancialData(result, actor.role),
+        ...result,
       });
     } catch (error: any) {
       return handleBookingQueryError(error, res, 'GET /bookings');
@@ -170,11 +172,12 @@ bookingsRouter.get(
  * GET /api/bookings/:bookingId
  * Retrieves detailed booking information including services and a sanitized payment summary.
  * 
- * Authorized roles: Founder, Admin, Accounts, Sales Manager, Sales Executive, Operations
+ * Coarse role admission only; concrete Booking scope is enforced before data
+ * or related services are projected.
  */
 bookingsRouter.get(
   '/:bookingId',
-  requireRole(['Founder', 'Admin', 'Accounts', 'Sales Manager', 'Sales Executive', 'Operations']),
+  requireRole(['Founder', 'Admin', 'Accounts', 'Sales Manager', 'Sales Executive', 'Reservations', 'Operations']),
   async (req: Request, res: Response) => {
     // Avoid conflicting with other specific routes by checking if bookingId is a known sub-route
     if (['financial-snapshot', 'payments'].includes(req.params.bookingId)) {
@@ -183,12 +186,12 @@ bookingsRouter.get(
 
     try {
       const bookingId = req.params.bookingId;
-      const actor = getActorFromRequest(req);
+      const actor = req.user!;
       const result = await bookingQueryService.getBookingDetail(bookingId, actor);
 
       return res.status(200).json({
         success: true,
-        data: sanitizeFinancialData(result, actor.role),
+        data: result,
       });
     } catch (error: any) {
       return handleBookingQueryError(error, res, 'GET /bookings/:bookingId');
@@ -370,19 +373,19 @@ bookingsRouter.post(
 
 /**
  * PATCH /api/bookings/:bookingId/services/accommodations/:serviceId
- * Updates operational fields on a BookingAccommodation (confirmation code, room numbers, etc.)
- * Recalculates booking.confirmationProgress atomically.
+ * Records an authoritative accommodation supplier response and recalculates
+ * booking.confirmationProgress atomically.
  *
- * Authorized roles: Operations, Admin, Founder
+ * Coarse admission: Reservations, Admin, Founder. The service enforces the
+ * authoritative ASSIGNED/ALL resource scope from the stored Booking.
  */
 bookingsRouter.patch(
   '/:bookingId/services/accommodations/:serviceId',
-  requireRole(['Founder', 'Admin', 'Operations']),
+  requireRole(['Founder', 'Admin', 'Reservations']),
   async (req: Request, res: Response) => {
     try {
       const { bookingId, serviceId } = req.params;
-      const actor = getActorFromRequest(req);
-      const result = await serviceConfirmationService.confirmAccommodation(bookingId, serviceId, req.body, actor);
+      const result = await serviceConfirmationService.confirmAccommodation(bookingId, serviceId, req.body, req.user!);
       return res.status(200).json({ success: true, ...result });
     } catch (error: any) {
       return handleLifecycleError(error, res, 'PATCH /bookings/:bookingId/services/accommodations/:serviceId');
@@ -455,4 +458,3 @@ bookingsRouter.post(
     }
   }
 );
-

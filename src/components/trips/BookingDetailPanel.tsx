@@ -5,6 +5,7 @@ import {
   FileText, MapPin, Calendar, CreditCard, ChevronRight, Activity, Car, Bed,
   CheckCircle, XCircle, Truck, AlertTriangle, Zap, ChevronDown, ChevronUp, Loader2
 } from 'lucide-react';
+import { bookingMutationHeaders, bookingReadHeaders } from '../../services/auth/authenticatedApi';
 
 interface BookingDetailPanelProps {
   bookingId: string;
@@ -50,7 +51,7 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
     setError(null);
     try {
       const res = await fetch(`/api/bookings/${bookingId}`, {
-        headers: { 'X-Demo-User-Id': currentUser.id }
+        headers: await bookingReadHeaders(currentUser.employeeId),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || 'Failed to load booking');
@@ -80,7 +81,7 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
   const apiPatch = async (path: string, body: any) => {
     const res = await fetch(`/api/bookings/${bookingId}${path}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', 'X-Demo-User-Id': currentUser.id },
+      headers: await bookingMutationHeaders(currentUser.employeeId),
       body: JSON.stringify(body),
     });
     const json = await res.json();
@@ -138,10 +139,30 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
     setActionError(null);
     try {
       const formData = serviceForms[serviceId] || {};
-      await apiPatch(`/services/${type}/${serviceId}`, {
+      let payload: Record<string, unknown> = {
         confirmationStatus: 'CONFIRMED',
         ...formData,
-      });
+      };
+      if (type === 'accommodations') {
+        payload = Object.fromEntries(
+          Object.entries(payload).filter(([, value]) => value !== ''),
+        );
+        if (formData.confirmedGuestNames !== undefined) {
+          payload.confirmedGuestNames = formData.confirmedGuestNames
+            .split(',')
+            .map(name => name.trim())
+            .filter(Boolean);
+        }
+        for (const field of [
+          'confirmedRoomsCount', 'confirmedAdultsCount', 'confirmedChildrenCount',
+          'confirmedSupplierUnitRate',
+        ]) {
+          if (formData[field] !== undefined && formData[field] !== '') {
+            payload[field] = Number(formData[field]);
+          }
+        }
+      }
+      await apiPatch(`/services/${type}/${serviceId}`, payload);
       await fetchDetail();
       setExpanded(prev => ({ ...prev, [serviceId]: false }));
     } catch (err: any) {
@@ -161,6 +182,7 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
   const toggleExpanded = (id: string) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
 
   const canManageOps = permissions.canManageOperations;
+  const canManageSupplierConfirmations = permissions.canManageReservations;
   const isAdmin = currentUser.role === 'Admin' || currentUser.role === 'Founder';
 
   if (loading) return (
@@ -333,23 +355,43 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
                     {acc.supplierConfirmationCode && (
                       <div className="text-[11px] text-emerald-600 font-bold mt-1">Code: {acc.supplierConfirmationCode}</div>
                     )}
+                    {acc.supplierId && (
+                      <div className="text-[11px] text-slate-400 mt-1">Supplier: {acc.supplierId}</div>
+                    )}
+                    {acc.supplierConfirmation?.requiresCommercialApproval && (
+                      <div className="text-[11px] text-amber-700 font-bold mt-1">
+                        Commercial approval required
+                      </div>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     <span className={`px-2 py-1 rounded text-[10px] font-bold ${COMPONENT_BADGE[acc.confirmationStatus]}`}>
                       {acc.confirmationStatus}
                     </span>
-                    {canManageOps && acc.confirmationStatus !== 'CONFIRMED' && !isTerminal && (
+                    {canManageSupplierConfirmations && !isTerminal && (
                       <button onClick={() => toggleExpanded(acc.id)} className="p-1 text-slate-400 hover:text-slate-700">
                         {expanded[acc.id] ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                       </button>
                     )}
                   </div>
                 </div>
-                {expanded[acc.id] && canManageOps && (
+                {expanded[acc.id] && canManageSupplierConfirmations && (
                   <div className="border-t border-slate-100 p-4 bg-slate-50 space-y-3">
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="text-[10px] font-bold text-slate-500 uppercase">Confirmation Code</label>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase">Supplier Status</label>
+                        <select
+                          className="mt-1 w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm"
+                          value={serviceForms[acc.id]?.confirmationStatus || 'CONFIRMED'}
+                          onChange={e => updateServiceForm(acc.id, 'confirmationStatus', e.target.value)}
+                        >
+                          <option value="REQUESTED">Requested</option>
+                          <option value="CONFIRMED">Confirmed</option>
+                          <option value="CANCELLED">Unavailable / Cancelled</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase">Confirmation Reference</label>
                         <input
                           className="mt-1 w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm"
                           placeholder="e.g. HRS-123456"
@@ -358,22 +400,106 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
                         />
                       </div>
                       <div>
-                        <label className="text-[10px] font-bold text-slate-500 uppercase">Supplier Contact</label>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase">Confirmed Room Category ID</label>
                         <input
                           className="mt-1 w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm"
-                          placeholder="Supplier contact name"
-                          value={serviceForms[acc.id]?.supplierContactName || ''}
-                          onChange={e => updateServiceForm(acc.id, 'supplierContactName', e.target.value)}
+                          placeholder={acc.roomCategoryId}
+                          value={serviceForms[acc.id]?.confirmedRoomCategoryId || ''}
+                          onChange={e => updateServiceForm(acc.id, 'confirmedRoomCategoryId', e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase">Confirmed Room Category</label>
+                        <input
+                          className="mt-1 w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm"
+                          placeholder={acc.roomCategoryName}
+                          value={serviceForms[acc.id]?.confirmedRoomCategoryName || ''}
+                          onChange={e => updateServiceForm(acc.id, 'confirmedRoomCategoryName', e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase">Meal Plan</label>
+                        <select
+                          className="mt-1 w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm"
+                          value={serviceForms[acc.id]?.confirmedMealPlan || acc.mealPlan}
+                          onChange={e => updateServiceForm(acc.id, 'confirmedMealPlan', e.target.value)}
+                        >
+                          {['EP', 'CP', 'MAP', 'AP', 'CUSTOM'].map(plan => <option key={plan} value={plan}>{plan}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase">Guest Names</label>
+                        <input
+                          className="mt-1 w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm"
+                          placeholder="Comma-separated names"
+                          value={serviceForms[acc.id]?.confirmedGuestNames || ''}
+                          onChange={e => updateServiceForm(acc.id, 'confirmedGuestNames', e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase">Check-in</label>
+                        <input
+                          type="date"
+                          className="mt-1 w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm"
+                          value={serviceForms[acc.id]?.confirmedCheckInDate || acc.checkInDate}
+                          onChange={e => updateServiceForm(acc.id, 'confirmedCheckInDate', e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase">Check-out</label>
+                        <input
+                          type="date"
+                          className="mt-1 w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm"
+                          value={serviceForms[acc.id]?.confirmedCheckOutDate || acc.checkOutDate}
+                          onChange={e => updateServiceForm(acc.id, 'confirmedCheckOutDate', e.target.value)}
+                        />
+                      </div>
+                      {[
+                        ['confirmedRoomsCount', 'Rooms', acc.roomsCount],
+                        ['confirmedAdultsCount', 'Adults', acc.adultsCount],
+                        ['confirmedChildrenCount', 'Children', acc.childrenCount],
+                      ].map(([field, label, fallback]) => (
+                        <div key={String(field)}>
+                          <label className="text-[10px] font-bold text-slate-500 uppercase">{label}</label>
+                          <input
+                            type="number"
+                            min="0"
+                            className="mt-1 w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm"
+                            placeholder={String(fallback ?? 0)}
+                            value={serviceForms[acc.id]?.[String(field)] || ''}
+                            onChange={e => updateServiceForm(acc.id, String(field), e.target.value)}
+                          />
+                        </div>
+                      ))}
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase">Supplier Unit Rate</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          className="mt-1 w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm"
+                          placeholder="Use only when supplier confirms a rate"
+                          value={serviceForms[acc.id]?.confirmedSupplierUnitRate || ''}
+                          onChange={e => updateServiceForm(acc.id, 'confirmedSupplierUnitRate', e.target.value)}
                         />
                       </div>
                     </div>
                     <div>
-                      <label className="text-[10px] font-bold text-slate-500 uppercase">Operational Notes</label>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">Rate Discrepancy Reason</label>
                       <input
                         className="mt-1 w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm"
-                        placeholder="Internal notes"
-                        value={serviceForms[acc.id]?.operationalNotes || ''}
-                        onChange={e => updateServiceForm(acc.id, 'operationalNotes', e.target.value)}
+                        placeholder="Required when the confirmed supplier rate differs"
+                        value={serviceForms[acc.id]?.rateDiscrepancyReason || ''}
+                        onChange={e => updateServiceForm(acc.id, 'rateDiscrepancyReason', e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">Supplier Notes</label>
+                      <input
+                        className="mt-1 w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm"
+                        placeholder="Supplier response or unavailable reason"
+                        value={serviceForms[acc.id]?.supplierNotes || ''}
+                        onChange={e => updateServiceForm(acc.id, 'supplierNotes', e.target.value)}
                       />
                     </div>
                     <button
@@ -383,7 +509,7 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
                       className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold"
                     >
                       {actionLoading === `service-${acc.id}` ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle className="w-3 h-3" />}
-                      Confirm Accommodation
+                      Record Supplier Response
                     </button>
                   </div>
                 )}

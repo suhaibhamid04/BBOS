@@ -50,7 +50,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
     convertQuoteToBooking,
     createTrip
   } = useData();
-  const { currentUser, availableUsers } = useAuth();
+  const { currentUser } = useAuth();
 
   const [selectedQuoteId, setSelectedQuoteId] = useState<string | null>(initialQuoteId || null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -89,9 +89,11 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
   };
 
   // Financial RBAC Guards
-  const canSeeSupplierCosts =
-    currentUser.role === 'Founder' || currentUser.role === 'Admin' || currentUser.role === 'Accounts';
-  const canSeeMargins = canSeeSupplierCosts || currentUser.role === 'Sales Manager';
+  const canSeeSupplierCosts = ['Founder', 'Admin', 'Accounts', 'Sales Manager', 'Sales Executive']
+    .includes(currentUser.role);
+  const canSeeMargins = canSeeSupplierCosts;
+  const canMutateQuotes = ['Founder', 'Admin', 'Sales Manager', 'Sales Executive']
+    .includes(currentUser.role);
 
   // AI Recommendation State (Review-only)
   const [aiSuggestions, setAiSuggestions] = useState<
@@ -199,8 +201,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
                   id: `act-${Date.now()}`,
                   name: 'VIP Gondola Phase 2 Fast-Track + Guide',
                   pax: prev.travelerCount || 2,
-                  rate: 4800,
-                  supplierCost: 3200
+                  rate: 4800
                 }
               ];
               const newTotal = prev.totalAmount + 4800;
@@ -238,14 +239,6 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
       // Recompute pricing
       const sellingTotal = Number(editForm.totalAmount) || 0;
       const discount = Number(editForm.discountAmount) || 0;
-      const finalAmt = Math.max(0, sellingTotal - discount);
-
-      // Use the authoritative totalSupplierCost stored in the quote (which came from the Trip)
-      // Do NOT recalculate it from missing client-side supplierCost fields
-      const totalSupplierCost = editForm.totalSupplierCost || 0;
-
-      const grossProfit = finalAmt - totalSupplierCost;
-      const grossMargin = finalAmt > 0 ? Number(((grossProfit / finalAmt) * 100).toFixed(1)) : 0;
 
       const updated = await updateQuote(
         editForm.id,
@@ -253,11 +246,6 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
           ...editForm,
           totalAmount: sellingTotal,
           discountAmount: discount,
-          finalAmount: finalAmt,
-          totalSupplierCost,
-          grossProfit,
-          grossMargin,
-          salesEmployeeId: editForm.salesEmployeeId || currentUser.id
         },
         createNewVersion
       );
@@ -297,8 +285,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
       roomType: 'Deluxe Palace Room',
       mealPlan: 'MAP',
       nights: 2,
-      rate: 24000,
-      supplierCost: 16000
+      rate: 24000
     };
     const newHotels = [...(editForm.hotels || []), newItem];
     const newTotal = editForm.totalAmount + newItem.rate;
@@ -330,8 +317,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
       vehicleType: 'Innova Crysta AC Dedicated',
       route: 'Srinagar - Gulmarg - Pahalgam Circuit',
       days: 5,
-      rate: 24000,
-      supplierCost: 17000
+      rate: 24000
     };
     const newTrans = [...(editForm.transports || []), newItem];
     const newTotal = editForm.totalAmount + newItem.rate;
@@ -362,8 +348,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
       id: `a-${Date.now()}`,
       name: 'Gulmarg Gondola Phase 1 & 2 Tickets',
       pax: editForm.travelerCount || 2,
-      rate: 4900,
-      supplierCost: 3700
+      rate: 4900
     };
     const newActs = [...(editForm.activities || []), newItem];
     const newTotal = editForm.totalAmount + newItem.rate;
@@ -433,6 +418,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
                 <select
                   value={editForm.status}
                   onChange={(e) => setEditForm({ ...editForm, status: e.target.value as QuoteStatus })}
+                  disabled={!canMutateQuotes}
                   className={`text-xs font-bold rounded-lg px-2.5 py-1 border transition-colors ${
                     editForm.status === 'ACCEPTED' ? 'bg-emerald-50 text-emerald-800 border-emerald-300' :
                     editForm.status === 'SENT' ? 'bg-purple-50 text-purple-800 border-purple-300' :
@@ -493,21 +479,16 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
               <Eye className="w-3.5 h-3.5" /> Customer Preview
             </button>
 
-            <button
-              onClick={() => handleSaveQuote(false)}
-              className="px-3.5 py-2 bg-white hover:bg-slate-50 border border-slate-300 text-slate-800 rounded-xl text-xs font-bold transition-colors shadow-2xs"
-            >
-              Save Draft
-            </button>
+            {canMutateQuotes && (
+              <button
+                onClick={() => handleSaveQuote(true)}
+                className="px-3.5 py-2 bg-[#7056EE] hover:bg-[#5b42d6] text-white rounded-xl text-xs font-bold transition-colors shadow-sm flex items-center gap-1.5"
+              >
+                <BookmarkCheck className="w-3.5 h-3.5" /> Save Revision V{(editForm.version || 1) + 1}
+              </button>
+            )}
 
-            <button
-              onClick={() => handleSaveQuote(true)}
-              className="px-3.5 py-2 bg-[#7056EE] hover:bg-[#5b42d6] text-white rounded-xl text-xs font-bold transition-colors shadow-sm flex items-center gap-1.5"
-            >
-              <BookmarkCheck className="w-3.5 h-3.5" /> Save as V{(editForm.version || 1) + 1}
-            </button>
-
-            {(editForm.status === 'ACCEPTED' || editForm.status === 'SENT') && (
+            {canMutateQuotes && (editForm.status === 'ACCEPTED' || editForm.status === 'SENT') && (
               <button
                 onClick={handleConvertBooking}
                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-colors shadow-sm flex items-center gap-1.5"
@@ -704,18 +685,12 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
                   </div>
                 </div>
 
-                {/* Sales Specialist */}
+                {/* Server-authoritative Quote owner */}
                 <div>
                   <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">Sales Specialist</label>
-                  <select
-                    value={editForm.salesEmployeeId || currentUser.id}
-                    onChange={(e) => setEditForm({ ...editForm, salesEmployeeId: e.target.value })}
-                    className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-lg text-slate-800"
-                  >
-                    {availableUsers.map(u => (
-                      <option key={u.id} value={u.id}>{u.name} ({u.role})</option>
-                    ))}
-                  </select>
+                  <div className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-lg text-slate-700 bg-slate-50">
+                    {editForm.salesEmployeeName || editForm.salesEmployeeId || 'Server assigned'}
+                  </div>
                 </div>
 
                 {/* Trip Link */}
@@ -1477,7 +1452,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
           </p>
         </div>
 
-        <button
+        {canMutateQuotes && <button
           onClick={() => {
             const firstTrip = trips[0];
             const defaultCust = customers[0];
@@ -1503,7 +1478,6 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
                   mealPlan: 'MAP',
                   nights: 2,
                   rate: 24000,
-                  supplierCost: 16000
                 }
               ],
               transports: [
@@ -1512,7 +1486,6 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
                   route: 'Srinagar - Gulmarg - Pahalgam',
                   days: 5,
                   rate: 24000,
-                  supplierCost: 17000
                 }
               ],
               activities: [
@@ -1520,7 +1493,6 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
                   name: 'Gulmarg Gondola Phase 1 & 2',
                   pax: 2,
                   rate: 4900,
-                  supplierCost: 3700
                 }
               ],
               inclusions: ['4 Nights Luxury Stay', 'Daily Gourmet Breakfast & Dinner', 'Dedicated Vehicle'],
@@ -1534,7 +1506,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
           className="px-4 py-2 bg-[#7056EE] hover:bg-[#5b42d6] text-white text-xs font-bold rounded-xl shadow-sm transition-colors flex items-center gap-2"
         >
           <Plus className="w-4 h-4" /> New Quote
-        </button>
+        </button>}
       </div>
 
       {/* Filter Bar */}
@@ -1627,7 +1599,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
                   </td>
                   <td className="py-3.5 px-4 text-right" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-end gap-2">
-                      {q.status === 'ACCEPTED' && (
+                      {canMutateQuotes && q.status === 'ACCEPTED' && (
                         <button
                           onClick={async () => {
                             await convertQuoteToBooking(q.id);

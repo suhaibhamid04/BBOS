@@ -2,8 +2,8 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { APP_CONFIG } from '../config';
 import {
   EmployeeRepo, CustomerRepo, CompanyRepo, LeadRepo, ConversationRepo, MessageRepo, 
-  TaskRepo, QuoteRepo, BookingRepo, PackageRepo, AuditLogRepo, AiRecommendationRepo, 
-  AiActionRepo, ApprovalRepo, TripRepo, ItineraryDayRepo, HotelRepo, HotelRoomRepo,
+  TaskRepo, BookingRepo, PackageRepo, AuditLogRepo, AiRecommendationRepo,
+  AiActionRepo, ApprovalRepo, ItineraryDayRepo, HotelRepo, HotelRoomRepo,
   HotelBookingRepo, TransportRepo, DriverRepo, ActivityRepo, ActivityBookingRepo,
   SupplierRepo, VoucherRepo,
   AccommodationPropertyRepo, RoomCategoryRepo, RatePeriodRepo, NegotiatedRateRepo,
@@ -113,6 +113,90 @@ import { useAuth } from './AuthContext';
 import { db, auth } from '../lib/firebase';
 import { doc, setDoc, deleteDoc } from 'firebase/firestore';
 
+type QuoteDraftInput = Partial<Quote> & Pick<Quote, 'leadId' | 'customerId' | 'customerName' | 'destination' | 'validUntil'> & {
+  basePrice?: number;
+  discount?: number;
+};
+
+type TripDraftInput = Omit<Trip, 'id' | 'createdAt' | 'updatedAt' | 'status' | 'grossProfit' | 'grossMargin' | 'totalSupplierCost' | 'totalSellingPrice'> & {
+  budget?: number;
+  totalSupplierCost?: number;
+  totalSellingPrice?: number;
+};
+
+const TRIP_WRITE_FIELDS = [
+  'customerId', 'leadId', 'title', 'destination', 'startDate', 'endDate',
+  'travelerCount', 'adults', 'children', 'tripType', 'currency', 'budget',
+] as const;
+
+function buildTripWritePayload(sourceValue: TripDraftInput | Partial<Trip>, isCreate: boolean): Record<string, unknown> {
+  const source = sourceValue as Record<string, any>;
+  const payload: Record<string, unknown> = {};
+  for (const field of TRIP_WRITE_FIELDS) {
+    if (source[field] !== undefined) payload[field] = source[field];
+  }
+  const sellingPrice = source.totalSellingPrice ?? source.budget;
+  if (sellingPrice !== undefined) payload.totalSellingPrice = sellingPrice;
+  else if (isCreate) payload.totalSellingPrice = 0;
+  if (isCreate && payload.currency === undefined) payload.currency = 'INR';
+  return payload;
+}
+
+const QUOTE_WRITE_FIELDS = [
+  'leadId', 'customerId', 'customerName', 'customerPhone', 'customerEmail',
+  'destination', 'tripId', 'hotels', 'transports', 'activities', 'travelerCount',
+  'adults', 'children', 'packageId', 'packageName', 'durationDays', 'durationNights',
+  'validUntil', 'notes', 'internalNotes', 'inclusions', 'exclusions', 'termsAndConditions',
+] as const;
+
+const QUOTE_ITEM_FINANCIAL_FIELDS = new Set([
+  'supplierCost', 'totalSupplierCost', 'grossProfit', 'grossMargin', 'profit', 'quotedRate',
+]);
+
+function stripQuoteItemFinancials(items: unknown): unknown {
+  if (!Array.isArray(items)) return items;
+  return items.map(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
+    return Object.fromEntries(
+      Object.entries(item as Record<string, unknown>)
+        .filter(([key]) => !QUOTE_ITEM_FINANCIAL_FIELDS.has(key)),
+    );
+  });
+}
+
+function buildQuoteWritePayload(sourceValue: QuoteDraftInput | Partial<Quote>, includeStatus: boolean): Record<string, unknown> {
+  const source = sourceValue as Record<string, any>;
+  const payload: Record<string, unknown> = {};
+  for (const field of QUOTE_WRITE_FIELDS) {
+    if (source[field] !== undefined) {
+      payload[field] = ['hotels', 'transports', 'activities'].includes(field)
+        ? stripQuoteItemFinancials(source[field])
+        : source[field];
+    }
+  }
+
+  const totalAmount = source.totalAmount ?? source.basePrice;
+  const discountAmount = source.discountAmount ?? source.discount;
+  if (totalAmount !== undefined) payload.totalAmount = totalAmount;
+  else if (!includeStatus) payload.totalAmount = 0;
+  if (discountAmount !== undefined) payload.discountAmount = discountAmount;
+  else if (!includeStatus) payload.discountAmount = 0;
+  if (!includeStatus && payload.travelerCount === undefined) payload.travelerCount = source.adults ?? 1;
+  if (includeStatus && source.status !== undefined) payload.status = source.status;
+  if (payload.packageId === 'custom-package') delete payload.packageId;
+  return payload;
+}
+
+async function readApiResponse(response: Response): Promise<any> {
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(body.error || `BBOS API request failed with status ${response.status}`);
+    (error as any).code = body.code;
+    throw error;
+  }
+  return body;
+}
+
 interface DataContextType {
   leads: Lead[];
   customers: Customer[];
@@ -180,7 +264,7 @@ interface DataContextType {
   updateAccommodationProperty: (id: string, updates: Partial<AccommodationProperty>) => Promise<void>;
 
   // Trip & Itinerary actions
-  createTrip: (tripData: Omit<Trip, 'id' | 'createdAt' | 'updatedAt' | 'status' | 'grossProfit' | 'grossMargin' | 'totalSupplierCost' | 'totalSellingPrice'> & { budget?: number; totalSupplierCost?: number; totalSellingPrice?: number }, initialDaysCount?: number, fromPackageId?: string) => Promise<Trip>;
+  createTrip: (tripData: TripDraftInput, initialDaysCount?: number, fromPackageId?: string) => Promise<Trip>;
   updateTrip: (id: string, updates: Partial<Trip>) => Promise<void>;
   addItineraryDay: (tripId: string, dayData?: Partial<ItineraryDay>) => Promise<ItineraryDay>;
   updateItineraryDay: (id: string, updates: Partial<ItineraryDay>) => Promise<void>;
@@ -210,7 +294,7 @@ interface DataContextType {
   sendMessage: (conversationId: string, content: string, senderType?: 'EMPLOYEE' | 'CUSTOMER' | 'AI' | 'SYSTEM') => Promise<void>;
 
   // Quote actions
-  createQuote: (quote: Omit<Quote, 'id' | 'createdAt' | 'version'> & { version?: number }) => Promise<Quote>;
+  createQuote: (quote: QuoteDraftInput) => Promise<Quote>;
   updateQuote: (id: string, updates: Partial<Quote>, createNewVersion?: boolean) => Promise<Quote>;
   convertQuoteToBooking: (quoteId: string) => Promise<Booking>;
 
@@ -475,6 +559,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
 
         const canReadInventory = true; // All roles need inventory for TripBuilder
+        const canReadQuotes = ['Founder', 'Admin', 'Accounts', 'Sales Manager', 'Sales Executive']
+          .includes(currentUser?.role as any);
         // UX/data-loading optimization only. Firestore/API rules remain the
         // authority. Reservations needs supplier rates; Operations does not.
         const canReadRates = ['Founder', 'Admin', 'Accounts', 'Reservations'].includes(currentUser?.role as any);
@@ -489,7 +575,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           fetchedActMasters, fetchedActRates
         ] = await Promise.all([
           LeadRepo.getAll(), CustomerRepo.getAll(), CompanyRepo.getAll(), TaskRepo.getAll(),
-          ConversationRepo.getAll(), MessageRepo.getAll(), fetchApi('/api/quotes'), fetchApi('/api/bookings'),
+          ConversationRepo.getAll(), MessageRepo.getAll(), canReadQuotes ? fetchApi('/api/quotes') : Promise.resolve([]), fetchApi('/api/bookings'),
           AiRecommendationRepo.getAll(), AiActionRepo.getAll(), ApprovalRepo.getAll(), AuditLogRepo.getAll(),
           PackageRepo.getAll(),
           fetchApi('/api/trips'), 
@@ -596,6 +682,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.setItem('bb_messages', JSON.stringify(messages));
   }, [messages]);
   useEffect(() => {
+    if (!APP_CONFIG.DEMO_MODE) return;
     localStorage.setItem('bb_quotes', JSON.stringify(quotes));
   }, [quotes]);
   useEffect(() => {
@@ -935,29 +1022,41 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Trip & Itinerary Operations
   const createTrip = async (
-    tripData: Omit<Trip, 'id' | 'createdAt' | 'updatedAt' | 'status' | 'grossProfit' | 'grossMargin' | 'totalSupplierCost' | 'totalSellingPrice'> & { budget?: number; totalSupplierCost?: number; totalSellingPrice?: number },
+    tripData: TripDraftInput,
     initialDaysCount?: number,
     fromPackageId?: string
   ): Promise<Trip> => {
-    const tripId = `trip-${Date.now()}`;
-    const initialCost = tripData.totalSupplierCost || 0;
-    const initialPrice = tripData.totalSellingPrice || tripData.budget || 0;
-    const profit = initialPrice - initialCost;
-    const margin = initialPrice > 0 ? Number(((profit / initialPrice) * 100).toFixed(1)) : 0;
-
-    const newTrip: Trip = {
-      ...tripData,
-      id: tripId,
-      status: 'DRAFT',
-      currency: tripData.currency || 'INR',
-      totalSupplierCost: initialCost,
-      totalSellingPrice: initialPrice,
-      grossProfit: profit,
-      grossMargin: margin,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      isDemo: APP_CONFIG.DEMO_MODE
-    };
+    let newTrip: Trip;
+    if (!APP_CONFIG.DEMO_MODE) {
+      const response = await fetch('/api/trips', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        body: JSON.stringify(buildTripWritePayload(tripData, true)),
+      });
+      const result = await readApiResponse(response);
+      newTrip = result.data as Trip;
+    } else {
+      const tripId = `trip-${Date.now()}`;
+      const initialCost = tripData.totalSupplierCost || 0;
+      const initialPrice = tripData.totalSellingPrice ?? tripData.budget ?? 0;
+      const profit = initialPrice - initialCost;
+      const margin = initialPrice > 0 ? Number(((profit / initialPrice) * 100).toFixed(1)) : 0;
+      newTrip = {
+        ...tripData,
+        id: tripId,
+        status: 'DRAFT',
+        currency: tripData.currency || 'INR',
+        totalSupplierCost: initialCost,
+        costingStatus: 'PENDING',
+        totalSellingPrice: initialPrice,
+        grossProfit: profit,
+        grossMargin: margin,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        isDemo: true,
+      };
+    }
+    const tripId = newTrip.id;
 
     // Generate Initial Days from Dates or Package
     const createdDays: ItineraryDay[] = [];
@@ -994,17 +1093,39 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       createdDays.push(newDay);
     }
 
-    setTrips(prev => [newTrip, ...prev]);
-    if (createdDays.length > 0) {
-      setItineraryDays(prev => [...prev, ...createdDays]);
+    let persistedDays = createdDays;
+    if (!APP_CONFIG.DEMO_MODE && createdDays.length > 0) {
+      persistedDays = [];
+      for (const day of createdDays) {
+        const response = await fetch(`/api/trips/${encodeURIComponent(newTrip.id)}/itinerary-days`, {
+          method: 'POST',
+          headers: await getAuthHeaders(),
+          body: JSON.stringify({
+            date: day.date,
+            title: day.title,
+            location: day.location,
+            description: day.description,
+            ...(day.notes ? { notes: day.notes } : {}),
+          }),
+        });
+        const result = await readApiResponse(response);
+        persistedDays.push(result.data.day as ItineraryDay);
+        newTrip = result.data.trip as Trip;
+      }
     }
 
-    logAuditEvent('trip.created', 'TRIP', newTrip.id, null, newTrip, `Created new trip "${newTrip.title}" for ${newTrip.destination}`);
+    setTrips(prev => [newTrip, ...prev]);
+    if (persistedDays.length > 0) {
+      setItineraryDays(prev => [...prev, ...persistedDays]);
+    }
 
-    if (db) {
+    if (APP_CONFIG.DEMO_MODE) {
+      logAuditEvent('trip.created', 'TRIP', newTrip.id, null, newTrip, `Created new trip "${newTrip.title}" for ${newTrip.destination}`);
+    }
+
+    if (db && APP_CONFIG.DEMO_MODE) {
       try {
-        await setDoc(doc(db, 'trips', newTrip.id), newTrip);
-        for (const day of createdDays) {
+        for (const day of persistedDays) {
           await setDoc(doc(db, 'itinerary_days', day.id), day);
         }
       } catch (err) {
@@ -1017,26 +1138,22 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const updateTrip = async (id: string, updates: Partial<Trip>) => {
     const prevTrip = trips.find(t => t.id === id);
-    const updated = prevTrip ? { ...prevTrip, ...updates, updatedAt: new Date().toISOString() } : null;
-    setTrips(prev =>
-      prev.map(t => (t.id === id ? { ...t, ...updates, updatedAt: new Date().toISOString() } : t))
-    );
-    logAuditEvent('trip.updated', 'TRIP', id, prevTrip, updates, `Updated trip ${prevTrip?.title || id}`);
+    if (!prevTrip) throw new Error('Trip not found.');
 
-    // If totalSellingPrice changed, we need to recalculate margin/profit
-    if (updates.totalSellingPrice !== undefined) {
-      setTimeout(() => {
-        recalculateTripCost(id);
-      }, 50);
+    let updated: Trip;
+    if (!APP_CONFIG.DEMO_MODE) {
+      const response = await fetch(`/api/trips/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        body: JSON.stringify(buildTripWritePayload(updates, false)),
+      });
+      const result = await readApiResponse(response);
+      updated = result.data as Trip;
+    } else {
+      updated = { ...prevTrip, ...updates, updatedAt: new Date().toISOString() };
+      logAuditEvent('trip.updated', 'TRIP', id, prevTrip, updates, `Updated trip ${prevTrip.title || id}`);
     }
-
-    if (db && updated) {
-      try {
-        await setDoc(doc(db, 'trips', id), updated);
-      } catch (err) {
-        console.warn('Firestore update trip notice:', err);
-      }
-    }
+    setTrips(prev => prev.map(t => (t.id === id ? updated : t)));
   };
 
   const recalculateTripCost = async (tripId: string) => {
@@ -1049,10 +1166,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const response = await fetch('/api/trips/calculate-costs', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Demo-User-Id': currentUser.id
-        },
+        headers: await getAuthHeaders(),
         body: JSON.stringify({
           tripId,
           items: allItems,
@@ -1068,6 +1182,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             totalSupplierCost: data.data.totalSupplierCost, 
             grossProfit: data.data.grossProfit, 
             grossMargin: data.data.grossMargin, 
+            costingStatus: data.data.costingStatus,
             updatedAt: new Date().toISOString() 
           } : t))
         );
@@ -1101,10 +1216,31 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       items: dayData?.items || []
     };
 
+    if (!APP_CONFIG.DEMO_MODE) {
+      const response = await fetch(`/api/trips/${encodeURIComponent(tripId)}/itinerary-days`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        body: JSON.stringify({
+          ...(dayData?.date !== undefined ? { date: dayData.date } : {}),
+          ...(dayData?.title !== undefined ? { title: dayData.title } : {}),
+          ...(dayData?.location !== undefined ? { location: dayData.location } : {}),
+          ...(dayData?.description !== undefined ? { description: dayData.description } : {}),
+          ...(dayData?.notes !== undefined ? { notes: dayData.notes } : {}),
+        }),
+      });
+      const result = await readApiResponse(response);
+      const created = result.data.day as ItineraryDay;
+      const updatedTrip = result.data.trip as Trip;
+      setItineraryDays(prev => [...prev, created]);
+      setTrips(prev => prev.map(item => item.id === tripId ? updatedTrip : item));
+      setTimeout(() => { recalculateTripCost(tripId); }, 50);
+      return created;
+    }
+
     setItineraryDays(prev => [...prev, newDay]);
     logAuditEvent('itinerary.day.created', 'ITINERARY_DAY', newDay.id, null, newDay, `Added Day ${nextDayNumber} to trip ${trip?.title || tripId}`);
 
-    if (db) {
+    if (db && APP_CONFIG.DEMO_MODE) {
       try {
         await setDoc(doc(db, 'itinerary_days', newDay.id), newDay);
       } catch (err) {
@@ -1117,10 +1253,31 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const updateItineraryDay = async (id: string, updates: Partial<ItineraryDay>) => {
     const day = itineraryDays.find(d => d.id === id);
+    if (!day) return;
+    if (!APP_CONFIG.DEMO_MODE) {
+      const response = await fetch(`/api/trips/itinerary-days/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        body: JSON.stringify({
+          ...(updates.date !== undefined ? { date: updates.date } : {}),
+          ...(updates.title !== undefined ? { title: updates.title } : {}),
+          ...(updates.location !== undefined ? { location: updates.location } : {}),
+          ...(updates.description !== undefined ? { description: updates.description } : {}),
+          ...(updates.notes !== undefined ? { notes: updates.notes } : {}),
+        }),
+      });
+      const result = await readApiResponse(response);
+      const updatedDay = result.data.day as ItineraryDay;
+      const updatedTrip = result.data.trip as Trip;
+      setItineraryDays(prev => prev.map(item => item.id === id ? updatedDay : item));
+      setTrips(prev => prev.map(item => item.id === day.tripId ? updatedTrip : item));
+      setTimeout(() => { recalculateTripCost(day.tripId); }, 50);
+      return;
+    }
     setItineraryDays(prev =>
       prev.map(d => (d.id === id ? { ...d, ...updates } : d))
     );
-    if (db && day) {
+    if (db && APP_CONFIG.DEMO_MODE) {
       try {
         await setDoc(doc(db, 'itinerary_days', id), { ...day, ...updates });
       } catch (err) {
@@ -1129,29 +1286,33 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
     
     // Ensure state is updated so recalculateTripCost sends the right items
-    if (day) {
-      setTimeout(() => {
-        recalculateTripCost(day.tripId);
-      }, 50);
-    }
+    setTimeout(() => { recalculateTripCost(day.tripId); }, 50);
   };
 
   const deleteItineraryDay = async (id: string) => {
     const day = itineraryDays.find(d => d.id === id);
     if (!day) return;
+    if (!APP_CONFIG.DEMO_MODE) {
+      const response = await fetch(`/api/trips/itinerary-days/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: await getAuthHeaders(),
+      });
+      const result = await readApiResponse(response);
+      const updatedTrip = result.data.trip as Trip;
+      setItineraryDays(prev => prev.filter(item => item.id !== id));
+      setTrips(prev => prev.map(item => item.id === day.tripId ? updatedTrip : item));
+      setTimeout(() => { recalculateTripCost(day.tripId); }, 50);
+      return;
+    }
     const remainingDays = itineraryDays.filter(d => d.id !== id);
     setItineraryDays(remainingDays);
 
     // Recompute costing for trip via server
     recalculateTripCost(day.tripId);
 
-    if (db) {
+    if (db && APP_CONFIG.DEMO_MODE) {
       try {
         await deleteDoc(doc(db, 'itinerary_days', id));
-        const updatedTrip = trips.find(t => t.id === day.tripId);
-        if (updatedTrip) {
-          await setDoc(doc(db, 'trips', day.tripId), { ...updatedTrip, updatedAt: new Date().toISOString() });
-        }
       } catch (err) {
         console.warn('Firestore day delete notice:', err);
       }
@@ -1169,6 +1330,23 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       tripId: targetDay.tripId
     };
 
+    if (!APP_CONFIG.DEMO_MODE) {
+      const { supplierCost: _supplierCost, id: _id, dayId: _dayId, tripId: _tripId, ...safeItem } = itemData as ItineraryItem;
+      const response = await fetch(`/api/trips/itinerary-days/${encodeURIComponent(dayId)}/items`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        body: JSON.stringify(safeItem),
+      });
+      const result = await readApiResponse(response);
+      const updatedDay = result.data.day as ItineraryDay;
+      const createdItem = result.data.item as ItineraryItem;
+      const updatedTrip = result.data.trip as Trip;
+      setItineraryDays(prev => prev.map(day => day.id === dayId ? updatedDay : day));
+      setTrips(prev => prev.map(item => item.id === targetDay.tripId ? updatedTrip : item));
+      setTimeout(() => { recalculateTripCost(targetDay.tripId); }, 50);
+      return createdItem;
+    }
+
     const updatedDay = { ...targetDay, items: [...(targetDay.items || []), newItem] };
     const updatedDays = itineraryDays.map(d => (d.id === dayId ? updatedDay : d));
 
@@ -1185,13 +1363,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     logAuditEvent(actionName, 'ITINERARY_ITEM', newItem.id, null, newItem, `Added ${itemData.type}: ${itemData.title}`);
 
-    if (db) {
+    if (db && APP_CONFIG.DEMO_MODE) {
       try {
         await setDoc(doc(db, 'itinerary_days', dayId), updatedDay);
-        const currentTrip = trips.find(t => t.id === targetDay.tripId);
-        if (currentTrip) {
-          await setDoc(doc(db, 'trips', targetDay.tripId), { ...currentTrip, updatedAt: new Date().toISOString() });
-        }
       } catch (err) {
         console.warn('Firestore add item notice:', err);
       }
@@ -1203,6 +1377,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const deleteItineraryItem = async (dayId: string, itemId: string) => {
     const targetDay = itineraryDays.find(d => d.id === dayId);
     if (!targetDay) return;
+    if (!APP_CONFIG.DEMO_MODE) {
+      const response = await fetch(`/api/trips/itinerary-days/${encodeURIComponent(dayId)}/items/${encodeURIComponent(itemId)}`, {
+        method: 'DELETE',
+        headers: await getAuthHeaders(),
+      });
+      const result = await readApiResponse(response);
+      const updatedDay = result.data.day as ItineraryDay;
+      const updatedTrip = result.data.trip as Trip;
+      setItineraryDays(prev => prev.map(day => day.id === dayId ? updatedDay : day));
+      setTrips(prev => prev.map(item => item.id === targetDay.tripId ? updatedTrip : item));
+      setTimeout(() => { recalculateTripCost(targetDay.tripId); }, 50);
+      return;
+    }
 
     const updatedDay = { ...targetDay, items: (targetDay.items || []).filter(it => it.id !== itemId) };
     const updatedDays = itineraryDays.map(d => (d.id === dayId ? updatedDay : d));
@@ -1214,13 +1401,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       recalculateTripCost(targetDay.tripId);
     }, 50);
 
-    if (db) {
+    if (db && APP_CONFIG.DEMO_MODE) {
       try {
         await setDoc(doc(db, 'itinerary_days', dayId), updatedDay);
-        const currentTrip = trips.find(t => t.id === targetDay.tripId);
-        if (currentTrip) {
-          await setDoc(doc(db, 'trips', targetDay.tripId), { ...currentTrip, updatedAt: new Date().toISOString() });
-        }
       } catch (err) {
         console.warn('Firestore delete item notice:', err);
       }
@@ -1228,71 +1411,108 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   // Quotes
-  const createQuote = async (quoteData: Omit<Quote, 'id' | 'createdAt' | 'version'> & { version?: number }): Promise<Quote> => {
+  const createQuote = async (quoteData: QuoteDraftInput): Promise<Quote> => {
+    const payload = buildQuoteWritePayload(quoteData, false);
+
+    if (!APP_CONFIG.DEMO_MODE) {
+      const response = await fetch('/api/quotes', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        body: JSON.stringify(payload),
+      });
+      const body = await readApiResponse(response);
+      const created = body.data as Quote;
+      setQuotes(prev => [created, ...prev.filter(quote => quote.id !== created.id)]);
+      return created;
+    }
+
+    // Explicit demo mode remains local UX state; production always uses the API.
+    const linkedTrip = typeof payload.tripId === 'string'
+      ? trips.find(trip => trip.id === payload.tripId)
+      : undefined;
+    const totalAmount = Number(payload.totalAmount) || 0;
+    const discountAmount = Number(payload.discountAmount) || 0;
+    const finalAmount = Math.max(0, totalAmount - discountAmount);
+    const totalSupplierCost = linkedTrip?.totalSupplierCost;
     const newQuote: Quote = {
-      ...quoteData,
+      ...(payload as unknown as Quote),
       id: `quote-${Date.now()}`,
-      version: quoteData.version || 1,
-      versionHistory: quoteData.versionHistory || [],
+      totalAmount,
+      discountAmount,
+      finalAmount,
+      ...(totalSupplierCost !== undefined ? {
+        totalSupplierCost,
+        grossProfit: finalAmount - totalSupplierCost,
+        grossMargin: finalAmount > 0 ? Number((((finalAmount - totalSupplierCost) / finalAmount) * 100).toFixed(1)) : 0,
+      } : {}),
+      status: 'DRAFT',
+      salesEmployeeId: currentUser.employeeId,
+      salesEmployeeName: currentUser.name,
+      ...(currentUser.salesTeamId ? { salesTeamId: currentUser.salesTeamId } : {}),
+      createdByEmployeeId: currentUser.employeeId,
+      updatedByEmployeeId: currentUser.employeeId,
+      version: 1,
+      versionHistory: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      isDemo: APP_CONFIG.DEMO_MODE
+      isDemo: true,
     };
     setQuotes(prev => [newQuote, ...prev]);
-    logAuditEvent('QUOTE_CREATED', 'QUOTE', newQuote.id, null, newQuote, `Generated quote of ₹${newQuote.finalAmount.toLocaleString('en-IN')}`);
-
-    if (db) {
-      try {
-        await setDoc(doc(db, 'quotes', newQuote.id), newQuote);
-      } catch (err) {
-        console.warn('Firestore quote create notice:', err);
-      }
-    }
     return newQuote;
   };
 
-  const updateQuote = async (id: string, updates: Partial<Quote>, createNewVersion = false): Promise<Quote> => {
+  const updateQuote = async (id: string, updates: Partial<Quote>, _createNewVersion = false): Promise<Quote> => {
     const prevQuote = quotes.find(q => q.id === id);
     if (!prevQuote) throw new Error(`Quote ${id} not found`);
+    const payload = buildQuoteWritePayload(updates, true);
 
-    let nextVersion = prevQuote.version || 1;
-    let nextHistory = [...(prevQuote.versionHistory || [])];
-
-    if (createNewVersion) {
-      nextHistory.push({
-        version: prevQuote.version || 1,
-        updatedAt: prevQuote.updatedAt || prevQuote.createdAt,
-        updatedBy: currentUser.name,
-        totalAmount: prevQuote.totalAmount,
-        discountAmount: prevQuote.discountAmount,
-        finalAmount: prevQuote.finalAmount,
-        status: prevQuote.status,
-        notes: prevQuote.notes,
-        inclusions: prevQuote.inclusions,
-        exclusions: prevQuote.exclusions,
-        termsAndConditions: prevQuote.termsAndConditions
+    if (!APP_CONFIG.DEMO_MODE) {
+      const response = await fetch(`/api/quotes/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        body: JSON.stringify(payload),
       });
-      nextVersion = nextVersion + 1;
+      const body = await readApiResponse(response);
+      const updated = body.data as Quote;
+      setQuotes(prev => prev.map(quote => quote.id === id ? updated : quote));
+      return updated;
     }
 
+    const totalAmount = Number(payload.totalAmount ?? prevQuote.totalAmount) || 0;
+    const discountAmount = Number(payload.discountAmount ?? prevQuote.discountAmount) || 0;
+    const finalAmount = Math.max(0, totalAmount - discountAmount);
+    const totalSupplierCost = prevQuote.totalSupplierCost;
     const updatedQuote: Quote = {
       ...prevQuote,
-      ...updates,
-      version: nextVersion,
-      versionHistory: nextHistory,
-      updatedAt: new Date().toISOString()
+      ...(payload as Partial<Quote>),
+      totalAmount,
+      discountAmount,
+      finalAmount,
+      ...(totalSupplierCost !== undefined ? {
+        grossProfit: finalAmount - totalSupplierCost,
+        grossMargin: finalAmount > 0 ? Number((((finalAmount - totalSupplierCost) / finalAmount) * 100).toFixed(1)) : 0,
+      } : {}),
+      version: (prevQuote.version || 1) + 1,
+      versionHistory: [
+        ...(prevQuote.versionHistory || []),
+        {
+          version: prevQuote.version || 1,
+          updatedAt: prevQuote.updatedAt || prevQuote.createdAt,
+          updatedBy: currentUser.employeeId,
+          totalAmount: prevQuote.totalAmount,
+          discountAmount: prevQuote.discountAmount,
+          finalAmount: prevQuote.finalAmount,
+          status: prevQuote.status,
+          notes: prevQuote.notes,
+          inclusions: prevQuote.inclusions,
+          exclusions: prevQuote.exclusions,
+          termsAndConditions: prevQuote.termsAndConditions,
+        },
+      ],
+      updatedByEmployeeId: currentUser.employeeId,
+      updatedAt: new Date().toISOString(),
     };
-
-    setQuotes(prev => prev.map(q => (q.id === id ? updatedQuote : q)));
-    logAuditEvent('QUOTE_UPDATED', 'QUOTE', id, prevQuote, updates, `Updated quote #${id} (Version ${nextVersion})`);
-
-    if (db) {
-      try {
-        await setDoc(doc(db, 'quotes', id), updatedQuote);
-      } catch (err) {
-        console.warn('Firestore quote update notice:', err);
-      }
-    }
+    setQuotes(prev => prev.map(q => q.id === id ? updatedQuote : q));
     return updatedQuote;
   };
 
@@ -1339,6 +1559,21 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const quote = quotes.find(q => q.id === quoteId);
     if (!quote) throw new Error(`Quote ${quoteId} not found`);
 
+    if (!APP_CONFIG.DEMO_MODE) {
+      const response = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/convert-to-booking`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        body: JSON.stringify({}),
+      });
+      const body = await readApiResponse(response);
+      const booking = body.booking as Booking;
+      setBookings(prev => prev.some(item => item.id === booking.id) ? prev : [booking, ...prev]);
+      setQuotes(prev => prev.map(item => item.id === quoteId
+        ? { ...item, status: 'ACCEPTED', convertedBookingId: booking.id, updatedAt: new Date().toISOString() }
+        : item));
+      return booking;
+    }
+
     const trip = quote.tripId ? trips.find(t => t.id === quote.tripId) : null;
 
     const booking = await createBooking({
@@ -1352,7 +1587,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       amountPending: quote.finalAmount,
       travelStartDate: trip?.startDate || new Date().toISOString().split('T')[0],
       travelEndDate: trip?.endDate || new Date(Date.now() + 5 * 86400000).toISOString().split('T')[0],
-      assignedSalesEmployeeId: quote.salesEmployeeId || currentUser.id,
+      assignedSalesEmployeeId: quote.salesEmployeeId || currentUser.employeeId,
       assignedOperationsEmployeeId: 'emp-05'
     });
 

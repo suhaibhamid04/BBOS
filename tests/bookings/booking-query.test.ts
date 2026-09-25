@@ -1,197 +1,274 @@
 import { describe, it, expect } from 'bun:test';
+import * as fs from 'fs';
+import * as path from 'path';
 import { BookingQueryService } from '../../src/services/booking/bookingQueryService';
 import { InMemoryBookingQueryProvider } from '../../src/services/booking/bookingQueryProvider';
-import { Booking } from '../../src/types/booking';
-import { PaymentActor } from '../../src/services/payment/paymentService';
-import { BookingListFilter } from '../../src/types/bookingApi';
+import type { Booking, FinancialSnapshot } from '../../src/types/booking';
+import type { AuthorizationPrincipal } from '../../server/authorization/policyTypes';
 
-// =========================================================================
-// MOCK DATA
-// =========================================================================
+function actor(
+  role: AuthorizationPrincipal['role'],
+  employeeId: string,
+  salesTeamId?: string,
+): AuthorizationPrincipal & { id: string } {
+  return {
+    id: `compat-${employeeId}`,
+    employeeId,
+    role,
+    active: true,
+    ...(salesTeamId ? { salesTeamId } : {}),
+  };
+}
 
-const mockAdmin: PaymentActor = { id: 'admin1', name: 'Admin', role: 'Admin' };
-const mockFounder: PaymentActor = { id: 'founder1', name: 'Founder', role: 'Founder' };
-const mockAccounts: PaymentActor = { id: 'accounts1', name: 'Accounts', role: 'Accounts' };
-const mockManager: PaymentActor = { id: 'mgr1', name: 'Manager', role: 'Sales Manager' };
-const mockExec1: PaymentActor = { id: 'exec1', name: 'Exec 1', role: 'Sales Executive' };
-const mockExec2: PaymentActor = { id: 'exec2', name: 'Exec 2', role: 'Sales Executive' };
-const mockOps1: PaymentActor = { id: 'ops1', name: 'Ops 1', role: 'Operations' };
-const mockMarketing: PaymentActor = { id: 'mkt1', name: 'Marketing', role: 'Marketing' };
+const founder = actor('Founder', 'founder-1');
+const admin = actor('Admin', 'admin-1');
+const accounts = actor('Accounts', 'accounts-1');
+const managerA = actor('Sales Manager', 'manager-1', 'team-a');
+const managerB = actor('Sales Manager', 'manager-2', 'team-b');
+const executive1 = actor('Sales Executive', 'exec-1', 'team-a');
+const reservations1 = actor('Reservations', 'res-1');
+const reservations2 = actor('Reservations', 'res-2');
+const operations1 = actor('Operations', 'ops-1');
+const operations2 = actor('Operations', 'ops-2');
+const marketing = actor('Marketing', 'marketing-1');
 
-const b1: Booking = {
-  id: 'bk-1', bookingReference: 'BK-001', tripId: 't1', customerId: 'c1', customerName: 'John Doe',
-  status: 'CONFIRMED', paymentStatus: 'PAID', amountReceived: 1000, amountPending: 0, totalSellingPrice: 1000,
-  travelStartDate: '2026-10-01', travelEndDate: '2026-10-05', createdAt: '2026-09-01T10:00:00Z', updatedAt: '2026-09-01T10:00:00Z',
-  assignedSalesEmployeeId: 'exec1', assignedSalesManagerId: 'mgr1', assignedOperationsEmployeeId: 'ops1'
+function booking(id: string, overrides: Partial<Booking> = {}): Booking {
+  return {
+    id,
+    bookingReference: `BK-${id}`,
+    tripId: `trip-${id}`,
+    customerId: `customer-${id}`,
+    customerName: `Customer ${id}`,
+    customerPhone: '+91-9999999999',
+    customerEmail: `${id}@example.com`,
+    status: 'CONFIRMED',
+    paymentStatus: 'PAID',
+    currency: 'INR',
+    totalSellingPrice: 1_000,
+    totalAmount: 1_000,
+    amountReceived: 1_000,
+    amountPending: 0,
+    travelStartDate: '2026-10-01',
+    travelEndDate: '2026-10-05',
+    createdAt: `2026-09-0${id.slice(-1)}T10:00:00Z`,
+    updatedAt: '2026-09-01T10:00:00Z',
+    ...overrides,
+  };
+}
+
+const own = booking('bk-1', {
+  assignedSalesEmployeeId: 'exec-1',
+  assignedSalesManagerId: 'legacy-manager-that-must-not-authorize',
+  salesTeamId: 'team-a',
+  assignedReservationsEmployeeId: 'res-1',
+  assignedOperationsEmployeeId: 'ops-1',
+});
+const sameTeam = booking('bk-2', {
+  assignedSalesEmployeeId: 'exec-2',
+  assignedSalesManagerId: 'manager-elsewhere',
+  salesTeamId: 'team-a',
+  assignedReservationsEmployeeId: 'res-2',
+  assignedOperationsEmployeeId: 'ops-2',
+});
+const otherTeam = booking('bk-3', {
+  assignedSalesEmployeeId: 'exec-3',
+  assignedSalesManagerId: 'manager-1',
+  salesTeamId: 'team-b',
+  assignedReservationsEmployeeId: 'res-2',
+  assignedOperationsEmployeeId: 'ops-2',
+});
+const missingMetadata = booking('bk-4');
+
+const snapshot: FinancialSnapshot = {
+  id: 'snapshot-1',
+  bookingId: own.id,
+  snapshotVersion: 1,
+  quoteId: 'quote-1',
+  quoteVersion: 1,
+  currency: 'INR',
+  totalSellingPrice: 1_000,
+  totalSupplierCost: 700,
+  accommodationSupplierCost: 500,
+  transportSupplierCost: 150,
+  activitySupplierCost: 50,
+  otherSupplierCosts: 0,
+  grossProfit: 300,
+  grossMargin: 30,
+  rateValidationFingerprint: 'fingerprint',
+  createdAt: '2026-09-01T10:00:00Z',
+  createdBy: 'exec-1',
+  lineItems: [{
+    serviceId: 'hotel-1',
+    serviceType: 'ACCOMMODATION',
+    supplierId: 'supplier-1',
+    supplierName: 'Supplier One',
+    inventoryMasterId: 'hotel-master-1',
+    ratePeriodId: 'rate-1',
+    rateContractType: 'NEGOTIATED',
+    frozenSupplierUnitRate: 500,
+    units: 1,
+    frozenSupplementsCost: 0,
+    frozenTotalSupplierCost: 500,
+    taxTreatment: 'INCLUSIVE',
+    taxAmount: 0,
+    rateVerifiedAt: '2026-09-01T10:00:00Z',
+  }],
 };
 
-const b2: Booking = {
-  id: 'bk-2', bookingReference: 'BK-002', tripId: 't2', customerId: 'c2', customerName: 'Jane Smith',
-  status: 'PENDING_PAYMENT', paymentStatus: 'UNPAID', amountReceived: 0, amountPending: 2000, totalSellingPrice: 2000,
-  travelStartDate: '2026-11-01', travelEndDate: '2026-11-05', createdAt: '2026-09-02T10:00:00Z', updatedAt: '2026-09-02T10:00:00Z',
-  assignedSalesEmployeeId: 'exec2', assignedSalesManagerId: 'mgr1'
-};
+function service() {
+  return new BookingQueryService(new InMemoryBookingQueryProvider({
+    bookings: [own, sameTeam, otherTeam, missingMetadata],
+    financialSnapshots: [snapshot],
+  }));
+}
 
-const b3: Booking = {
-  id: 'bk-3', bookingReference: 'BK-003', tripId: 't3', customerId: 'c3', customerName: 'Bob',
-  status: 'CONFIRMED', paymentStatus: 'PARTIALLY_PAID', amountReceived: 500, amountPending: 500, totalSellingPrice: 1000,
-  travelStartDate: '2026-12-01', travelEndDate: '2026-12-05', createdAt: '2026-09-03T10:00:00Z', updatedAt: '2026-09-03T10:00:00Z',
-  assignedSalesEmployeeId: 'exec1' // No manager, no ops
-};
-
-const provider = new InMemoryBookingQueryProvider({ bookings: [b1, b2, b3] });
-const service = new BookingQueryService(provider as any);
-
-describe('BBOS Phase 2B-6 Stage 1 - Booking Query & Detail Engine', () => {
-
-  describe('1. Role-Based Visibility (List API)', () => {
-    it('Admin/Founder/Accounts can view all bookings', async () => {
-      const resAdmin = await service.listBookings({}, mockAdmin);
-      expect(resAdmin.data.length).toBe(3);
-      const resFounder = await service.listBookings({}, mockFounder);
-      expect(resFounder.data.length).toBe(3);
-      const resAccounts = await service.listBookings({}, mockAccounts);
-      expect(resAccounts.data.length).toBe(3);
-    });
-
-    it('Sales Executive sees only assigned bookings', async () => {
-      const res = await service.listBookings({}, mockExec1);
-      expect(res.data.length).toBe(2);
-      expect(res.data.map(b => b.id).sort()).toEqual(['bk-1', 'bk-3'].sort());
-    });
-
-    it('Sales Manager sees authorized bookings', async () => {
-      const res = await service.listBookings({}, mockManager);
-      expect(res.data.length).toBe(2);
-      expect(res.data.map(b => b.id).sort()).toEqual(['bk-1', 'bk-2'].sort());
-    });
-
-    it('Operations sees only assigned operational bookings', async () => {
-      const res = await service.listBookings({}, mockOps1);
-      expect(res.data.length).toBe(1);
-      expect(res.data[0].id).toBe('bk-1');
-    });
-
-    it('Marketing is denied access', async () => {
-      expect(service.listBookings({}, mockMarketing)).rejects.toThrow('Marketing role has no access');
-    });
+describe('Stage D3A - Booking read/query authorization', () => {
+  it('Founder, Admin, and Accounts have ALL Booking read scope', async () => {
+    for (const principal of [founder, admin, accounts]) {
+      expect((await service().listBookings({}, principal)).data).toHaveLength(4);
+    }
   });
 
-  describe('2. Detail API & IDOR Protection', () => {
-    it('Sales Executive CANNOT access another executives booking', async () => {
-      expect(service.getBookingDetail('bk-2', mockExec1)).rejects.toThrow('Sales Executive is not authorized');
-    });
-
-    it('Operations CANNOT access unassigned booking', async () => {
-      expect(service.getBookingDetail('bk-2', mockOps1)).rejects.toThrow('Operations user is not assigned');
-    });
-
-    it('Sales Manager CAN access authorized booking', async () => {
-      const detail = await service.getBookingDetail('bk-2', mockManager);
-      expect(detail.booking.id).toBe('bk-2');
-    });
-
-    it('Sales Manager CANNOT access unauthorized booking', async () => {
-      expect(service.getBookingDetail('bk-3', mockManager)).rejects.toThrow('Sales Manager is not authorized');
-    });
+  it('Sales Executive lists and opens OWN only using canonical employeeId', async () => {
+    expect(executive1.id).not.toBe(executive1.employeeId);
+    const list = await service().listBookings({}, executive1);
+    expect(list.data.map(item => item.id)).toEqual(['bk-1']);
+    expect((await service().getBookingDetail('bk-1', executive1)).booking.id).toBe('bk-1');
+    expect(service().getBookingDetail('bk-2', executive1)).rejects.toMatchObject({ statusCode: 403 });
   });
 
-  describe('3. Pagination & Cursor Safety', () => {
-    it('Cursor pagination returns correct subset and nextCursor', async () => {
-      const res1 = await service.listBookings({ limit: 1 }, mockAdmin);
-      expect(res1.data.length).toBe(1);
-      expect(res1.hasMore).toBe(true);
-      expect(res1.nextCursor).not.toBeNull();
-      
-      // Expected order is createdAt DESC: bk-3, bk-2, bk-1
-      expect(res1.data[0].id).toBe('bk-3');
+  it('denies out-of-scope detail before loading services or financial snapshots', async () => {
+    const provider = new InMemoryBookingQueryProvider({ bookings: [sameTeam] });
+    let relatedReads = 0;
+    const original = provider.getBookingWithServices.bind(provider);
+    provider.getBookingWithServices = async bookingId => {
+      relatedReads += 1;
+      return original(bookingId);
+    };
+    const queryService = new BookingQueryService(provider);
 
-      const res2 = await service.listBookings({ limit: 1, cursor: res1.nextCursor! }, mockAdmin);
-      expect(res2.data.length).toBe(1);
-      expect(res2.data[0].id).toBe('bk-2');
-    });
-
-    it('Cursor pagination preserves role boundaries (IDOR prevention via query composition)', async () => {
-      // Exec1 only has bk-3 and bk-1.
-      const res1 = await service.listBookings({ limit: 1 }, mockExec1);
-      
-      const res2 = await service.listBookings({ limit: 1, cursor: res1.nextCursor! }, mockExec1);
-      
-      expect(res2.data.find(b => b.id === 'bk-2')).toBeUndefined();
-    });
-
-    it('Rejects malformed cursor safely', async () => {
-      expect(service.listBookings({ cursor: 'invalid_base64_or_json' }, mockAdmin)).rejects.toThrow('Malformed cursor.');
-    });
-
-    it('Rejects cursor if query context (filters) has changed', async () => {
-      const res1 = await service.listBookings({ limit: 1, status: 'CONFIRMED' }, mockAdmin);
-      
-      // Attempt to reuse the cursor with a different status filter
-      expect(service.listBookings({ limit: 1, status: 'PENDING_PAYMENT', cursor: res1.nextCursor! }, mockAdmin))
-        .rejects.toThrow('Cursor is invalid or used in a different query context.');
-    });
-    
-    it('Rejects cursor if role scope (actor) has changed', async () => {
-      const res1 = await service.listBookings({ limit: 1 }, mockAdmin);
-      
-      // Attempt to reuse the cursor with a different actor
-      expect(service.listBookings({ limit: 1, cursor: res1.nextCursor! }, mockFounder))
-        .rejects.toThrow('Cursor is invalid or used in a different query context.');
-    });
+    expect(queryService.getBookingDetail('bk-2', executive1)).rejects.toMatchObject({ statusCode: 403 });
+    expect(relatedReads).toBe(0);
   });
 
-  describe('4. Filters', () => {
-    it('Filters by status', async () => {
-      const res = await service.listBookings({ status: 'CONFIRMED' }, mockAdmin);
-      expect(res.data.length).toBe(2);
-      expect(res.data.every(b => b.status === 'CONFIRMED')).toBe(true);
-    });
-
-    it('Filters by paymentStatus', async () => {
-      const res = await service.listBookings({ paymentStatus: 'UNPAID' }, mockAdmin);
-      expect(res.data.length).toBe(1);
-      expect(res.data[0].id).toBe('bk-2');
-    });
-
-    it('Searches by bookingReference (query)', async () => {
-      const res = await service.listBookings({ query: 'bk-001' }, mockAdmin);
-      expect(res.data.length).toBe(1);
-      expect(res.data[0].id).toBe('bk-1');
-    });
-    
-    it('Searches by customerName (query)', async () => {
-      const res = await service.listBookings({ query: 'jane' }, mockAdmin);
-      expect(res.data.length).toBe(1);
-      expect(res.data[0].id).toBe('bk-2');
-    });
+  it('Sales Manager uses immutable salesTeamId, not assignedSalesManagerId', async () => {
+    const team = await service().listBookings({}, managerA);
+    expect(team.data.map(item => item.id).sort()).toEqual(['bk-1', 'bk-2']);
+    expect((await service().getBookingDetail('bk-2', managerA)).booking.id).toBe('bk-2');
+    expect(service().getBookingDetail('bk-3', managerA)).rejects.toMatchObject({ statusCode: 403 });
+    expect((await service().getBookingDetail('bk-3', managerB)).booking.id).toBe('bk-3');
   });
 
-  describe('5. Data Security & Sanitization', () => {
-    it('Detail Response omits totalSellingPrice for Operations role', async () => {
-      const detail = await service.getBookingDetail('bk-1', mockOps1);
-      expect(detail.booking.totalSellingPrice).toBeUndefined();
-      expect(detail.paymentSummary?.totalSellingPrice).toBeUndefined();
-    });
+  it('Reservations lists and opens only ASSIGNED Bookings', async () => {
+    const list = await service().listBookings({}, reservations1);
+    expect(list.data.map(item => item.id)).toEqual(['bk-1']);
+    const detail = await service().getBookingDetail('bk-1', reservations1);
+    expect(detail.booking.customerEmail).toBe(own.customerEmail);
+    expect(detail.booking.assignedOperationsEmployeeId).toBeUndefined();
+    expect(service().getBookingDetail('bk-2', reservations1)).rejects.toMatchObject({ statusCode: 403 });
+    expect((await service().getBookingDetail('bk-2', reservations2)).booking.id).toBe('bk-2');
+  });
 
-    it('Detail Response includes totalSellingPrice for Sales Executive', async () => {
-      const detail = await service.getBookingDetail('bk-1', mockExec1);
-      expect(detail.booking.totalSellingPrice).toBe(1000);
-      expect(detail.paymentSummary?.totalSellingPrice).toBe(1000);
-    });
+  it('Operations lists and opens only ASSIGNED Bookings', async () => {
+    expect((await service().listBookings({}, operations1)).data.map(item => item.id)).toEqual(['bk-1']);
+    const detail = await service().getBookingDetail('bk-1', operations1);
+    expect(detail.booking.id).toBe('bk-1');
+    expect(detail.booking.assignedReservationsEmployeeId).toBeUndefined();
+    expect(service().getBookingDetail('bk-2', operations1)).rejects.toMatchObject({ statusCode: 403 });
+    expect((await service().getBookingDetail('bk-2', operations2)).booking.id).toBe('bk-2');
+  });
 
-    it('Booking schema intrinsically lacks supplier cost and profit fields', async () => {
-      const detail = await service.getBookingDetail('bk-1', mockAdmin);
-      expect((detail.booking as any).supplierCost).toBeUndefined();
-      expect((detail.booking as any).grossProfit).toBeUndefined();
-      expect((detail.booking as any).grossMargin).toBeUndefined();
-    });
+  it('Marketing is denied raw Booking access', async () => {
+    expect(service().listBookings({}, marketing)).rejects.toMatchObject({ statusCode: 403 });
+    expect(service().getBookingDetail('bk-1', marketing)).rejects.toMatchObject({ statusCode: 403 });
+  });
 
-    it('Payment Summary uses safe aggregate fields', async () => {
-      const detail = await service.getBookingDetail('bk-1', mockAdmin);
-      expect(detail.paymentSummary).toBeDefined();
-      expect(detail.paymentSummary?.amountReceived).toBe(1000);
-      expect(detail.paymentSummary?.paymentStatus).toBe('PAID');
-    });
+  it('passes centralized OWN, TEAM, and ASSIGNED constraints into the provider', async () => {
+    const captured: Record<string, unknown[]> = {};
+    for (const [label, principal] of [
+      ['own', executive1],
+      ['team', managerA],
+      ['reservations', reservations1],
+      ['operations', operations1],
+    ] as const) {
+      const provider = new InMemoryBookingQueryProvider({ bookings: [own, sameTeam, otherTeam] });
+      const original = provider.listBookings.bind(provider);
+      provider.listBookings = async (filter, constraints) => {
+        captured[label] = constraints;
+        return original(filter, constraints);
+      };
+      await new BookingQueryService(provider).listBookings({}, principal);
+    }
+
+    expect(captured.own).toContainEqual({ field: 'assignedSalesEmployeeId', operator: '==', value: 'exec-1' });
+    expect(captured.team).toContainEqual({ field: 'salesTeamId', operator: '==', value: 'team-a' });
+    expect(captured.reservations).toContainEqual({ field: 'assignedReservationsEmployeeId', operator: '==', value: 'res-1' });
+    expect(captured.operations).toContainEqual({ field: 'assignedOperationsEmployeeId', operator: '==', value: 'ops-1' });
+  });
+
+  it('missing owner, team, and assignment metadata fails closed for scoped roles', async () => {
+    for (const principal of [executive1, managerA, reservations1, operations1]) {
+      expect(service().getBookingDetail('bk-4', principal)).rejects.toMatchObject({
+        statusCode: 403,
+        code: 'MISSING_SCOPE_METADATA',
+      });
+    }
+  });
+
+  it('Reservations receives supplier rates/costs but no profit or margin', async () => {
+    const detail = await service().getBookingDetail('bk-1', reservations1);
+    expect(detail.financialSnapshot?.totalSupplierCost).toBe(700);
+    expect(detail.financialSnapshot?.lineItems?.[0].frozenSupplierUnitRate).toBe(500);
+    expect(detail.financialSnapshot?.grossProfit).toBeUndefined();
+    expect(detail.financialSnapshot?.grossMargin).toBeUndefined();
+    expect(detail.paymentSummary).toBeNull();
+  });
+
+  it('Operations receives operational fields but no supplier cost, selling price, or profit', async () => {
+    const detail = await service().getBookingDetail('bk-1', operations1);
+    expect(detail.financialSnapshot).toBeUndefined();
+    expect(detail.booking.totalSellingPrice).toBeUndefined();
+    expect(detail.booking.amountReceived).toBeUndefined();
+    expect(detail.paymentSummary).toBeNull();
+  });
+
+  it('Sales OWN/TEAM and Accounts retain authorized financial visibility', async () => {
+    for (const principal of [executive1, managerA, accounts]) {
+      const detail = await service().getBookingDetail('bk-1', principal);
+      expect(detail.booking.totalSellingPrice).toBe(1_000);
+      expect(detail.financialSnapshot?.totalSupplierCost).toBe(700);
+      expect(detail.financialSnapshot?.grossProfit).toBe(300);
+      expect(detail.financialSnapshot?.grossMargin).toBe(30);
+    }
+  });
+
+  it('keeps pagination bounded and cursor-bound to actor scope', async () => {
+    const first = await service().listBookings({ limit: 1 }, managerA);
+    expect(first.data).toHaveLength(1);
+    expect(first.hasMore).toBe(true);
+    expect(first.nextCursor).not.toBeNull();
+
+    const second = await service().listBookings({ limit: 1, cursor: first.nextCursor! }, managerA);
+    expect(second.data).toHaveLength(1);
+    expect(second.data[0].id).not.toBe(first.data[0].id);
+    expect(service().listBookings({ limit: 1, cursor: first.nextCursor! }, managerB))
+      .rejects.toMatchObject({ statusCode: 400, code: 'INVALID_CURSOR' });
+  });
+
+  it('retains one-at-a-time status, payment, and exact-reference filters', async () => {
+    expect((await service().listBookings({ status: 'CONFIRMED' }, accounts)).data).toHaveLength(4);
+    expect((await service().listBookings({ paymentStatus: 'PAID' }, accounts)).data).toHaveLength(4);
+    expect((await service().listBookings({ query: 'BK-bk-1' }, accounts)).data.map(item => item.id)).toEqual(['bk-1']);
+    expect(service().listBookings({ status: 'CONFIRMED', paymentStatus: 'PAID' }, accounts))
+      .rejects.toMatchObject({ statusCode: 400, code: 'INVALID_FILTER' });
+  });
+
+  it('blocks direct browser reads of Booking roots and modern Booking services', () => {
+    const rules = fs.readFileSync(path.resolve(__dirname, '../../firestore.rules'), 'utf8');
+    for (const collection of ['bookings', 'booking_accommodations', 'booking_transports', 'booking_activities']) {
+      const match = rules.match(new RegExp(`match\\s+\\/${collection}\\/\\{[^}]+\\}\\s*\\{([\\s\\S]*?)allow create`));
+      expect(match).not.toBeNull();
+      expect(match![1]).toContain('allow read: if false;');
+    }
   });
 });

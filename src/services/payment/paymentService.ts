@@ -19,7 +19,10 @@ import {
 } from './paymentStorageProvider';
 
 export interface PaymentActor {
+  /** Legacy compatibility alias; never use for ownership authorization. */
   id: string;
+  /** Stable BBOS business identity used for ownership, audit, and attribution. */
+  employeeId: string;
   uid?: string;
   name: string;
   email?: string;
@@ -96,6 +99,10 @@ export function assertBookingPaymentAccess(
   booking: Booking,
   action: 'READ' | 'RECORD' | 'VERIFY' | 'REJECT' | 'VOID'
 ): void {
+  if (!actor || typeof actor.employeeId !== 'string' || actor.employeeId.trim() === '') {
+    throw new PaymentError(403, 'INVALID_ACTOR_IDENTITY', 'A stable BBOS employee identity is required.');
+  }
+
   // 1. Marketing is strictly blocked from all payment operations
   if (actor.role === 'Marketing') {
     throw new PaymentError(403, 'FORBIDDEN', 'Marketing role has no access to booking payments.');
@@ -127,7 +134,7 @@ export function assertBookingPaymentAccess(
     if (action !== 'READ') {
       throw new PaymentError(403, 'FORBIDDEN', 'Operations role cannot record, verify, reject, or void payments.');
     }
-    const isAssignedOps = Boolean(booking.assignedOperationsEmployeeId && booking.assignedOperationsEmployeeId === actor.id);
+    const isAssignedOps = Boolean(booking.assignedOperationsEmployeeId && booking.assignedOperationsEmployeeId === actor.employeeId);
     if (!isAssignedOps) {
       throw new PaymentError(403, 'FORBIDDEN', 'Operations user is not assigned to this booking.');
     }
@@ -136,7 +143,7 @@ export function assertBookingPaymentAccess(
 
   // 6. Sales Executive: assigned booking only, READ and RECORD only
   if (actor.role === 'Sales Executive') {
-    const isAssigned = booking.assignedSalesEmployeeId === actor.id;
+    const isAssigned = booking.assignedSalesEmployeeId === actor.employeeId;
     if (!isAssigned) {
       throw new PaymentError(403, 'FORBIDDEN', 'Sales Executive is not authorized to access payments for an unassigned booking.');
     }
@@ -146,8 +153,8 @@ export function assertBookingPaymentAccess(
   // 7. Sales Manager: authorized commercial bookings according to existing BBOS model
   if (actor.role === 'Sales Manager') {
     const isManagerAuthorized = Boolean(
-      (booking.assignedSalesManagerId && booking.assignedSalesManagerId === actor.id) ||
-      (booking.assignedSalesEmployeeId && booking.assignedSalesEmployeeId === actor.id)
+      (booking.assignedSalesManagerId && booking.assignedSalesManagerId === actor.employeeId) ||
+      (booking.assignedSalesEmployeeId && booking.assignedSalesEmployeeId === actor.employeeId)
     );
     if (!isManagerAuthorized) {
       throw new PaymentError(403, 'FORBIDDEN', 'Sales Manager is not authorized to access payments for this booking.');
@@ -310,7 +317,7 @@ export class PaymentService {
         paymentType: dto.paymentType,
         notes: dto.notes ? dto.notes.trim() : undefined,
         status: 'RECORDED',
-        recordedBy: actor.id,
+        recordedBy: actor.employeeId,
         recordedByName: actor.name,
         recordedByRole: actor.role,
         recordedAt: now,
@@ -328,7 +335,7 @@ export class PaymentService {
         id: generateAuditLogId(),
         timestamp: now,
         actorType: 'HUMAN',
-        actorId: actor.uid || actor.id,
+        actorId: actor.employeeId,
         actorName: `${actor.name} (${actor.role})`,
         action: 'PAYMENT_RECORDED',
         entityType: 'PAYMENT',
@@ -408,7 +415,7 @@ export class PaymentService {
       }
 
       // Anti-Self-Verification guard
-      if (payment.recordedBy === actor.id) {
+      if (payment.recordedBy === actor.employeeId) {
         throw new PaymentError(
           403,
           'SELF_VERIFICATION_BLOCKED',
@@ -444,7 +451,7 @@ export class PaymentService {
       // Update payment
       const paymentUpdates: Partial<PaymentRecord> = {
         status: 'VERIFIED',
-        verifiedBy: actor.id,
+        verifiedBy: actor.employeeId,
         verifiedByName: actor.name,
         verifiedByRole: actor.role,
         verifiedAt: now,
@@ -474,7 +481,7 @@ export class PaymentService {
         id: generateAuditLogId(),
         timestamp: now,
         actorType: 'HUMAN',
-        actorId: actor.uid || actor.id,
+        actorId: actor.employeeId,
         actorName: `${actor.name} (${actor.role})`,
         action: 'PAYMENT_VERIFIED',
         entityType: 'PAYMENT',
@@ -566,7 +573,7 @@ export class PaymentService {
       const now = new Date().toISOString();
       const paymentUpdates: Partial<PaymentRecord> = {
         status: 'REJECTED',
-        verifiedBy: actor.id,
+        verifiedBy: actor.employeeId,
         verifiedByName: actor.name,
         verifiedByRole: actor.role,
         verifiedAt: now,
@@ -581,7 +588,7 @@ export class PaymentService {
         id: generateAuditLogId(),
         timestamp: now,
         actorType: 'HUMAN',
-        actorId: actor.uid || actor.id,
+        actorId: actor.employeeId,
         actorName: `${actor.name} (${actor.role})`,
         action: 'PAYMENT_REJECTED',
         entityType: 'PAYMENT',
@@ -700,7 +707,7 @@ export class PaymentService {
       // Update payment to VOIDED
       const paymentUpdates: Partial<PaymentRecord> = {
         status: 'VOIDED',
-        voidedBy: actor.id,
+        voidedBy: actor.employeeId,
         voidedByName: actor.name,
         voidedByRole: actor.role,
         voidedAt: now,
@@ -725,7 +732,7 @@ export class PaymentService {
         id: generateAuditLogId(),
         timestamp: now,
         actorType: 'HUMAN',
-        actorId: actor.uid || actor.id,
+        actorId: actor.employeeId,
         actorName: `${actor.name} (${actor.role})`,
         action: 'PAYMENT_VOIDED',
         entityType: 'PAYMENT',

@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { Search } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { BookingListResponse } from '../../types/bookingApi';
-import { Booking } from '../../types/booking';
+import { BookingListItem, BookingListResponse } from '../../types/bookingApi';
 import { BookingDetailPanel } from './BookingDetailPanel';
+import { bookingReadHeaders } from '../../services/auth/authenticatedApi';
 
 export const BookingsView: React.FC = () => {
   const { currentUser } = useAuth();
   
-  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [bookings, setBookings] = useState<BookingListItem[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -35,7 +35,7 @@ export const BookingsView: React.FC = () => {
       if (debouncedQuery) url += `&query=${encodeURIComponent(debouncedQuery)}`;
       
       const res = await fetch(url, {
-        headers: { 'X-Demo-User-Id': currentUser.id }
+        headers: await bookingReadHeaders(currentUser.employeeId),
       });
       
       const json = await res.json();
@@ -89,7 +89,7 @@ export const BookingsView: React.FC = () => {
                 type="text" 
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search by reference or customer..." 
+                placeholder="Search exact booking reference..."
                 className="w-full pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-[#7056EE] focus:ring-1 focus:ring-[#7056EE]"
               />
             </div>
@@ -182,5 +182,3 @@ export const BookingsView: React.FC = () => {
     </div>
   );
 };
-
-

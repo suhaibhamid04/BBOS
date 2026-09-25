@@ -344,4 +344,8 @@ describe('Stage C representative quote detail integration', () => {
     expect((await invokeQuoteDetail('emp-sales-02', undefined, 'quote-demo-01')).statusCode).toBe(403);
     expect((await invokeQuoteDetail('emp-sales-01', undefined, 'quote-missing')).statusCode).toBe(404);
   });
+
+  it('denies a Manager from another team', async () => {
+    expect((await invokeQuoteDetail('emp-mgr-02', 'sales-team-02', 'quote-demo-01')).statusCode).toBe(403);
+  });
 });

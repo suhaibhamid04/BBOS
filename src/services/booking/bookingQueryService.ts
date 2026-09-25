@@ -1,9 +1,15 @@
-import { PaymentActor } from '../payment/paymentService';
 import { APP_CONFIG } from '../../config';
-import { BookingListFilter, BookingListResponse, BookingDetailResponse, BookingPaymentSummary } from '../../types/bookingApi';
-import { BookingQueryProvider, InMemoryBookingQueryProvider, FirestoreBookingQueryProvider } from './bookingQueryProvider';
-import { Booking } from '../../types/booking';
-import { PaymentStorageProvider, FirestorePaymentStorageProvider, InMemoryPaymentStorageProvider } from '../payment/paymentStorageProvider';
+import type { Booking } from '../../types/booking';
+import type { BookingListFilter, BookingListResponse, BookingDetailResponse } from '../../types/bookingApi';
+import {
+  BookingQueryProvider,
+  InMemoryBookingQueryProvider,
+  FirestoreBookingQueryProvider,
+} from './bookingQueryProvider';
+import type { AuthorizationPrincipal, QueryConstraint } from '../../../server/authorization/policyTypes';
+import { authorizeResource, resolveQueryScope } from '../../../server/authorization/policyEngine';
+import { bookingResourceContext } from '../../../server/authorization/resourceContext';
+import { buildBookingDetailDto, buildBookingListDto } from '../../../server/authorization/bookingDto';
 
 export class BookingQueryError extends Error {
   constructor(
@@ -16,192 +22,142 @@ export class BookingQueryError extends Error {
   }
 }
 
+function assertAuthorizedBooking(actor: AuthorizationPrincipal, booking: Booking) {
+  const decision = authorizeResource(actor, 'BOOKING', 'READ_DETAIL', bookingResourceContext(booking));
+  if (!decision.allowed) {
+    throw new BookingQueryError(403, decision.code, decision.reason);
+  }
+  return decision;
+}
+
+function validateFilter(filter: BookingListFilter): void {
+  const activeFilters = [filter.status, filter.paymentStatus, filter.query].filter(Boolean);
+  if (activeFilters.length > 1) {
+    throw new BookingQueryError(
+      400,
+      'INVALID_FILTER',
+      'Only one of status, paymentStatus, or query may be used per Booking list request.',
+    );
+  }
+}
+
+function effectiveConstraints(
+  policyConstraints: readonly QueryConstraint[],
+  filter: BookingListFilter,
+): QueryConstraint[] {
+  if (!filter.status) return [...policyConstraints];
+
+  const policyStatus = policyConstraints.find(constraint => constraint.field === 'status');
+  if (!policyStatus) return [...policyConstraints];
+
+  const allowed = policyStatus.operator === 'in' && Array.isArray(policyStatus.value)
+    ? policyStatus.value.includes(filter.status)
+    : policyStatus.value === filter.status;
+  if (!allowed) {
+    throw new BookingQueryError(
+      403,
+      'WORKFLOW_STATE_DENIED',
+      'The requested Booking state is outside the authorized workflow scope.',
+    );
+  }
+
+  // Avoid combining an `in` and equality filter on the same Firestore field.
+  return policyConstraints.filter(constraint => constraint.field !== 'status');
+}
+
 export class BookingQueryService {
   private queryProvider: BookingQueryProvider;
-  private paymentProvider: PaymentStorageProvider;
 
-  constructor(queryProvider?: BookingQueryProvider, paymentProvider?: PaymentStorageProvider) {
-    this.queryProvider = queryProvider || (APP_CONFIG.DEMO_MODE ? new InMemoryBookingQueryProvider() : new FirestoreBookingQueryProvider());
-    this.paymentProvider = paymentProvider || (APP_CONFIG.DEMO_MODE ? new InMemoryPaymentStorageProvider() : new FirestorePaymentStorageProvider());
+  constructor(queryProvider?: BookingQueryProvider) {
+    this.queryProvider = queryProvider || (
+      APP_CONFIG.DEMO_MODE ? new InMemoryBookingQueryProvider() : new FirestoreBookingQueryProvider()
+    );
   }
 
-  /**
-   * Translates the actor's role into Firestore query filters (where clauses)
-   * to ensure they only fetch bookings they are assigned to or authorized for.
-   */
-  private getRoleFilters(actor: PaymentActor): any[] {
-    if (actor.role === 'Marketing') {
-      throw new BookingQueryError(403, 'FORBIDDEN', 'Marketing role has no access to bookings.');
+  /** GET /api/bookings */
+  async listBookings(filter: BookingListFilter, actor: AuthorizationPrincipal): Promise<BookingListResponse> {
+    validateFilter(filter);
+    const descriptor = resolveQueryScope(actor, 'BOOKING', 'READ_DETAIL');
+    if (descriptor.scope === 'NONE' || descriptor.scope === 'AGGREGATE') {
+      throw new BookingQueryError(403, 'FORBIDDEN', descriptor.deniedReason || 'Raw Booking access is denied.');
     }
 
-    if (['Founder', 'Admin', 'Accounts'].includes(actor.role)) {
-      return []; // Enterprise-wide
-    }
-
-    if (actor.role === 'Operations') {
-      return [{ field: 'assignedOperationsEmployeeId', op: '==', value: actor.id }];
-    }
-
-    if (actor.role === 'Sales Executive') {
-      return [{ field: 'assignedSalesEmployeeId', op: '==', value: actor.id }];
-    }
-
-    if (actor.role === 'Sales Manager') {
-      return [
-        { 
-          type: 'OR', 
-          conditions: [
-            { field: 'assignedSalesManagerId', op: '==', value: actor.id },
-            { field: 'assignedSalesEmployeeId', op: '==', value: actor.id }
-          ]
-        }
-      ];
-    }
-
-    throw new BookingQueryError(403, 'FORBIDDEN', `Role ${actor.role} is not authorized.`);
-  }
-
-  /**
-   * Verifies if an actor is authorized to read a specific booking.
-   * Mirrors `assertBookingPaymentAccess` but strictly for READ access.
-   */
-  private assertBookingReadAccess(actor: PaymentActor, booking: Booking): void {
-    if (actor.role === 'Marketing') {
-      throw new BookingQueryError(403, 'FORBIDDEN', 'Marketing role has no access to bookings.');
-    }
-
-    if (['Founder', 'Admin', 'Accounts'].includes(actor.role)) {
-      return;
-    }
-
-    if (actor.role === 'Operations') {
-      if (booking.assignedOperationsEmployeeId !== actor.id) {
-        throw new BookingQueryError(403, 'FORBIDDEN', 'Operations user is not assigned to this booking.');
-      }
-      return;
-    }
-
-    if (actor.role === 'Sales Executive') {
-      if (booking.assignedSalesEmployeeId !== actor.id) {
-        throw new BookingQueryError(403, 'FORBIDDEN', 'Sales Executive is not authorized to access this unassigned booking.');
-      }
-      return;
-    }
-
-    if (actor.role === 'Sales Manager') {
-      const isManagerAuthorized = Boolean(
-        (booking.assignedSalesManagerId && booking.assignedSalesManagerId === actor.id) ||
-        (booking.assignedSalesEmployeeId && booking.assignedSalesEmployeeId === actor.id)
-      );
-      if (!isManagerAuthorized) {
-        throw new BookingQueryError(403, 'FORBIDDEN', 'Sales Manager is not authorized to access this booking.');
-      }
-      return;
-    }
-
-    throw new BookingQueryError(403, 'FORBIDDEN', `Role ${actor.role} is not authorized.`);
-  }
-
-  /**
-   * GET /api/bookings
-   */
-  async listBookings(filter: BookingListFilter, actor: PaymentActor): Promise<BookingListResponse> {
-    const roleFilters = this.getRoleFilters(actor);
-    
-    // Server-side limits to prevent abuse
-    if (filter.limit && (filter.limit > 100 || filter.limit < 1)) {
-      filter.limit = 20;
-    }
-
-    // 1. Cursor Security: Bind cursor to query context (filters + actor scope)
-    const filterContext = JSON.stringify({
-      status: filter.status || null,
-      paymentStatus: filter.paymentStatus || null,
-      query: filter.query || null,
+    const limit = Number.isInteger(filter.limit) && (filter.limit as number) >= 1 && (filter.limit as number) <= 100
+      ? filter.limit
+      : 20;
+    const normalizedFilter: BookingListFilter = { ...filter, limit };
+    const constraints = effectiveConstraints(descriptor.constraints, normalizedFilter);
+    const cursorContext = JSON.stringify({
+      status: normalizedFilter.status || null,
+      paymentStatus: normalizedFilter.paymentStatus || null,
+      query: normalizedFilter.query || null,
       role: actor.role,
-      actorId: actor.id
+      employeeId: actor.employeeId,
+      salesTeamId: actor.salesTeamId || null,
+      constraints,
     });
 
-    let rawCursorId: string | undefined = undefined;
-    if (filter.cursor) {
+    let cursorId: string | undefined;
+    if (normalizedFilter.cursor) {
       try {
-        const decodedStr = Buffer.from(filter.cursor, 'base64').toString('utf-8');
-        const decoded = JSON.parse(decodedStr);
-        if (decoded.context !== filterContext) {
+        const decoded = JSON.parse(Buffer.from(normalizedFilter.cursor, 'base64').toString('utf-8'));
+        if (decoded.context !== cursorContext || typeof decoded.id !== 'string' || !decoded.id) {
           throw new BookingQueryError(400, 'INVALID_CURSOR', 'Cursor is invalid or used in a different query context.');
         }
-        rawCursorId = decoded.id;
-      } catch (e: any) {
-        if (e instanceof BookingQueryError) throw e;
+        cursorId = decoded.id;
+      } catch (error) {
+        if (error instanceof BookingQueryError) throw error;
         throw new BookingQueryError(400, 'INVALID_CURSOR', 'Malformed cursor.');
+      }
+
+      const cursorBooking = await this.queryProvider.getBooking(cursorId);
+      if (!cursorBooking) throw new BookingQueryError(400, 'INVALID_CURSOR', 'The Booking cursor does not exist.');
+      assertAuthorizedBooking(actor, cursorBooking);
+      if (
+        (normalizedFilter.status && cursorBooking.status !== normalizedFilter.status) ||
+        (normalizedFilter.paymentStatus && cursorBooking.paymentStatus !== normalizedFilter.paymentStatus) ||
+        (normalizedFilter.query && cursorBooking.bookingReference !== normalizedFilter.query)
+      ) {
+        throw new BookingQueryError(400, 'INVALID_CURSOR', 'The Booking cursor is outside the requested filter.');
       }
     }
 
-    const safeFilter = { ...filter, cursor: rawCursorId };
+    const results = await this.queryProvider.listBookings(
+      { ...normalizedFilter, cursor: cursorId },
+      constraints,
+    );
 
-    const results = await this.queryProvider.listBookings(safeFilter, roleFilters);
+    const data = results.data.map(rawBooking => {
+      const booking = rawBooking as Booking;
+      const authorization = assertAuthorizedBooking(actor, booking);
+      return buildBookingListDto(actor, booking, authorization);
+    });
+    const nextCursor = results.nextCursor
+      ? Buffer.from(JSON.stringify({ id: results.nextCursor, context: cursorContext })).toString('base64')
+      : null;
 
-    // Final safety check to ensure provider didn't leak unauthorized bookings
-    for (const b of results.data) {
-      this.assertBookingReadAccess(actor, b);
-    }
-
-    // Encode nextCursor
-    if (results.nextCursor) {
-      const nextObj = {
-        id: results.nextCursor,
-        context: filterContext
-      };
-      results.nextCursor = Buffer.from(JSON.stringify(nextObj)).toString('base64');
-    }
-
-    return results;
+    return { data, nextCursor, hasMore: results.hasMore };
   }
 
-  /**
-   * GET /api/bookings/:id
-   */
-  async getBookingDetail(bookingId: string, actor: PaymentActor): Promise<BookingDetailResponse> {
-    if (!bookingId) {
-      throw new BookingQueryError(400, 'BAD_REQUEST', 'Booking ID is required.');
+  /** GET /api/bookings/:id */
+  async getBookingDetail(bookingId: string, actor: AuthorizationPrincipal): Promise<BookingDetailResponse> {
+    if (!bookingId) throw new BookingQueryError(400, 'BAD_REQUEST', 'Booking ID is required.');
+
+    // Authorize the root Booking before loading related service records or the
+    // restricted financial snapshot. Re-authorization below also fails closed
+    // if scope metadata changes between the two reads.
+    const rootBooking = await this.queryProvider.getBooking(bookingId);
+    if (!rootBooking) {
+      throw new BookingQueryError(404, 'BOOKING_NOT_FOUND', `Booking with ID "${bookingId}" not found.`);
     }
+    assertAuthorizedBooking(actor, rootBooking);
 
     const data = await this.queryProvider.getBookingWithServices(bookingId);
     if (!data) {
       throw new BookingQueryError(404, 'BOOKING_NOT_FOUND', `Booking with ID "${bookingId}" not found.`);
     }
 
-    // IDOR Protection
-    this.assertBookingReadAccess(actor, data.booking);
-
-    // Payment Summary (Role-Safe)
-    // The top-level Booking already contains amountReceived, amountPending, paymentStatus.
-    // This is safe to return as a summary. Detailed payments are fetched from Stage 5 routes.
-    let paymentSummary: BookingPaymentSummary | null = null;
-    
-    // We only expose totalSellingPrice to roles that are allowed to see it.
-    // Operations role typically does not need totalSellingPrice.
-    let isAllowedSellingPrice = !['Operations', 'Marketing'].includes(actor.role);
-    
-    paymentSummary = {
-      paymentStatus: data.booking.paymentStatus || 'UNPAID',
-      amountReceived: data.booking.amountReceived || 0,
-      amountPending: data.booking.amountPending || 0,
-      totalSellingPrice: isAllowedSellingPrice ? data.booking.totalSellingPrice : undefined,
-    };
-
-    // Sanitize Booking itself (remove totalSellingPrice if Operations)
-    const sanitizedBooking = { ...data.booking };
-    if (!isAllowedSellingPrice) {
-      delete sanitizedBooking.totalSellingPrice;
-    }
-
-    return {
-      booking: sanitizedBooking,
-      accommodations: data.accommodations,
-      transports: data.transports,
-      activities: data.activities,
-      paymentSummary,
-    };
+    const authorization = assertAuthorizedBooking(actor, data.booking);
+    return buildBookingDetailDto(actor, data, authorization);
   }
 }

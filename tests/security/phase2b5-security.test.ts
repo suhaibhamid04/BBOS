@@ -233,7 +233,8 @@ describe('Phase 2B-5 Security & Architecture Verification', () => {
       expect(accMatch).not.toBeNull();
       const accRules = accMatch![1];
 
-      expect(accRules).toContain("isSalesExecutive() && request.resource.data.diff(resource.data).affectedKeys().hasOnly([\n          'guestNames', 'specialRequests'\n        ])");
+      expect(accRules).toMatch(/isSalesExecutive\(\)\s*&&\s*request\.resource\.data\.diff\(resource\.data\)\.affectedKeys\(\)\.hasOnly\(\[\s*'guestNames',\s*'specialRequests'\s*\]\)/);
+      expect(accRules).toContain("'supplierConfirmation'");
       expect(accRules).toContain('isOperations()');
       expect(accRules).toContain('nightsCount');
     });
