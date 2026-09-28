@@ -143,6 +143,12 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
         confirmationStatus: 'CONFIRMED',
         ...formData,
       };
+      if (type === 'transports') {
+        payload.expectedUpdatedAt = data?.transports.find(service => service.id === serviceId)?.updatedAt;
+      }
+      if (type === 'activities') {
+        payload.expectedUpdatedAt = data?.activities.find(service => service.id === serviceId)?.updatedAt;
+      }
       if (type === 'accommodations') {
         payload = Object.fromEntries(
           Object.entries(payload).filter(([, value]) => value !== ''),
@@ -534,7 +540,7 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
                     <span className={`px-2 py-1 rounded text-[10px] font-bold ${COMPONENT_BADGE[trans.confirmationStatus]}`}>
                       {trans.confirmationStatus}
                     </span>
-                    {canManageOps && trans.confirmationStatus !== 'CONFIRMED' && !isTerminal && (
+                    {canManageOps && !isTerminal && (
                       <button onClick={() => toggleExpanded(trans.id)} className="p-1 text-slate-400 hover:text-slate-700">
                         {expanded[trans.id] ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                       </button>
@@ -572,6 +578,16 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
                         onChange={e => updateServiceForm(trans.id, 'vehicleRegistrationNumber', e.target.value)}
                       />
                     </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase">Pickup Time</label>
+                        <input type="time" className="mt-1 w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm" value={serviceForms[trans.id]?.pickupTime || trans.pickupTime || ''} onChange={e => updateServiceForm(trans.id, 'pickupTime', e.target.value)} />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase">Execution Notes</label>
+                        <input className="mt-1 w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm" placeholder="Pickup/reporting notes" value={serviceForms[trans.id]?.operationalNotes || ''} onChange={e => updateServiceForm(trans.id, 'operationalNotes', e.target.value)} />
+                      </div>
+                    </div>
                     <button
                       id={`confirm-trans-${trans.id}`}
                       onClick={() => handleServiceConfirm('transports', trans.id)}
@@ -604,7 +620,7 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
                     <span className={`px-2 py-1 rounded text-[10px] font-bold ${COMPONENT_BADGE[act.confirmationStatus]}`}>
                       {act.confirmationStatus}
                     </span>
-                    {canManageOps && act.confirmationStatus !== 'CONFIRMED' && !isTerminal && (
+                    {canManageOps && !isTerminal && (
                       <button onClick={() => toggleExpanded(act.id)} className="p-1 text-slate-400 hover:text-slate-700">
                         {expanded[act.id] ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                       </button>
@@ -631,6 +647,16 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
                           value={serviceForms[act.id]?.assignedGuideName || ''}
                           onChange={e => updateServiceForm(act.id, 'assignedGuideName', e.target.value)}
                         />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase">Guide Phone</label>
+                        <input className="mt-1 w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm" placeholder="Guide contact" value={serviceForms[act.id]?.assignedGuidePhone || ''} onChange={e => updateServiceForm(act.id, 'assignedGuidePhone', e.target.value)} />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase">Execution Notes</label>
+                        <input className="mt-1 w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm" placeholder="Guest instructions or execution notes" value={serviceForms[act.id]?.operationalNotes || ''} onChange={e => updateServiceForm(act.id, 'operationalNotes', e.target.value)} />
                       </div>
                     </div>
                     <button

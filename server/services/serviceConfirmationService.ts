@@ -56,8 +56,10 @@ export interface ConfirmTransportDTO {
   driverName?: string;
   driverPhone?: string;
   vehicleRegistrationNumber?: string;
+  pickupTime?: string;
   operationalNotes?: string;
   supplierNotes?: string;
+  expectedUpdatedAt?: string;
 }
 
 export interface ConfirmActivityDTO {
@@ -67,6 +69,7 @@ export interface ConfirmActivityDTO {
   assignedGuideName?: string;
   assignedGuidePhone?: string;
   operationalNotes?: string;
+  expectedUpdatedAt?: string;
 }
 
 export interface ServiceConfirmationResult {
@@ -486,6 +489,48 @@ function validateAccommodationConfirmationInput(dto: ConfirmAccommodationDTO): v
   }
 }
 
+const TRANSPORT_OPERATIONAL_FIELDS = new Set([
+  'confirmationStatus', 'driverId', 'driverName', 'driverPhone',
+  'vehicleRegistrationNumber', 'pickupTime', 'operationalNotes', 'supplierNotes',
+  'expectedUpdatedAt',
+]);
+const ACTIVITY_OPERATIONAL_FIELDS = new Set([
+  'confirmationStatus', 'supplierConfirmationCode', 'ticketNumbers',
+  'assignedGuideName', 'assignedGuidePhone', 'operationalNotes', 'expectedUpdatedAt',
+]);
+
+function validateLiveOperationalInput(
+  dto: ConfirmTransportDTO | ConfirmActivityDTO,
+  allowedFields: Set<string>,
+): void {
+  if (!dto || typeof dto !== 'object' || Array.isArray(dto)) {
+    throw new ConfirmationError(400, 'INVALID_OPERATIONAL_INPUT', 'An operational update payload is required.');
+  }
+  const rejected = Object.keys(dto as Record<string, unknown>).filter((key) => !allowedFields.has(key));
+  if (rejected.length) {
+    throw new ConfirmationError(400, 'PROTECTED_OPERATIONAL_FIELD', `Commercial or server-controlled fields are not permitted: ${rejected.join(', ')}.`);
+  }
+  if (dto.confirmationStatus !== undefined && !['REQUESTED', 'CONFIRMED'].includes(dto.confirmationStatus)) {
+    throw new ConfirmationError(400, 'INVALID_OPERATIONAL_STATUS', 'Operational status must be REQUESTED or CONFIRMED.');
+  }
+  for (const field of Object.keys(dto)) {
+    if (field === 'confirmationStatus' || field === 'ticketNumbers') continue;
+    const value = (dto as unknown as Record<string, unknown>)[field];
+    if (value !== undefined && (typeof value !== 'string' || !value.trim() || value.trim().length > 1000)) {
+      throw new ConfirmationError(400, 'INVALID_OPERATIONAL_INPUT', `${field} must be a non-empty string of at most 1000 characters.`);
+    }
+  }
+  if ('pickupTime' in dto && dto.pickupTime !== undefined && !/^([01]\d|2[0-3]):[0-5]\d$/.test(dto.pickupTime)) {
+    throw new ConfirmationError(400, 'INVALID_OPERATIONAL_INPUT', 'pickupTime must use 24-hour HH:mm format.');
+  }
+  if ('ticketNumbers' in dto && dto.ticketNumbers !== undefined && (
+    !Array.isArray(dto.ticketNumbers) ||
+    dto.ticketNumbers.some((value) => typeof value !== 'string' || !value.trim() || value.length > 160)
+  )) {
+    throw new ConfirmationError(400, 'INVALID_OPERATIONAL_INPUT', 'ticketNumbers must contain non-empty strings.');
+  }
+}
+
 function resolveAccommodationSnapshotLine(
   snapshot: FinancialSnapshot,
   service: BookingAccommodation,
@@ -727,11 +772,17 @@ export class ServiceConfirmationService {
     if (!authorization.allowed) {
       throw new ConfirmationError(403, authorization.code, authorization.reason);
     }
-    if (booking.status === 'CANCELLED') throw new ConfirmationError(422, 'BOOKING_CANCELLED', 'Cannot update services on a cancelled booking.');
+    if (!['IN_OPERATIONS', 'TRAVELLING'].includes(booking.status)) {
+      throw new ConfirmationError(422, 'BOOKING_NOT_LIVE', 'Operational service updates require an IN_OPERATIONS or TRAVELLING Booking.');
+    }
+    validateLiveOperationalInput(dto, TRANSPORT_OPERATIONAL_FIELDS);
 
     const service = await this.storageProvider.getTransport(serviceId);
     if (!service || service.bookingId !== bookingId) {
       throw new ConfirmationError(404, 'SERVICE_NOT_FOUND', `Transport service "${serviceId}" not found for this booking.`);
+    }
+    if (dto.expectedUpdatedAt !== undefined && dto.expectedUpdatedAt !== service.updatedAt) {
+      throw new ConfirmationError(409, 'CONFIRMATION_CONFLICT', 'Transport service changed; reload and retry.');
     }
 
     const now = new Date().toISOString();
@@ -742,6 +793,7 @@ export class ServiceConfirmationService {
     if (dto.driverName !== undefined) allowedUpdate.driverName = dto.driverName;
     if (dto.driverPhone !== undefined) allowedUpdate.driverPhone = dto.driverPhone;
     if (dto.vehicleRegistrationNumber !== undefined) allowedUpdate.vehicleRegistrationNumber = dto.vehicleRegistrationNumber;
+    if (dto.pickupTime !== undefined) allowedUpdate.pickupTime = dto.pickupTime;
     if (dto.operationalNotes !== undefined) allowedUpdate.operationalNotes = dto.operationalNotes;
     if (dto.supplierNotes !== undefined) allowedUpdate.supplierNotes = dto.supplierNotes;
     allowedUpdate.updatedAt = now;
@@ -760,7 +812,7 @@ export class ServiceConfirmationService {
       actorType: 'HUMAN',
       actorId: actor.employeeId,
       actorName: `${actor.name} (${actor.role})`,
-      action: 'SERVICE_TRANSPORT_CONFIRMED',
+      action: 'OPERATIONAL_SERVICE_UPDATED',
       entityType: 'BOOKING',
       entityId: bookingId,
       before: { confirmationStatus: service.confirmationStatus },
@@ -802,11 +854,17 @@ export class ServiceConfirmationService {
     if (!authorization.allowed) {
       throw new ConfirmationError(403, authorization.code, authorization.reason);
     }
-    if (booking.status === 'CANCELLED') throw new ConfirmationError(422, 'BOOKING_CANCELLED', 'Cannot update services on a cancelled booking.');
+    if (!['IN_OPERATIONS', 'TRAVELLING'].includes(booking.status)) {
+      throw new ConfirmationError(422, 'BOOKING_NOT_LIVE', 'Operational service updates require an IN_OPERATIONS or TRAVELLING Booking.');
+    }
+    validateLiveOperationalInput(dto, ACTIVITY_OPERATIONAL_FIELDS);
 
     const service = await this.storageProvider.getActivity(serviceId);
     if (!service || service.bookingId !== bookingId) {
       throw new ConfirmationError(404, 'SERVICE_NOT_FOUND', `Activity service "${serviceId}" not found for this booking.`);
+    }
+    if (dto.expectedUpdatedAt !== undefined && dto.expectedUpdatedAt !== service.updatedAt) {
+      throw new ConfirmationError(409, 'CONFIRMATION_CONFLICT', 'Activity service changed; reload and retry.');
     }
 
     const now = new Date().toISOString();
@@ -834,7 +892,7 @@ export class ServiceConfirmationService {
       actorType: 'HUMAN',
       actorId: actor.employeeId,
       actorName: `${actor.name} (${actor.role})`,
-      action: 'SERVICE_ACTIVITY_CONFIRMED',
+      action: 'OPERATIONAL_SERVICE_UPDATED',
       entityType: 'BOOKING',
       entityId: bookingId,
       before: { confirmationStatus: service.confirmationStatus },

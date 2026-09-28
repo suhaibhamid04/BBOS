@@ -25,6 +25,9 @@ const SUPPORTED_ACTIONS: Record<AuthorizationResource, readonly AuthorizationAct
     'VERIFY_PAYMENT',
     'VOID_PAYMENT',
     'ASSIGN_OPERATIONS',
+    'MANAGE_OPERATIONAL_ISSUE',
+    'REQUEST_OPERATIONAL_SPEND',
+    'APPROVE_OPERATIONAL_SPEND',
   ],
   INVENTORY: ['READ_INVENTORY'],
   ATTRIBUTION_REPORT: ['READ_AGGREGATE'],
@@ -125,6 +128,7 @@ function roleScope(
   }
 
   if (role === 'Accounts') {
+    if (resource === 'BOOKING' && action === 'APPROVE_OPERATIONAL_SPEND') return 'ALL';
     if (
       resource === 'SUPPLIER_PAYABLE' &&
       ['READ_SUPPLIER_PAYABLE', 'RECORD_SUPPLIER_PAYMENT', 'VERIFY_SUPPLIER_PAYMENT'].includes(action)
@@ -176,6 +180,12 @@ function roleScope(
     ) {
       return 'ASSIGNED';
     }
+    if (
+      resource === 'BOOKING' &&
+      (action === 'MANAGE_OPERATIONAL_ISSUE' || action === 'REQUEST_OPERATIONAL_SPEND')
+    ) {
+      return 'ASSIGNED';
+    }
     return 'NONE';
   }
 
@@ -216,7 +226,11 @@ function workflowDecision(
   }
 
   if (principal.role === 'Operations' && (resource === 'TRIP' || resource === 'BOOKING')) {
-    if (action === 'UPDATE_OPERATIONAL') return requireState(['IN_OPERATIONS', 'TRAVELLING']);
+    if (
+      action === 'UPDATE_OPERATIONAL' ||
+      action === 'MANAGE_OPERATIONAL_ISSUE' ||
+      action === 'REQUEST_OPERATIONAL_SPEND'
+    ) return requireState(['IN_OPERATIONS', 'TRAVELLING']);
     if (action === 'READ_DETAIL' || action === 'READ_OPERATIONAL') {
       return requireState(OPERATIONS_READ_STATES[resource]);
     }

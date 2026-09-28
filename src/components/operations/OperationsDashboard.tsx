@@ -17,7 +17,12 @@ import { useAuth } from '../../context/AuthContext';
 import { listManagedEmployees } from '../../services/employees/employeeManagementApi';
 import {
   assignOperationsEmployee,
+  createEmergencySpendRequest,
+  createOperationalChangeRequest,
+  createOperationalIssue,
+  decideEmergencySpend,
   fetchOperationsControlRoom,
+  updateOperationalIssue,
 } from '../../services/operations/operationsControlRoomApi';
 import { PRESET_USERS } from '../../services/permissions';
 import type {
@@ -108,6 +113,12 @@ export const OperationsDashboard: React.FC = () => {
   const [assignmentBookingId, setAssignmentBookingId] = useState<string | null>(null);
   const [assignmentEmployeeId, setAssignmentEmployeeId] = useState('');
   const [assigning, setAssigning] = useState(false);
+  const [liveAction, setLiveAction] = useState<'ISSUE' | 'SPEND' | 'CHANGE' | null>(null);
+  const [liveActionBookingId, setLiveActionBookingId] = useState('');
+  const [liveTitle, setLiveTitle] = useState('');
+  const [liveDescription, setLiveDescription] = useState('');
+  const [liveAmount, setLiveAmount] = useState('');
+  const [savingLiveAction, setSavingLiveAction] = useState(false);
   const canAssign = currentUser.role === 'Founder' || currentUser.role === 'Admin';
 
   const load = useCallback(async () => {
@@ -157,6 +168,66 @@ export const OperationsDashboard: React.FC = () => {
       setError(requestError instanceof Error ? requestError.message : 'Unable to update the Operations assignment.');
     } finally {
       setAssigning(false);
+    }
+  };
+
+  const openLiveAction = (kind: 'ISSUE' | 'SPEND' | 'CHANGE', bookingId: string) => {
+    setLiveAction(kind);
+    setLiveActionBookingId(bookingId);
+    setLiveTitle('');
+    setLiveDescription('');
+    setLiveAmount('');
+  };
+
+  const submitLiveAction = async () => {
+    if (!liveAction || !liveActionBookingId || !liveTitle.trim()) return;
+    setSavingLiveAction(true);
+    setError('');
+    try {
+      if (liveAction === 'ISSUE') {
+        await createOperationalIssue(liveActionBookingId, {
+          category: 'OTHER', title: liveTitle.trim(), description: liveDescription.trim() || liveTitle.trim(),
+          priority: 'MEDIUM', hasFinancialImpact: false,
+        }, currentUser.employeeId);
+      } else if (liveAction === 'SPEND') {
+        if (!/^\d+(\.\d{1,2})?$/.test(liveAmount) || Number(liveAmount) <= 0) throw new Error('Enter a valid positive amount with at most two decimal places.');
+        await createEmergencySpendRequest(liveActionBookingId, {
+          amountMinor: Math.round(Number(liveAmount) * 100), currency: 'INR', purpose: liveTitle.trim(),
+          category: 'OTHER', reason: liveDescription.trim() || liveTitle.trim(),
+        }, currentUser.employeeId);
+      } else {
+        await createOperationalChangeRequest(liveActionBookingId, {
+          changeType: 'SERVICE_SCOPE', description: liveDescription.trim() || liveTitle.trim(), linkedService: undefined,
+        }, currentUser.employeeId);
+      }
+      setLiveAction(null);
+      await load();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to save the operational action.');
+    } finally {
+      setSavingLiveAction(false);
+    }
+  };
+
+  const resolveIssue = async (issue: OperationsControlRoomResponse['openIssues'][number]) => {
+    const resolutionNotes = window.prompt('Resolution notes');
+    if (!resolutionNotes?.trim()) return;
+    try {
+      await updateOperationalIssue(issue.bookingId, issue.id, { status: 'RESOLVED', resolutionNotes: resolutionNotes.trim(), expectedUpdatedAt: issue.updatedAt }, currentUser.employeeId);
+      await load();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to resolve the issue.');
+    }
+  };
+
+  const decideSpend = async (request: OperationsControlRoomResponse['pendingSpendRequests'][number], decision: 'APPROVED' | 'REJECTED') => {
+    const reason = decision === 'REJECTED' ? window.prompt('Rejection reason') : undefined;
+    if (decision === 'REJECTED' && !reason?.trim()) return;
+    try {
+      await decideEmergencySpend(request, decision, currentUser.employeeId, reason?.trim());
+      await load();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to decide the spend request.');
     }
   };
 
@@ -212,6 +283,30 @@ export const OperationsDashboard: React.FC = () => {
             {!data.today.length && <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">No execution items scheduled today.</div>}
           </section>
 
+          <section className="grid gap-4 xl:grid-cols-3">
+            <div className="rounded-xl border border-slate-200 bg-white p-4">
+              <div className="flex items-center justify-between"><h3 className="font-bold text-slate-900">Open guest issues</h3><span className="text-xs font-bold text-rose-600">{data.openIssues.length}</span></div>
+              <div className="mt-3 space-y-2">
+                {data.openIssues.map((issue) => <div key={issue.id} className="rounded-lg bg-slate-50 p-3"><div className="flex justify-between gap-2"><p className="text-sm font-bold text-slate-900">{issue.title}</p><span className="text-[10px] font-bold text-rose-700">{issue.priority}</span></div><p className="mt-1 text-xs text-slate-500">{issue.status.replaceAll('_', ' ')}</p><button type="button" onClick={() => void resolveIssue(issue)} className="mt-2 text-xs font-bold text-emerald-700">Mark resolved</button></div>)}
+                {!data.openIssues.length && <p className="text-xs text-slate-500">No unresolved guest issues.</p>}
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-4">
+              <div className="flex items-center justify-between"><h3 className="font-bold text-slate-900">Emergency spend</h3><span className="text-xs font-bold text-amber-700">{data.pendingSpendRequests.length}</span></div>
+              <div className="mt-3 space-y-2">
+                {data.pendingSpendRequests.map((request) => <div key={request.id} className="rounded-lg bg-amber-50 p-3"><p className="text-sm font-bold text-slate-900">{request.purpose}</p><p className="mt-1 text-xs text-slate-600">{request.currency} {(request.amountMinor / 100).toFixed(2)} · approval required</p>{canAssign && <div className="mt-2 flex gap-2"><button type="button" onClick={() => void decideSpend(request, 'APPROVED')} className="text-xs font-bold text-emerald-700">Approve</button><button type="button" onClick={() => void decideSpend(request, 'REJECTED')} className="text-xs font-bold text-rose-700">Reject</button></div>}</div>)}
+                {!data.pendingSpendRequests.length && <p className="text-xs text-slate-500">No pending spend requests.</p>}
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-4">
+              <div className="flex items-center justify-between"><h3 className="font-bold text-slate-900">Commercial follow-up</h3><span className="text-xs font-bold text-violet-700">{data.commercialChangeRequests.length}</span></div>
+              <div className="mt-3 space-y-2">
+                {data.commercialChangeRequests.map((request) => <div key={request.id} className="rounded-lg bg-violet-50 p-3"><p className="text-sm font-bold text-slate-900">{request.changeType.replaceAll('_', ' ')}</p><p className="mt-1 text-xs text-slate-600">{request.description}</p></div>)}
+                {!data.commercialChangeRequests.length && <p className="text-xs text-slate-500">No operational changes await commercial review.</p>}
+              </div>
+            </div>
+          </section>
+
           <section className="space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="font-bold text-slate-900">Upcoming</h3>
@@ -262,7 +357,12 @@ export const OperationsDashboard: React.FC = () => {
               <div className="flex justify-between gap-4"><span className="text-slate-500">Commercial clearance</span><span className="font-semibold text-slate-900">{selectedItem.commercialClearance.replaceAll('_', ' ')}</span></div>
               {selectedDetails.map(([key, value]) => <div key={key} className="flex justify-between gap-4"><span className="text-slate-500">{label(key)}</span><span className="text-right font-semibold text-slate-900">{Array.isArray(value) ? value.join(', ') : String(value)}</span></div>)}
             </div>
-            {canAssign && <button type="button" onClick={() => openAssignment(selectedItem.bookingId, selectedItem.assignedOperationsEmployeeId)} className="mt-5 inline-flex items-center gap-2 rounded-lg bg-[#7056EE] px-4 py-2.5 text-sm font-bold text-white hover:bg-[#6044E6]"><UserRoundCheck className="h-4 w-4" />{selectedItem.assignedOperationsEmployeeId ? 'Reassign Operations' : 'Assign Operations'}</button>}
+            <div className="mt-5 flex flex-wrap gap-2">
+              <button type="button" onClick={() => openLiveAction('ISSUE', selectedItem.bookingId)} className="rounded-lg bg-rose-600 px-3 py-2 text-xs font-bold text-white">Report issue</button>
+              <button type="button" onClick={() => openLiveAction('SPEND', selectedItem.bookingId)} className="rounded-lg bg-amber-600 px-3 py-2 text-xs font-bold text-white">Request spend</button>
+              <button type="button" onClick={() => openLiveAction('CHANGE', selectedItem.bookingId)} className="rounded-lg bg-violet-600 px-3 py-2 text-xs font-bold text-white">Escalate commercial change</button>
+              {canAssign && <button type="button" onClick={() => openAssignment(selectedItem.bookingId, selectedItem.assignedOperationsEmployeeId)} className="inline-flex items-center gap-2 rounded-lg bg-[#7056EE] px-3 py-2 text-xs font-bold text-white hover:bg-[#6044E6]"><UserRoundCheck className="h-4 w-4" />{selectedItem.assignedOperationsEmployeeId ? 'Reassign Operations' : 'Assign Operations'}</button>}
+            </div>
           </aside>
         </div>
       )}
@@ -280,6 +380,18 @@ export const OperationsDashboard: React.FC = () => {
               <button type="button" onClick={() => setAssignmentBookingId(null)} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700">Cancel</button>
               <button type="button" disabled={!assignmentEmployeeId || assigning} onClick={() => void submitAssignment()} className="inline-flex items-center gap-2 rounded-lg bg-[#7056EE] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{assigning && <Loader2 className="h-4 w-4 animate-spin" />}Save assignment</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {liveAction && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/40 p-4" onClick={() => setLiveAction(null)}>
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <h3 className="text-lg font-bold text-slate-900">{liveAction === 'ISSUE' ? 'Report guest issue' : liveAction === 'SPEND' ? 'Request emergency spend' : 'Escalate commercial change'}</h3>
+            <input className="mt-4 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm" placeholder={liveAction === 'ISSUE' ? 'Issue summary' : liveAction === 'SPEND' ? 'Spend purpose' : 'Change summary'} value={liveTitle} onChange={(event) => setLiveTitle(event.target.value)} />
+            {liveAction === 'SPEND' && <input className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm" inputMode="decimal" placeholder="Amount in INR" value={liveAmount} onChange={(event) => setLiveAmount(event.target.value)} />}
+            <textarea className="mt-3 min-h-24 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm" placeholder="Description / reason" value={liveDescription} onChange={(event) => setLiveDescription(event.target.value)} />
+            <div className="mt-4 flex justify-end gap-2"><button type="button" onClick={() => setLiveAction(null)} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold">Cancel</button><button type="button" disabled={!liveTitle.trim() || savingLiveAction} onClick={() => void submitLiveAction()} className="rounded-lg bg-[#7056EE] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">Save</button></div>
           </div>
         </div>
       )}

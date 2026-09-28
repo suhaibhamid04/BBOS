@@ -259,10 +259,10 @@ describe('BBOS Phase 2B-6 Stage 2 — Service Confirmation Service', () => {
       });
       const svc = new ServiceConfirmationService(storage);
 
-      await svc.confirmTransport('book-01', 'trans-01', {
+      await expect(svc.confirmTransport('book-01', 'trans-01', {
         confirmationStatus: 'CONFIRMED',
         ...(({ pickupLocation: 'HACKED', serviceDate: '2020-01-01' } as any)),
-      } as any, opsActor);
+      } as any, opsActor)).rejects.toMatchObject({ code: 'PROTECTED_OPERATIONAL_FIELD' });
 
       const updated = storage.getTransportSync('trans-01')!;
       expect(updated.pickupLocation).toBe('Airport'); // unchanged
@@ -304,10 +304,10 @@ describe('BBOS Phase 2B-6 Stage 2 — Service Confirmation Service', () => {
       });
       const svc = new ServiceConfirmationService(storage);
 
-      await svc.confirmActivity('book-01', 'act-01', {
+      await expect(svc.confirmActivity('book-01', 'act-01', {
         confirmationStatus: 'CONFIRMED',
         ...(({ activityName: 'HACKED', serviceDate: '2020-01-01' } as any)),
-      } as any, opsActor);
+      } as any, opsActor)).rejects.toMatchObject({ code: 'PROTECTED_OPERATIONAL_FIELD' });
 
       const updated = storage.getActivitySync('act-01')!;
       expect(updated.activityName).toBe('Safari Tour'); // unchanged

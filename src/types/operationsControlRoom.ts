@@ -1,4 +1,5 @@
 import type { BookingStatus } from './booking';
+import type { EmergencySpendRequest, OperationalChangeRequest, OperationalIssue } from './liveOperations';
 
 export type OperationalReadiness = 'READY' | 'ATTENTION_REQUIRED' | 'NOT_READY';
 export type OperationalItemType =
@@ -60,7 +61,10 @@ export type OperationalAttentionCode =
   | 'HOTEL_CONFIRMATION_PENDING'
   | 'DRIVER_DETAILS_MISSING'
   | 'VEHICLE_DETAILS_MISSING'
-  | 'REQUIRED_SERVICE_DATA_MISSING';
+  | 'REQUIRED_SERVICE_DATA_MISSING'
+  | 'HIGH_PRIORITY_GUEST_ISSUE'
+  | 'EMERGENCY_SPEND_APPROVAL_REQUIRED'
+  | 'COMMERCIAL_CHANGE_FOLLOW_UP_REQUIRED';
 
 export interface OperationalAttentionItem {
   id: string;
@@ -74,6 +78,7 @@ export interface OperationalAttentionItem {
   serviceType?: 'ACCOMMODATION' | 'TRANSPORT' | 'ACTIVITY';
   date?: string;
   assignedOperationsEmployeeId?: string;
+  relatedRecordId?: string;
 }
 
 export interface OperationsControlRoomResponse {
@@ -82,11 +87,17 @@ export interface OperationsControlRoomResponse {
   today: OperationalItem[];
   upcoming: OperationalItem[];
   attentionRequired: OperationalAttentionItem[];
+  openIssues: OperationalIssue[];
+  pendingSpendRequests: EmergencySpendRequest[];
+  commercialChangeRequests: OperationalChangeRequest[];
   summary: {
     todayCount: number;
     upcomingCount: number;
     attentionCount: number;
     readyCount: number;
+    openIssueCount: number;
+    pendingSpendCount: number;
+    commercialFollowUpCount: number;
   };
 }
 

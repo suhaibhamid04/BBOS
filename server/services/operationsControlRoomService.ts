@@ -18,6 +18,7 @@ import type {
   OperationsAssignmentInput,
   OperationsControlRoomResponse,
 } from '../../src/types/operationsControlRoom.js';
+import { LiveOperationsService } from './liveOperationsService.js';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -352,11 +353,20 @@ function parseAssignmentInput(value: unknown): { operationsEmployeeId: string; r
 }
 
 export class OperationsControlRoomService {
+  private readonly liveOperations: Pick<LiveOperationsService, 'signalsForBookings'>;
+
   constructor(
     private readonly storage: OperationsControlRoomStorage = new FirestoreOperationsControlRoomStorage(),
     private readonly now: () => Date = () => new Date(),
     private readonly horizonDays = 7,
-  ) {}
+    liveOperations?: Pick<LiveOperationsService, 'signalsForBookings'>,
+  ) {
+    this.liveOperations = liveOperations || (
+      storage instanceof FirestoreOperationsControlRoomStorage
+        ? new LiveOperationsService()
+        : { signalsForBookings: async () => ({ issues: [], spendRequests: [], changeRequests: [] }) }
+    );
+  }
 
   async getControlRoom(actor: OperationsActor): Promise<OperationsControlRoomResponse> {
     const scope = resolveQueryScope(actor, 'BOOKING', 'READ_OPERATIONAL');
@@ -368,13 +378,43 @@ export class OperationsControlRoomService {
     const bundles = await this.storage.listOperationalBundles(actor);
     const items: OperationalItem[] = [];
     const alerts: OperationalAttentionItem[] = [];
+    const visibleBundles: OperationalBookingBundle[] = [];
     for (const bundle of bundles) {
       const decision = authorizeResource(actor, 'BOOKING', 'READ_OPERATIONAL', bookingResourceContext(bundle.booking));
       if (!decision.allowed) continue;
       if (!bundleHasNearTermWork(bundle, today, horizonEnd)) continue;
+      visibleBundles.push(bundle);
       const derived = deriveBundle(bundle, today, horizonEnd);
       items.push(...derived.items);
       alerts.push(...derived.alerts.filter((item) => !item.date || item.date <= horizonEnd));
+    }
+    const signals = await this.liveOperations.signalsForBookings(visibleBundles.map((bundle) => bundle.booking.id));
+    const bundleById = new Map(visibleBundles.map((bundle) => [bundle.booking.id, bundle]));
+    for (const issue of signals.issues) {
+      if (issue.priority !== 'HIGH' && issue.priority !== 'CRITICAL') continue;
+      const bundle = bundleById.get(issue.bookingId);
+      if (!bundle) continue;
+      alerts.push(attention(bundle, 'HIGH_PRIORITY_GUEST_ISSUE', issue.title, {
+        severity: issue.priority === 'CRITICAL' ? 'HIGH' : 'MEDIUM',
+      }));
+      alerts[alerts.length - 1].id = `attention-issue-${issue.id}`;
+      alerts[alerts.length - 1].relatedRecordId = issue.id;
+    }
+    if (actor.role === 'Founder' || actor.role === 'Admin') {
+      for (const spend of signals.spendRequests) {
+        const bundle = bundleById.get(spend.bookingId);
+        if (!bundle) continue;
+        alerts.push(attention(bundle, 'EMERGENCY_SPEND_APPROVAL_REQUIRED', spend.purpose, { severity: 'HIGH' }));
+        alerts[alerts.length - 1].id = `attention-spend-${spend.id}`;
+        alerts[alerts.length - 1].relatedRecordId = spend.id;
+      }
+    }
+    for (const change of signals.changeRequests) {
+      const bundle = bundleById.get(change.bookingId);
+      if (!bundle) continue;
+      alerts.push(attention(bundle, 'COMMERCIAL_CHANGE_FOLLOW_UP_REQUIRED', change.description, { severity: 'HIGH' }));
+      alerts[alerts.length - 1].id = `attention-change-${change.id}`;
+      alerts[alerts.length - 1].relatedRecordId = change.id;
     }
     const byTime = (left: OperationalItem, right: OperationalItem) =>
       `${left.date}-${left.time || ''}-${left.bookingReference}`.localeCompare(`${right.date}-${right.time || ''}-${right.bookingReference}`);
@@ -388,11 +428,17 @@ export class OperationsControlRoomService {
       today: current,
       upcoming,
       attentionRequired,
+      openIssues: signals.issues,
+      pendingSpendRequests: signals.spendRequests,
+      commercialChangeRequests: signals.changeRequests,
       summary: {
         todayCount: current.length,
         upcomingCount: upcoming.length,
         attentionCount: attentionRequired.length,
         readyCount: [...current, ...upcoming].filter((item) => item.readiness === 'READY').length,
+        openIssueCount: signals.issues.length,
+        pendingSpendCount: signals.spendRequests.length,
+        commercialFollowUpCount: signals.changeRequests.length,
       },
     };
   }

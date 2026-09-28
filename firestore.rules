@@ -317,7 +317,7 @@ service cloud.firestore {
       // role; unrelated legacy edits remain unchanged until their own slice.
       allow update: if !request.resource.data.diff(resource.data).affectedKeys().hasAny([
           'confirmationStatus', 'driverId', 'driverName', 'driverPhone',
-          'vehicleRegistrationNumber', 'operationalNotes', 'supplierNotes'
+          'vehicleRegistrationNumber', 'pickupTime', 'operationalNotes', 'supplierNotes'
         ]) && (
           isAdmin() ||
           (isOperations() && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
@@ -359,6 +359,19 @@ service cloud.firestore {
     match /payments/{paymentId} {
       // D4A: all payment access is mediated by authenticated Express APIs using
       // canonical BBOS employeeId and centralized resource authorization.
+      allow read, create, update, delete: if false;
+    }
+
+    // D5B live Operations records are projected and mutated only by Express.
+    match /booking_operational_issues/{issueId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /operational_change_requests/{requestId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /emergency_spend_requests/{requestId} {
       allow read, create, update, delete: if false;
     }
 
@@ -462,7 +475,15 @@ service cloud.firestore {
                       'EMPLOYEE_DEACTIVATED',
                       'EMPLOYEE_PROFILE_UPDATED',
                       'OPERATIONS_ASSIGNED',
-                      'OPERATIONS_REASSIGNED'
+                      'OPERATIONS_REASSIGNED',
+                      'OPERATIONS_ISSUE_CREATED',
+                      'OPERATIONS_ISSUE_UPDATED',
+                      'OPERATIONS_ISSUE_RESOLVED',
+                      'OPERATIONAL_SERVICE_UPDATED',
+                      'OPERATIONAL_CHANGE_ESCALATED',
+                      'EMERGENCY_SPEND_REQUESTED',
+                      'EMERGENCY_SPEND_APPROVED',
+                      'EMERGENCY_SPEND_REJECTED'
                     ]);
       allow update, delete: if false;
     }
