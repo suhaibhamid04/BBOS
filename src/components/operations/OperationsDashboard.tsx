@@ -1,162 +1,288 @@
-import React from 'react';
-import { useData } from '../../context/DataContext';
-import { Compass, Calendar, Car, Bed, FileText, CheckCircle2, Clock, AlertTriangle } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  AlertTriangle,
+  Bed,
+  CalendarDays,
+  Car,
+  CheckCircle2,
+  ChevronRight,
+  Loader2,
+  RefreshCw,
+  Route,
+  UserRoundCheck,
+  X,
+} from 'lucide-react';
+import { APP_CONFIG } from '../../config';
+import { useAuth } from '../../context/AuthContext';
+import { listManagedEmployees } from '../../services/employees/employeeManagementApi';
+import {
+  assignOperationsEmployee,
+  fetchOperationsControlRoom,
+} from '../../services/operations/operationsControlRoomApi';
+import { PRESET_USERS } from '../../services/permissions';
+import type {
+  OperationalAttentionItem,
+  OperationalItem,
+  OperationsControlRoomResponse,
+} from '../../types/operationsControlRoom';
+
+interface OperationsEmployeeOption {
+  employeeId: string;
+  name: string;
+}
+
+const itemIcons = {
+  ARRIVAL: Route,
+  DEPARTURE: Route,
+  HOTEL_CHECK_IN: Bed,
+  HOTEL_CHECK_OUT: Bed,
+  TRANSPORT: Car,
+  ACTIVITY: CalendarDays,
+};
+
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+    .format(new Date(`${value}T00:00:00`));
+}
+
+function label(value: string) {
+  return value.replace(/([A-Z])/g, ' $1').replace(/^./, (character) => character.toUpperCase());
+}
+
+function OperationsItemCard({
+  item,
+  canAssign,
+  onOpen,
+  onAssign,
+}: {
+  key?: React.Key;
+  item: OperationalItem;
+  canAssign: boolean;
+  onOpen: () => void;
+  onAssign: () => void;
+}) {
+  const Icon = itemIcons[item.type];
+  const readinessClass = item.readiness === 'READY'
+    ? 'bg-emerald-100 text-emerald-800'
+    : item.readiness === 'NOT_READY'
+      ? 'bg-rose-100 text-rose-800'
+      : 'bg-amber-100 text-amber-800';
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+      <button type="button" className="w-full text-left" onClick={onOpen}>
+        <div className="flex items-start gap-3">
+          <div className="rounded-lg bg-violet-50 p-2 text-[#7056EE]"><Icon className="h-4 w-4" /></div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <p className="font-bold text-slate-900">{item.title}</p>
+                <p className="mt-0.5 text-xs text-slate-500">{item.bookingReference} · {item.customerName || item.customerId}</p>
+              </div>
+              <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+              <span className="font-semibold text-slate-700">{formatDate(item.date)}{item.time ? ` · ${item.time}` : ''}</span>
+              <span className={`rounded-full px-2 py-0.5 font-bold ${readinessClass}`}>{item.readiness.replaceAll('_', ' ')}</span>
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 font-semibold text-slate-600">{item.serviceStatus}</span>
+            </div>
+          </div>
+        </div>
+      </button>
+      {canAssign && (
+        <button type="button" onClick={onAssign} className="mt-3 text-xs font-bold text-[#7056EE] hover:text-[#6044E6]">
+          {item.assignedOperationsEmployeeId ? 'Reassign Operations' : 'Assign Operations'}
+        </button>
+      )}
+    </div>
+  );
+}
 
 export const OperationsDashboard: React.FC = () => {
-  const { trips, hotels, transports, drivers, suppliers, vouchers, customers } = useData();
+  const { currentUser } = useAuth();
+  const [data, setData] = useState<OperationsControlRoomResponse | null>(null);
+  const [employees, setEmployees] = useState<OperationsEmployeeOption[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [selectedItem, setSelectedItem] = useState<OperationalItem | null>(null);
+  const [assignmentBookingId, setAssignmentBookingId] = useState<string | null>(null);
+  const [assignmentEmployeeId, setAssignmentEmployeeId] = useState('');
+  const [assigning, setAssigning] = useState(false);
+  const canAssign = currentUser.role === 'Founder' || currentUser.role === 'Admin';
 
-  // Active trips (confirmed/in-progress)
-  const activeTrips = trips.filter(t => t.status === 'CONFIRMED' || t.status === 'IN_PROGRESS');
-  
-  // Upcoming arrivals (next 7 days)
-  const today = new Date();
-  const nextWeek = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
-  
-  const upcomingTrips = activeTrips.filter(t => {
-    const startDate = new Date(t.startDate);
-    return startDate >= today && startDate <= nextWeek;
-  }).sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const controlRoom = await fetchOperationsControlRoom(currentUser.employeeId);
+      setData(controlRoom);
+      if (canAssign) {
+        const options = APP_CONFIG.DEMO_MODE
+          ? PRESET_USERS
+              .filter((employee) => employee.role === 'Operations' && employee.active)
+              .map((employee) => ({ employeeId: employee.employeeId, name: employee.name }))
+          : (await listManagedEmployees(currentUser.employeeId)).employees
+              .filter((employee) => employee.role === 'Operations' && employee.active)
+              .map((employee) => ({ employeeId: employee.employeeId, name: employee.name }));
+        setEmployees(options);
+      }
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to load the Operations Control Room.');
+    } finally {
+      setLoading(false);
+    }
+  }, [canAssign, currentUser.employeeId]);
 
-  const getCustomerName = (id: string) => {
-    return customers.find(c => c.id === id)?.name || id.replace('cust-', 'Customer ');
+  useEffect(() => { void load(); }, [load]);
+
+  const openAssignment = (bookingId: string, existingEmployeeId?: string) => {
+    setAssignmentBookingId(bookingId);
+    setAssignmentEmployeeId(existingEmployeeId || employees[0]?.employeeId || '');
   };
+
+  const submitAssignment = async () => {
+    if (!assignmentBookingId || !assignmentEmployeeId) return;
+    setAssigning(true);
+    setError('');
+    try {
+      await assignOperationsEmployee(
+        assignmentBookingId,
+        assignmentEmployeeId,
+        currentUser.employeeId,
+        'Assigned from Operations Control Room',
+      );
+      setAssignmentBookingId(null);
+      await load();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to update the Operations assignment.');
+    } finally {
+      setAssigning(false);
+    }
+  };
+
+  const selectedDetails = useMemo(() => selectedItem
+    ? Object.entries(selectedItem.details).filter(([, value]) => value !== undefined && value !== '')
+    : [], [selectedItem]);
+
+  if (loading && !data) {
+    return <div className="flex min-h-[360px] items-center justify-center text-slate-500"><Loader2 className="mr-2 h-5 w-5 animate-spin" />Loading Control Room…</div>;
+  }
 
   return (
     <div id="operations-dashboard" className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
-          <div className="flex items-center space-x-2">
-            <h2 className="text-xl font-bold text-slate-900 tracking-tight">Operations Dashboard</h2>
-            <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
-              Live Operations
-            </span>
+          <div className="flex items-center gap-2">
+            <h2 className="text-xl font-bold tracking-tight text-slate-900">Operations Control Room</h2>
+            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800">Server-authoritative</span>
           </div>
-          <p className="text-xs text-slate-500 mt-0.5">Manage ground logistics, supplier confirmations, and guest arrivals.</p>
+          <p className="mt-1 text-xs text-slate-500">Today’s execution, the next seven days, and issues requiring action.</p>
         </div>
+        <button type="button" onClick={() => void load()} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+          <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
+        </button>
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-2xs">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Upcoming Arrivals</span>
-            <Compass className="w-5 h-5 text-[#F0A608]" />
-          </div>
-          <div className="text-2xl font-black text-slate-900">{upcomingTrips.length}</div>
-          <p className="text-[10px] text-slate-500 font-medium mt-1">In the next 7 days</p>
-        </div>
-        
-        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-2xs">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Pending Hotels</span>
-            <Bed className="w-5 h-5 text-rose-500" />
-          </div>
-          <div className="text-2xl font-black text-slate-900">3</div>
-          <p className="text-[10px] text-slate-500 font-medium mt-1">Awaiting supplier confirmation</p>
-        </div>
+      {error && <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</div>}
 
-        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-2xs">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Drivers Active</span>
-            <Car className="w-5 h-5 text-emerald-500" />
-          </div>
-          <div className="text-2xl font-black text-slate-900">
-            {drivers.filter(d => d.status === 'ON_TRIP').length} / {drivers.length}
-          </div>
-          <p className="text-[10px] text-slate-500 font-medium mt-1">Currently assigned to trips</p>
-        </div>
-
-        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-2xs">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Ready Vouchers</span>
-            <FileText className="w-5 h-5 text-[#7056EE]" />
-          </div>
-          <div className="text-2xl font-black text-slate-900">{vouchers.filter(v => v.status === 'GENERATED').length}</div>
-          <p className="text-[10px] text-slate-500 font-medium mt-1">Pending dispatch to guests</p>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Arrivals Widget */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden flex flex-col h-[400px]">
-          <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-            <h3 className="font-bold text-slate-900">Upcoming Arrivals</h3>
-            <button className="text-xs font-bold text-[#7056EE] hover:text-[#6044E6]">View Calendar</button>
-          </div>
-          <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-2">
-            {upcomingTrips.map(trip => (
-              <div key={trip.id} className="p-3 bg-white border border-slate-200 rounded-lg hover:border-emerald-300 transition-colors">
-                <div className="flex items-center justify-between mb-1">
-                  <h4 className="font-bold text-slate-900">{trip.tripName}</h4>
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
-                    {new Date(trip.startDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-xs text-slate-500">
-                  <span>Customer: {trip.customerId.replace('cust-', 'Cust ')}</span>
-                  <span>{trip.totalPax} Pax</span>
-                </div>
+      {data && (
+        <>
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {[
+              ['Today', data.summary.todayCount, 'text-[#7056EE]'],
+              ['Upcoming', data.summary.upcomingCount, 'text-sky-600'],
+              ['Attention', data.summary.attentionCount, 'text-rose-600'],
+              ['Ready', data.summary.readyCount, 'text-emerald-600'],
+            ].map(([title, value, color]) => (
+              <div key={title} className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+                <p className="text-xs font-bold uppercase tracking-wider text-slate-500">{title}</p>
+                <p className={`mt-2 text-2xl font-black ${color}`}>{value}</p>
               </div>
             ))}
-            {upcomingTrips.length === 0 && (
-              <div className="p-8 text-center text-slate-500 text-sm">
-                No arrivals in the next 7 days.
-              </div>
-            )}
+          </div>
+
+          <section className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-slate-900">Today · {formatDate(data.asOf)}</h3>
+              <span className="text-xs text-slate-500">{data.today.length} execution item{data.today.length === 1 ? '' : 's'}</span>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {data.today.map((item) => <OperationsItemCard key={item.id} item={item} canAssign={canAssign} onOpen={() => setSelectedItem(item)} onAssign={() => openAssignment(item.bookingId, item.assignedOperationsEmployeeId)} />)}
+            </div>
+            {!data.today.length && <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">No execution items scheduled today.</div>}
+          </section>
+
+          <section className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-slate-900">Upcoming</h3>
+              <span className="text-xs text-slate-500">Through {formatDate(data.horizonEnd)}</span>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {data.upcoming.map((item) => <OperationsItemCard key={item.id} item={item} canAssign={canAssign} onOpen={() => setSelectedItem(item)} onAssign={() => openAssignment(item.bookingId, item.assignedOperationsEmployeeId)} />)}
+            </div>
+            {!data.upcoming.length && <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">No execution items in the upcoming window.</div>}
+          </section>
+
+          <section className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-slate-900">Attention Required</h3>
+              <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-bold text-rose-800">{data.attentionRequired.length}</span>
+            </div>
+            <div className="space-y-2">
+              {data.attentionRequired.map((item: OperationalAttentionItem) => (
+                <div key={item.id} className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center">
+                  <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-bold text-slate-900">{item.message}</p>
+                    <p className="mt-0.5 text-xs text-slate-600">{item.bookingReference}{item.customerName ? ` · ${item.customerName}` : ''}{item.date ? ` · ${formatDate(item.date)}` : ''}</p>
+                  </div>
+                  {canAssign && item.code === 'OPERATIONS_ASSIGNMENT_MISSING' && (
+                    <button type="button" onClick={() => openAssignment(item.bookingId)} className="rounded-lg bg-[#7056EE] px-3 py-2 text-xs font-bold text-white hover:bg-[#6044E6]">Assign</button>
+                  )}
+                </div>
+              ))}
+              {!data.attentionRequired.length && <div className="flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-8 text-sm font-semibold text-emerald-800"><CheckCircle2 className="h-5 w-5" />No near-term issues require attention.</div>}
+            </div>
+          </section>
+        </>
+      )}
+
+      {selectedItem && (
+        <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/40" onClick={() => setSelectedItem(null)}>
+          <aside className="h-full w-full max-w-md overflow-y-auto bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4">
+              <div><p className="text-xs font-bold uppercase tracking-wider text-[#7056EE]">Operational detail</p><h3 className="mt-1 text-lg font-bold text-slate-900">{selectedItem.title}</h3></div>
+              <button type="button" onClick={() => setSelectedItem(null)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X className="h-5 w-5" /></button>
+            </div>
+            <div className="mt-5 space-y-3 rounded-xl bg-slate-50 p-4 text-sm">
+              <div className="flex justify-between gap-4"><span className="text-slate-500">Booking</span><span className="font-semibold text-slate-900">{selectedItem.bookingReference}</span></div>
+              <div className="flex justify-between gap-4"><span className="text-slate-500">Guest</span><span className="text-right font-semibold text-slate-900">{selectedItem.customerName || selectedItem.customerId}</span></div>
+              {selectedItem.customerPhone && <div className="flex justify-between gap-4"><span className="text-slate-500">Guest phone</span><span className="font-semibold text-slate-900">{selectedItem.customerPhone}</span></div>}
+              <div className="flex justify-between gap-4"><span className="text-slate-500">Date</span><span className="font-semibold text-slate-900">{formatDate(selectedItem.date)}{selectedItem.time ? ` · ${selectedItem.time}` : ''}</span></div>
+              <div className="flex justify-between gap-4"><span className="text-slate-500">Commercial clearance</span><span className="font-semibold text-slate-900">{selectedItem.commercialClearance.replaceAll('_', ' ')}</span></div>
+              {selectedDetails.map(([key, value]) => <div key={key} className="flex justify-between gap-4"><span className="text-slate-500">{label(key)}</span><span className="text-right font-semibold text-slate-900">{Array.isArray(value) ? value.join(', ') : String(value)}</span></div>)}
+            </div>
+            {canAssign && <button type="button" onClick={() => openAssignment(selectedItem.bookingId, selectedItem.assignedOperationsEmployeeId)} className="mt-5 inline-flex items-center gap-2 rounded-lg bg-[#7056EE] px-4 py-2.5 text-sm font-bold text-white hover:bg-[#6044E6]"><UserRoundCheck className="h-4 w-4" />{selectedItem.assignedOperationsEmployeeId ? 'Reassign Operations' : 'Assign Operations'}</button>}
+          </aside>
+        </div>
+      )}
+
+      {assignmentBookingId && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/40 p-4" onClick={() => setAssignmentBookingId(null)}>
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <h3 className="text-lg font-bold text-slate-900">Assign Operations employee</h3>
+            <p className="mt-1 text-sm text-slate-500">Only active employees with the canonical Operations role are eligible.</p>
+            <select value={assignmentEmployeeId} onChange={(event) => setAssignmentEmployeeId(event.target.value)} className="mt-5 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm">
+              <option value="">Select employee</option>
+              {employees.map((employee) => <option key={employee.employeeId} value={employee.employeeId}>{employee.name} ({employee.employeeId})</option>)}
+            </select>
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={() => setAssignmentBookingId(null)} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700">Cancel</button>
+              <button type="button" disabled={!assignmentEmployeeId || assigning} onClick={() => void submitAssignment()} className="inline-flex items-center gap-2 rounded-lg bg-[#7056EE] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{assigning && <Loader2 className="h-4 w-4 animate-spin" />}Save assignment</button>
+            </div>
           </div>
         </div>
-
-        {/* Action Center */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden flex flex-col h-[400px]">
-          <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-            <h3 className="font-bold text-slate-900">Pending Actions</h3>
-            <span className="text-xs font-bold px-2 py-1 bg-rose-100 text-rose-800 rounded-lg">3 Required</span>
-          </div>
-          <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-3">
-            {/* Mock Pending Actions for Demo */}
-            <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg flex gap-3">
-              <div className="mt-0.5">
-                <AlertTriangle className="w-5 h-5 text-rose-500" />
-              </div>
-              <div>
-                <p className="text-sm font-bold text-slate-900">Confirm Hotel Khyber</p>
-                <p className="text-xs text-slate-600 mt-0.5">Trip: TRP-001 (Starts in 3 days)</p>
-                <div className="mt-2 flex gap-2">
-                  <button className="text-[10px] font-bold px-3 py-1.5 bg-rose-500 text-white rounded shadow-xs hover:bg-rose-600 transition-colors">Mark Confirmed</button>
-                  <button className="text-[10px] font-bold px-3 py-1.5 bg-white text-slate-700 border border-slate-200 rounded hover:bg-slate-50 transition-colors">Contact Supplier</button>
-                </div>
-              </div>
-            </div>
-
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg flex gap-3">
-              <div className="mt-0.5">
-                <Clock className="w-5 h-5 text-amber-500" />
-              </div>
-              <div>
-                <p className="text-sm font-bold text-slate-900">Assign Driver for Pickup</p>
-                <p className="text-xs text-slate-600 mt-0.5">Trip: TRP-002 (Srinagar Airport - 10:00 AM)</p>
-                <div className="mt-2 flex gap-2">
-                  <button className="text-[10px] font-bold px-3 py-1.5 bg-amber-500 text-white rounded shadow-xs hover:bg-amber-600 transition-colors">Assign Now</button>
-                </div>
-              </div>
-            </div>
-            
-            <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex gap-3">
-              <div className="mt-0.5">
-                <CheckCircle2 className="w-5 h-5 text-slate-400" />
-              </div>
-              <div>
-                <p className="text-sm font-bold text-slate-900">Generate Vouchers</p>
-                <p className="text-xs text-slate-600 mt-0.5">Trip: TRP-003 (Fully confirmed)</p>
-                <div className="mt-2 flex gap-2">
-                  <button className="text-[10px] font-bold px-3 py-1.5 bg-[#7056EE] text-white rounded shadow-xs hover:bg-[#6044E6] transition-colors">Generate</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+      )}
     </div>
   );
 };
-

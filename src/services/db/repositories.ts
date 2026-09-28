@@ -47,14 +47,12 @@ export class FirestoreRepository<T extends { id: string }> {
 }
 
 // Instantiate repositories
-export const EmployeeRepo = new FirestoreRepository<any>('employees');
 export const CustomerRepo = new FirestoreRepository<any>('customers');
 export const CompanyRepo = new FirestoreRepository<any>('companies');
 export const LeadRepo = new FirestoreRepository<any>('leads');
 export const ConversationRepo = new FirestoreRepository<any>('conversations');
 export const MessageRepo = new FirestoreRepository<any>('messages');
 export const TaskRepo = new FirestoreRepository<any>('tasks');
-export const BookingRepo = new FirestoreRepository<any>('bookings');
 export const TripRepo = new FirestoreRepository<any>('trips');
 export const ItineraryDayRepo = new FirestoreRepository<any>('itinerary_days');
 export const HotelRepo = new FirestoreRepository<any>('hotels');

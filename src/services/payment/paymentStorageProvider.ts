@@ -251,7 +251,7 @@ export class FirestorePaymentStorageProvider implements PaymentStorageProvider {
           return snap.exists ? (snap.data() as PaymentRecord) : null;
         },
         getPaymentsForBooking: async (bId: string) => {
-          const snap = await db.collection('payments').where('bookingId', '==', bId).get();
+          const snap = await firestoreTx.get(db.collection('payments').where('bookingId', '==', bId));
           return snap.docs.map((d) => d.data() as PaymentRecord);
         },
         setPayment: (pId: string, data: PaymentRecord) => {

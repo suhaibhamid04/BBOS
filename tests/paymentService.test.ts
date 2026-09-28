@@ -5,6 +5,7 @@ import {
   PaymentService,
   PaymentError,
   PaymentActor,
+  RecordPaymentDTO,
   assertBookingPaymentAccess,
 } from '../src/services/payment/paymentService';
 import { InMemoryPaymentStorageProvider } from '../src/services/payment/paymentStorageProvider';
@@ -13,17 +14,18 @@ import { resolve } from 'path';
 
 describe('BBOS Phase 2B-5D Stage 5 — Minimal Payment Processing & State Machine', () => {
   // Actors
-  const founder: PaymentActor = { id: 'compat-founder', employeeId: 'emp-founder-01', name: 'Suhaib Hamid', role: 'Founder' };
-  const admin: PaymentActor = { id: 'compat-admin', employeeId: 'emp-admin-01', name: 'Nasir Wani', role: 'Admin' };
-  const accounts1: PaymentActor = { id: 'compat-acc-01', employeeId: 'emp-acc-01', name: 'Farooq Lone', role: 'Accounts' };
-  const accounts2: PaymentActor = { id: 'compat-acc-02', employeeId: 'emp-acc-02', name: 'Zahoor Mir', role: 'Accounts' };
-  const salesManager1: PaymentActor = { id: 'compat-mgr-01', employeeId: 'emp-mgr-01', name: 'Sameer Mir', role: 'Sales Manager' };
-  const salesManager2: PaymentActor = { id: 'compat-mgr-02', employeeId: 'emp-mgr-02', name: 'Other Manager', role: 'Sales Manager' };
-  const salesExec1: PaymentActor = { id: 'compat-sales-01', employeeId: 'emp-sales-01', name: 'Tariq Bhat', role: 'Sales Executive' };
-  const salesExec2: PaymentActor = { id: 'compat-sales-02', employeeId: 'emp-sales-02', name: 'Ayesha Zargar', role: 'Sales Executive' };
-  const ops1: PaymentActor = { id: 'compat-ops-01', employeeId: 'emp-ops-01', name: 'Bilal Ahmad Shah', role: 'Operations' };
-  const ops2: PaymentActor = { id: 'compat-ops-02', employeeId: 'emp-ops-02', name: 'Other Ops', role: 'Operations' };
-  const marketing: PaymentActor = { id: 'compat-mkt-01', employeeId: 'emp-mkt-01', name: 'Irfan Dar', role: 'Marketing' };
+  const founder: PaymentActor = { id: 'compat-founder', employeeId: 'emp-founder-01', name: 'Suhaib Hamid', role: 'Founder', active: true };
+  const admin: PaymentActor = { id: 'compat-admin', employeeId: 'emp-admin-01', name: 'Nasir Wani', role: 'Admin', active: true };
+  const accounts1: PaymentActor = { id: 'compat-acc-01', employeeId: 'emp-acc-01', name: 'Farooq Lone', role: 'Accounts', active: true };
+  const accounts2: PaymentActor = { id: 'compat-acc-02', employeeId: 'emp-acc-02', name: 'Zahoor Mir', role: 'Accounts', active: true };
+  const salesManager1: PaymentActor = { id: 'compat-mgr-01', employeeId: 'emp-mgr-01', name: 'Sameer Mir', role: 'Sales Manager', active: true, salesTeamId: 'sales-team-01' };
+  const salesManager2: PaymentActor = { id: 'compat-mgr-02', employeeId: 'emp-mgr-02', name: 'Other Manager', role: 'Sales Manager', active: true, salesTeamId: 'sales-team-02' };
+  const salesExec1: PaymentActor = { id: 'compat-sales-01', employeeId: 'emp-sales-01', name: 'Tariq Bhat', role: 'Sales Executive', active: true };
+  const salesExec2: PaymentActor = { id: 'compat-sales-02', employeeId: 'emp-sales-02', name: 'Ayesha Zargar', role: 'Sales Executive', active: true };
+  const ops1: PaymentActor = { id: 'compat-ops-01', employeeId: 'emp-ops-01', name: 'Bilal Ahmad Shah', role: 'Operations', active: true };
+  const ops2: PaymentActor = { id: 'compat-ops-02', employeeId: 'emp-ops-02', name: 'Other Ops', role: 'Operations', active: true };
+  const reservations: PaymentActor = { id: 'compat-res-01', employeeId: 'emp-res-01', name: 'Zoya Qadri', role: 'Reservations', active: true };
+  const marketing: PaymentActor = { id: 'compat-mkt-01', employeeId: 'emp-mkt-01', name: 'Irfan Dar', role: 'Marketing', active: true };
 
   let storage: InMemoryPaymentStorageProvider;
   let service: PaymentService;
@@ -49,6 +51,7 @@ describe('BBOS Phase 2B-5D Stage 5 — Minimal Payment Processing & State Machin
       travelEndDate: '2026-10-05',
       assignedSalesEmployeeId: 'emp-sales-01',
       assignedSalesManagerId: 'emp-mgr-01',
+      salesTeamId: 'sales-team-01',
       assignedOperationsEmployeeId: 'emp-ops-01',
       createdAt: '2026-09-11T10:00:00Z',
       updatedAt: '2026-09-11T10:00:00Z',
@@ -71,6 +74,7 @@ describe('BBOS Phase 2B-5D Stage 5 — Minimal Payment Processing & State Machin
       travelEndDate: '2026-11-06',
       assignedSalesEmployeeId: 'emp-sales-02',
       assignedSalesManagerId: 'emp-mgr-02',
+      salesTeamId: 'sales-team-02',
       assignedOperationsEmployeeId: 'emp-ops-02',
       createdAt: '2026-09-11T10:00:00Z',
       updatedAt: '2026-09-11T10:00:00Z',
@@ -123,6 +127,7 @@ describe('BBOS Phase 2B-5D Stage 5 — Minimal Payment Processing & State Machin
       expect(payment.bookingId).toBe('bk-01');
       expect(payment.amount).toBe(20000);
       expect(payment.status).toBe('RECORDED');
+      expect(payment.recordedByEmployeeId).toBe(salesExec1.employeeId);
       expect(payment.recordedBy).toBe(salesExec1.employeeId);
       expect(salesExec1.id).not.toBe(salesExec1.employeeId);
       expect(payment.verifiedBy).toBeUndefined();
@@ -320,8 +325,16 @@ describe('BBOS Phase 2B-5D Stage 5 — Minimal Payment Processing & State Machin
       ).rejects.toMatchObject({ statusCode: 403, code: 'FORBIDDEN' });
     });
 
-    it('10. Operations accessing unassigned booking blocked with 403; assigned allowed read-only', async () => {
-      // ops1 assigned to bk-01 -> read allowed
+    it('10. Operations access is assigned/read-only and honors the centralized workflow gate', async () => {
+      // Payment history is not exposed to Operations before the Booking reaches
+      // an operationally readable state.
+      await expect(service.getPaymentsForBooking('bk-01', ops1)).rejects.toMatchObject({
+        statusCode: 403,
+        code: 'FORBIDDEN',
+      });
+      await storage.updateBooking('bk-01', { status: 'CONFIRMED' });
+
+      // ops1 assigned to bk-01 -> read allowed once confirmed
       const list = await service.getPaymentsForBooking('bk-01', ops1);
       expect(Array.isArray(list)).toBe(true);
 
@@ -405,11 +418,11 @@ describe('BBOS Phase 2B-5D Stage 5 — Minimal Payment Processing & State Machin
       ).rejects.toMatchObject({ statusCode: 403, code: 'FORBIDDEN' });
     });
 
-    it('12b. (B) Firestore rules guard direct unauthorized booking payment access', () => {
+    it('12b. (B) Firestore rules deny all direct client payment access', () => {
       const rulesContent = readFileSync(resolve(process.cwd(), 'firestore.rules'), 'utf-8');
-      expect(rulesContent).toContain('assignedSalesEmployeeId == request.auth.uid');
-      expect(rulesContent).toContain('assignedOperationsEmployeeId == request.auth.uid');
-      expect(rulesContent).toContain('allow delete: if false;');
+      const paymentRules = rulesContent.match(/match\s+\/payments\/\{paymentId\}\s*\{([\s\S]*?)\}/)?.[1] || '';
+      expect(paymentRules).toContain('allow read, create, update, delete: if false;');
+      expect(paymentRules).not.toContain('request.auth.uid');
     });
   });
 
@@ -433,12 +446,20 @@ describe('BBOS Phase 2B-5D Stage 5 — Minimal Payment Processing & State Machin
       const result = await service.verifyPayment('bk-01', p.id, accounts1);
       expect(result.success).toBe(true);
       expect(result.payment.status).toBe('VERIFIED');
+      expect(result.payment.verifiedByEmployeeId).toBe(accounts1.employeeId);
       expect(result.payment.verifiedBy).toBe(accounts1.employeeId);
       expect(result.payment.verifiedByName).toBe(accounts1.name);
 
       expect(result.booking.amountReceived).toBe(20000);
       expect(result.booking.amountPending).toBe(30000);
       expect(result.booking.paymentStatus).toBe('PARTIALLY_PAID');
+      expect(result.receipt).toMatchObject({
+        bookingReference: 'BB-100001',
+        customerName: 'Rohit Sharma',
+        amount: 20000,
+        cumulativeVerifiedAmount: 20000,
+        remainingBalance: 30000,
+      });
     });
 
     it('14. Admin verification succeeds', async () => {
@@ -572,6 +593,9 @@ describe('BBOS Phase 2B-5D Stage 5 — Minimal Payment Processing & State Machin
         statusCode: 403,
         code: 'FORBIDDEN',
       });
+      expect((await storage.getPayment(p.id))?.status).toBe('RECORDED');
+      expect((await storage.getBooking('bk-01'))?.status).toBe('PENDING_PAYMENT');
+      expect(storage.getAllAuditLogs().map((log) => log.action)).toEqual(['PAYMENT_RECORDED']);
     });
 
     it('20. Sales Manager verification blocked with 403', async () => {
@@ -659,7 +683,10 @@ describe('BBOS Phase 2B-5D Stage 5 — Minimal Payment Processing & State Machin
       const res = await service.rejectPayment('bk-01', p.id, 'UTR not found in bank ledger', accounts1);
       expect(res.success).toBe(true);
       expect(res.payment.status).toBe('REJECTED');
+      expect(res.payment.rejectedByEmployeeId).toBe(accounts1.employeeId);
+      expect(res.payment.verifiedByEmployeeId).toBeUndefined();
       expect(res.payment.rejectionReason).toBe('UTR not found in bank ledger');
+      expect(storage.getAllAuditLogs().map((log) => log.action)).toContain('PAYMENT_REJECTED');
     });
 
     it('24. Rejection without reason or reason <5 chars rejected with 400', async () => {
@@ -1318,7 +1345,7 @@ describe('BBOS Phase 2B-5D Stage 5 — Minimal Payment Processing & State Machin
       expect((p as any).supplierBuyRate).toBeUndefined();
     });
 
-    it('46. Audit events created for RECORDED, VERIFIED, REJECTED, and VOIDED with zero supplier data', async () => {
+    it('46. Audit events use employeeId and include the payment confirmation gate', async () => {
       const p = await service.recordPayment(
         'bk-01',
         {
@@ -1338,6 +1365,8 @@ describe('BBOS Phase 2B-5D Stage 5 — Minimal Payment Processing & State Machin
       expect(actions).toContain('PAYMENT_RECORDED');
       expect(actions).toContain('PAYMENT_VERIFIED');
       expect(actions).toContain('PAYMENT_VOIDED');
+      expect(actions).toContain('BOOKING_CONFIRMED_FROM_PAYMENT');
+      expect(logs.every((log) => log.actorId !== accounts1.id && log.actorId !== salesExec1.id)).toBe(true);
 
       for (const log of logs) {
         expect((log.after as any)?.supplierCost).toBeUndefined();
@@ -1463,10 +1492,7 @@ describe('BBOS Phase 2B-5D Stage 5 — Minimal Payment Processing & State Machin
       const bookingRulesMatch = rulesContent.match(/match\s+\/bookings\/\{bookingId\}\s*\{([\s\S]*?)\}/);
       expect(bookingRulesMatch).not.toBeNull();
       const rules = bookingRulesMatch![1];
-      expect(rules).toContain("'isOverpaid'");
-      expect(rules).toContain("'overpaidAmount'");
-      expect(rules).toContain("'amountReceived'");
-      expect(rules).toContain("'paymentStatus'");
+      expect(rules).toContain('allow create, update, delete: if false;');
     });
 
     it('51. (F) Concurrent duplicate transaction reference creation throws 409 for the colliding attempt', async () => {
@@ -1508,6 +1534,127 @@ describe('BBOS Phase 2B-5D Stage 5 — Minimal Payment Processing & State Machin
         statusCode: 409,
         code: 'DUPLICATE_TRANSACTION_REFERENCE',
       });
+    });
+  });
+
+  describe('Category I: Stage D4A authority hardening', () => {
+    it('52. Accounts may record while Reservations are denied with zero writes', async () => {
+      const recorded = await service.recordPayment(
+        'bk-01',
+        {
+          amount: 5000,
+          paymentDate: '2026-09-11',
+          paymentMethod: 'UPI',
+          referenceNumber: 'ACCOUNTS-RECORD-01',
+          paymentType: 'ADVANCE',
+        },
+        accounts1,
+      );
+      expect(recorded.status).toBe('RECORDED');
+
+      const beforePayments = storage.getAllPayments().length;
+      const beforeAudits = storage.getAllAuditLogs().length;
+      await expect(service.recordPayment(
+        'bk-01',
+        {
+          amount: 5000,
+          paymentDate: '2026-09-11',
+          paymentMethod: 'UPI',
+          referenceNumber: 'RES-DENIED-01',
+          paymentType: 'ADVANCE',
+        },
+        reservations,
+      )).rejects.toMatchObject({ statusCode: 403, code: 'FORBIDDEN' });
+      expect(storage.getAllPayments()).toHaveLength(beforePayments);
+      expect(storage.getAllAuditLogs()).toHaveLength(beforeAudits);
+    });
+
+    it('53. Sales Manager authorization uses immutable salesTeamId, not assigned manager ID', async () => {
+      const sameTeamManager: PaymentActor = {
+        ...salesManager1,
+        id: 'compat-mgr-same-team',
+        employeeId: 'emp-mgr-same-team',
+      };
+      const payment = await service.recordPayment(
+        'bk-01',
+        {
+          amount: 5000,
+          paymentDate: '2026-09-11',
+          paymentMethod: 'BANK_TRANSFER',
+          referenceNumber: 'TEAM-SCOPE-01',
+          paymentType: 'ADVANCE',
+        },
+        sameTeamManager,
+      );
+      expect(payment.status).toBe('RECORDED');
+
+      const assignedButOtherTeam: PaymentActor = {
+        ...salesManager2,
+        employeeId: 'emp-mgr-01',
+      };
+      await expect(service.recordPayment(
+        'bk-01',
+        {
+          amount: 5000,
+          paymentDate: '2026-09-11',
+          paymentMethod: 'BANK_TRANSFER',
+          referenceNumber: 'OTHER-TEAM-DENIED-01',
+          paymentType: 'ADVANCE',
+        },
+        assignedButOtherTeam,
+      )).rejects.toMatchObject({ statusCode: 403, code: 'FORBIDDEN' });
+    });
+
+    it('54. Founder can verify and client-supplied authority fields are ignored', async () => {
+      const payment = await service.recordPayment(
+        'bk-01',
+        {
+          amount: 5000,
+          paymentDate: '2026-09-11',
+          paymentMethod: 'UPI',
+          referenceNumber: 'FOUNDER-VERIFY-01',
+          paymentType: 'ADVANCE',
+          status: 'VERIFIED',
+          verifiedByEmployeeId: 'forged-verifier',
+          recordedByEmployeeId: 'forged-recorder',
+          recordedAt: '1900-01-01T00:00:00.000Z',
+        } as RecordPaymentDTO & Record<string, unknown>,
+        salesExec1,
+      );
+      expect(payment.status).toBe('RECORDED');
+      expect(payment.recordedByEmployeeId).toBe(salesExec1.employeeId);
+      expect(payment.verifiedByEmployeeId).toBeUndefined();
+      expect(payment.recordedAt).not.toBe('1900-01-01T00:00:00.000Z');
+
+      const verified = await service.verifyPayment('bk-01', payment.id, founder);
+      expect(verified.payment.verifiedByEmployeeId).toBe(founder.employeeId);
+      expect(verified.booking.status).toBe('CONFIRMED');
+    });
+
+    it('55. Non-finite amounts and impossible calendar dates are rejected', async () => {
+      await expect(service.recordPayment(
+        'bk-01',
+        {
+          amount: Number.POSITIVE_INFINITY,
+          paymentDate: '2026-09-11',
+          paymentMethod: 'UPI',
+          referenceNumber: 'INFINITE-01',
+          paymentType: 'ADVANCE',
+        },
+        salesExec1,
+      )).rejects.toMatchObject({ statusCode: 400, code: 'INVALID_AMOUNT' });
+
+      await expect(service.recordPayment(
+        'bk-01',
+        {
+          amount: 1000,
+          paymentDate: '2026-02-30',
+          paymentMethod: 'UPI',
+          referenceNumber: 'BAD-DATE-01',
+          paymentType: 'ADVANCE',
+        },
+        salesExec1,
+      )).rejects.toMatchObject({ statusCode: 400, code: 'INVALID_PAYMENT_DATE' });
     });
   });
 });

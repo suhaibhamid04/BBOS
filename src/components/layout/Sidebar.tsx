@@ -29,7 +29,8 @@ import {
   ChevronRight,
   Flame,
   Plane,
-  Compass
+  Compass,
+  WalletCards
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useData } from '../../context/DataContext';
@@ -51,6 +52,7 @@ export type NavSectionKey =
   | 'sales-ai'
   | 'trips'
   | 'bookings'
+  | 'supplier-payables'
   | 'marketing-strategy'
   | 'content-calendar'
   | 'campaigns'
@@ -105,6 +107,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     'TRIPS & BOOKINGS': true,
     'INVENTORY': true,
     'OPERATIONS': true,
+    'FINANCE': true,
     'MARKETING': true,
     'ANALYTICS': false,
     'ADMIN': true,
@@ -165,8 +168,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
     ...(navigation.operations ? [{
       title: 'OPERATIONS',
       items: [
-        { key: 'operations-dashboard', label: 'Ops Dashboard', icon: Compass } as any,
+        { key: 'operations-dashboard', label: 'Control Room', icon: Compass } as any,
         { key: 'vouchers', label: 'Vouchers', icon: FileText } as any,
+      ]
+    }] : []),
+    ...(['Founder', 'Admin', 'Accounts'].includes(currentUser.role) ? [{
+      title: 'FINANCE',
+      items: [
+        { key: 'supplier-payables', label: 'Supplier Dues', icon: WalletCards } as any,
       ]
     }] : []),
     ...(permissions.canManageMarketing ? [{
@@ -189,7 +198,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     ...(permissions.canManageUsers || permissions.canManageSettings || permissions.canManageOperations ? [{
       title: 'ADMIN',
       items: [
-        ...(permissions.canManageUsers ? [{ key: 'employees', label: 'Employees', icon: UserCheck } as any] : []),
+        ...(permissions.canManageUsers ? [{ key: 'employees', label: 'Team & Access', icon: UserCheck } as any] : []),
         ...(permissions.canManageUsers ? [{ key: 'roles-permissions', label: 'Roles & Permissions', icon: ShieldCheck } as any] : []),
         ...(permissions.canManageSettings ? [{ key: 'ai-permissions', label: 'AI Permissions', icon: Cpu } as any] : []),
         ...(permissions.canManageSettings ? [{ key: 'integrations', label: 'Integrations', icon: Boxes } as any] : []),

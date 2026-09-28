@@ -244,7 +244,8 @@ describe('Phase 2B-5 Security & Architecture Verification', () => {
       expect(transMatch).not.toBeNull();
       const transRules = transMatch![1];
 
-      expect(transRules).toContain("isSalesExecutive() && request.resource.data.diff(resource.data).affectedKeys().hasOnly([\n          'passengerCount', 'specialRequests'\n        ])");
+      expect(transRules).toMatch(/isSalesExecutive\(\)\s*&&\s*request\.resource\.data\.diff\(resource\.data\)\.affectedKeys\(\)\.hasOnly\(\[\s*'passengerCount',\s*'specialRequests'\s*\]\)/);
+      expect(transRules).toContain("'confirmationStatus'");
       expect(transRules).toContain('isOperations()');
       expect(transRules).toContain('vehicleCategoryId');
     });
@@ -254,31 +255,30 @@ describe('Phase 2B-5 Security & Architecture Verification', () => {
       expect(actMatch).not.toBeNull();
       const actRules = actMatch![1];
 
-      expect(actRules).toContain("isSalesExecutive() && request.resource.data.diff(resource.data).affectedKeys().hasOnly([\n          'participantCount', 'leadGuestName', 'specialRequests'\n        ])");
+      expect(actRules).toMatch(/isSalesExecutive\(\)\s*&&\s*request\.resource\.data\.diff\(resource\.data\)\.affectedKeys\(\)\.hasOnly\(\[\s*'participantCount',\s*'leadGuestName',\s*'specialRequests'\s*\]\)/);
+      expect(actRules).toContain("'confirmationStatus'");
       expect(actRules).toContain('isOperations()');
       expect(actRules).toContain('activityMasterId');
     });
   });
 
   describe('5. Invariant: Payment Verification Security & Role Boundaries', () => {
-    it('Payment creation requires RECORDED status and verifiedBy == null', () => {
+    it('Payment creation is server-only so clients cannot forge verification state', () => {
       const paymentMatch = firestoreRules.match(/match\s+\/payments\/\{paymentId\}\s*\{([\s\S]*?)\}/);
       expect(paymentMatch).not.toBeNull();
       const paymentRules = paymentMatch![1];
 
-      expect(paymentRules).toContain("request.resource.data.status == 'RECORDED'");
-      expect(paymentRules).toContain("request.resource.data.verifiedBy == null");
+      expect(paymentRules).toContain('allow read, create, update, delete: if false;');
+      expect(paymentRules).not.toContain('request.resource.data.status');
     });
 
-    it('Sales role CANNOT verify payments in firestore.rules', () => {
+    it('No browser role can verify payments in firestore.rules', () => {
       const paymentMatch = firestoreRules.match(/match\s+\/payments\/\{paymentId\}\s*\{([\s\S]*?)\}/);
       expect(paymentMatch).not.toBeNull();
       const paymentRules = paymentMatch![1];
 
-      // allow update must require isAccounts() || isAdmin()
-      expect(paymentRules).toContain("allow update: if (isAccounts() || isAdmin())");
-      expect(paymentRules).not.toContain("allow update: if isSalesManager()");
-      expect(paymentRules).not.toContain("allow update: if isSalesExecutive()");
+      expect(paymentRules).toContain('allow read, create, update, delete: if false;');
+      expect(paymentRules).not.toContain('allow update: if');
     });
 
     it('PaymentRecord model separates recording from verification metadata', () => {

@@ -59,20 +59,35 @@ export interface PaymentRecord {
   status: PaymentRecordStatus;
 
   // Recording Metadata
-  recordedBy: string;                // UID / actor ID of recorder
+  /** Canonical stable BBOS employee identity. Required on all new server writes. */
+  recordedByEmployeeId?: string;
+  /** Legacy compatibility alias. New records mirror recordedByEmployeeId here. */
+  recordedBy: string;
   recordedByName?: string;
   recordedByRole?: UserRole | string;
   recordedAt?: string;               // ISO timestamp
 
   // Verification Metadata (Accounts, Admin, Founder ONLY)
-  verifiedBy?: string;               // UID of Accounts/Admin/Founder verifier
+  /** Canonical stable BBOS employee identity. */
+  verifiedByEmployeeId?: string;
+  /** Legacy compatibility alias. */
+  verifiedBy?: string;
   verifiedByName?: string;
   verifiedByRole?: UserRole | string;
   verifiedAt?: string;               // ISO timestamp
+
+  // Rejection Metadata (Accounts, Admin, Founder ONLY)
+  rejectedByEmployeeId?: string;
+  rejectedByName?: string;
+  rejectedByRole?: UserRole | string;
+  rejectedAt?: string;
   rejectionReason?: string;          // Mandatory when status === 'REJECTED'
 
   // Voiding Metadata (Admin, Founder ONLY)
-  voidedBy?: string;                 // UID of Admin/Founder voider
+  /** Canonical stable BBOS employee identity. */
+  voidedByEmployeeId?: string;
+  /** Legacy compatibility alias. */
+  voidedBy?: string;
   voidedByName?: string;
   voidedByRole?: UserRole | string;
   voidedAt?: string;                 // ISO timestamp

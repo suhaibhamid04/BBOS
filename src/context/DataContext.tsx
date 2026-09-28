@@ -1,8 +1,8 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { APP_CONFIG } from '../config';
 import {
-  EmployeeRepo, CustomerRepo, CompanyRepo, LeadRepo, ConversationRepo, MessageRepo, 
-  TaskRepo, BookingRepo, PackageRepo, AuditLogRepo, AiRecommendationRepo,
+  CustomerRepo, CompanyRepo, LeadRepo, ConversationRepo, MessageRepo,
+  TaskRepo, PackageRepo, AuditLogRepo, AiRecommendationRepo,
   AiActionRepo, ApprovalRepo, ItineraryDayRepo, HotelRepo, HotelRoomRepo,
   HotelBookingRepo, TransportRepo, DriverRepo, ActivityRepo, ActivityBookingRepo,
   SupplierRepo, VoucherRepo,
@@ -1517,6 +1517,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const createBooking = async (bookingData: Omit<Booking, 'id' | 'createdAt' | 'updatedAt' | 'bookingReference'>): Promise<Booking> => {
+    if (!APP_CONFIG.DEMO_MODE) {
+      throw new Error('Production Booking creation is server-authoritative. Use an authenticated Booking workflow API.');
+    }
     const newBooking: Booking = {
       ...bookingData,
       id: `book-${Date.now()}`,
@@ -1529,30 +1532,18 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setBookings(prev => [newBooking, ...prev]);
     logAuditEvent('BOOKING_CREATED', 'BOOKING', newBooking.id, null, newBooking, `Booking ${newBooking.bookingReference} confirmed for ₹${newBooking.totalAmount.toLocaleString('en-IN')}`);
 
-    if (db) {
-      try {
-        await setDoc(doc(db, 'bookings', newBooking.id), newBooking);
-      } catch (err) {
-        console.warn('Firestore booking create notice:', err);
-      }
-    }
     return newBooking;
   };
 
   const updateBooking = async (id: string, updates: Partial<Booking>) => {
+    if (!APP_CONFIG.DEMO_MODE) {
+      throw new Error('Production Booking updates are server-authoritative. Use an authenticated Booking workflow API.');
+    }
     const prevBooking = bookings.find(b => b.id === id);
-    const updated = prevBooking ? { ...prevBooking, ...updates, updatedAt: new Date().toISOString() } : null;
 
     setBookings(prev => prev.map(b => (b.id === id ? { ...b, ...updates, updatedAt: new Date().toISOString() } : b)));
     logAuditEvent('BOOKING_UPDATED', 'BOOKING', id, prevBooking, updates, `Updated booking #${id}`);
 
-    if (db && updated) {
-      try {
-        await setDoc(doc(db, 'bookings', id), updated);
-      } catch (err) {
-        console.warn('Firestore booking update notice:', err);
-      }
-    }
   };
 
   const convertQuoteToBooking = async (quoteId: string): Promise<Booking> => {

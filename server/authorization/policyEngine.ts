@@ -21,9 +21,19 @@ const SUPPORTED_ACTIONS: Record<AuthorizationResource, readonly AuthorizationAct
     'READ_OPERATIONAL',
     'UPDATE_RESERVATIONS',
     'UPDATE_OPERATIONAL',
+    'RECORD_PAYMENT',
+    'VERIFY_PAYMENT',
+    'VOID_PAYMENT',
+    'ASSIGN_OPERATIONS',
   ],
   INVENTORY: ['READ_INVENTORY'],
   ATTRIBUTION_REPORT: ['READ_AGGREGATE'],
+  SUPPLIER_PAYABLE: [
+    'READ_SUPPLIER_PAYABLE',
+    'RECORD_SUPPLIER_PAYMENT',
+    'VERIFY_SUPPLIER_PAYMENT',
+    'VOID_SUPPLIER_PAYMENT',
+  ],
 };
 
 const COMMERCIAL_RESOURCES: readonly AuthorizationResource[] = ['TRIP', 'QUOTE', 'BOOKING'];
@@ -115,6 +125,15 @@ function roleScope(
   }
 
   if (role === 'Accounts') {
+    if (
+      resource === 'SUPPLIER_PAYABLE' &&
+      ['READ_SUPPLIER_PAYABLE', 'RECORD_SUPPLIER_PAYMENT', 'VERIFY_SUPPLIER_PAYMENT'].includes(action)
+    ) {
+      return 'ALL';
+    }
+    if (resource === 'BOOKING' && (action === 'RECORD_PAYMENT' || action === 'VERIFY_PAYMENT')) {
+      return 'ALL';
+    }
     return COMMERCIAL_RESOURCES.includes(resource) &&
       (action === 'READ_DETAIL' || action === 'READ_FINANCIALS')
       ? 'ALL'
@@ -122,6 +141,7 @@ function roleScope(
   }
 
   if (role === 'Sales Executive') {
+    if (resource === 'BOOKING' && action === 'RECORD_PAYMENT') return 'OWN';
     return COMMERCIAL_RESOURCES.includes(resource) &&
       ['READ_DETAIL', 'READ_FINANCIALS', 'UPDATE_COMMERCIAL', 'CONVERT_TO_BOOKING'].includes(action)
       ? 'OWN'
@@ -129,6 +149,7 @@ function roleScope(
   }
 
   if (role === 'Sales Manager') {
+    if (resource === 'BOOKING' && action === 'RECORD_PAYMENT') return 'TEAM';
     return COMMERCIAL_RESOURCES.includes(resource) &&
       ['READ_DETAIL', 'READ_FINANCIALS', 'UPDATE_COMMERCIAL', 'CONVERT_TO_BOOKING'].includes(action)
       ? 'TEAM'
@@ -136,6 +157,7 @@ function roleScope(
   }
 
   if (role === 'Reservations') {
+    if (resource === 'SUPPLIER_PAYABLE' && action === 'READ_SUPPLIER_PAYABLE') return 'ASSIGNED';
     if (resource === 'INVENTORY' && action === 'READ_INVENTORY') return 'ALL';
     if (
       (resource === 'TRIP' || resource === 'BOOKING') &&
@@ -147,6 +169,7 @@ function roleScope(
   }
 
   if (role === 'Operations') {
+    if (resource === 'SUPPLIER_PAYABLE' && action === 'READ_SUPPLIER_PAYABLE') return 'ASSIGNED';
     if (
       (resource === 'TRIP' || resource === 'BOOKING') &&
       (action === 'READ_DETAIL' || action === 'READ_OPERATIONAL' || action === 'UPDATE_OPERATIONAL')
@@ -321,10 +344,14 @@ const QUERY_FIELDS: Record<AuthorizationResource, Partial<Record<Exclude<Authori
   },
   INVENTORY: { DEPARTMENT: 'departmentId' },
   ATTRIBUTION_REPORT: { DEPARTMENT: 'departmentId' },
+  SUPPLIER_PAYABLE: {
+    ASSIGNED: 'assignedReservationsEmployeeId',
+    DEPARTMENT: 'departmentId',
+  },
 };
 
 function assignmentQueryField(resource: AuthorizationResource, role: string): string | undefined {
-  if (role === 'Operations' && (resource === 'TRIP' || resource === 'BOOKING')) {
+  if (role === 'Operations' && (resource === 'TRIP' || resource === 'BOOKING' || resource === 'SUPPLIER_PAYABLE')) {
     return 'assignedOperationsEmployeeId';
   }
   return QUERY_FIELDS[resource].ASSIGNED;

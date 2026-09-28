@@ -101,6 +101,37 @@ describe('Stage C centralized authorization policy', () => {
     expect(authorizeResource(accounts, 'QUOTE', 'UPDATE_COMMERCIAL', { status: 'DRAFT' }).allowed).toBe(false);
   });
 
+  it('applies OWN, TEAM, and ALL scopes to customer payment actions', () => {
+    const executive = principal('Sales Executive', 'exec-1');
+    const manager = principal('Sales Manager', 'manager-1', { salesTeamId: 'team-a' });
+    const accounts = principal('Accounts', 'accounts-1');
+
+    expect(authorizeResource(executive, 'BOOKING', 'RECORD_PAYMENT', ownTrip)).toMatchObject({
+      allowed: true,
+      scope: 'OWN',
+    });
+    expect(authorizeResource(executive, 'BOOKING', 'RECORD_PAYMENT', {
+      ...ownTrip,
+      ownerEmployeeId: 'exec-2',
+    }).allowed).toBe(false);
+    expect(authorizeResource(manager, 'BOOKING', 'RECORD_PAYMENT', ownTrip)).toMatchObject({
+      allowed: true,
+      scope: 'TEAM',
+    });
+    expect(authorizeResource(manager, 'BOOKING', 'RECORD_PAYMENT', {
+      ...ownTrip,
+      salesTeamId: 'team-b',
+    }).allowed).toBe(false);
+    expect(authorizeResource(accounts, 'BOOKING', 'VERIFY_PAYMENT', ownTrip)).toMatchObject({
+      allowed: true,
+      scope: 'ALL',
+    });
+    expect(authorizeResource(executive, 'BOOKING', 'VERIFY_PAYMENT', ownTrip).allowed).toBe(false);
+    expect(authorizeResource(principal('Reservations', 'res-1'), 'BOOKING', 'RECORD_PAYMENT', ownTrip).allowed).toBe(false);
+    expect(authorizeResource(principal('Operations', 'ops-1'), 'BOOKING', 'RECORD_PAYMENT', ownTrip).allowed).toBe(false);
+    expect(authorizeResource(principal('Marketing', 'mkt-1'), 'BOOKING', 'RECORD_PAYMENT', ownTrip).allowed).toBe(false);
+  });
+
   it('denies Marketing raw detail while permitting aggregate attribution only', () => {
     const marketing = principal('Marketing', 'marketing-1');
     expect(authorizeResource(marketing, 'TRIP', 'READ_DETAIL', ownTrip).allowed).toBe(false);

@@ -13,6 +13,9 @@ import { tripsRouter } from './trips.js';
 import { quotesRouter } from './quotes.js';
 import { bookingsRouter } from './bookings.js';
 import { leadsRouter } from './leads.js';
+import { employeesRouter } from './employees.js';
+import { supplierPayablesRouter } from './supplierPayables.js';
+import { operationsRouter } from './operations.js';
 
 export const apiRouter = Router();
 
@@ -38,6 +41,9 @@ apiRouter.use('/trips', tripsRouter);
 apiRouter.use('/quotes', quotesRouter);
 apiRouter.use('/bookings', bookingsRouter);
 apiRouter.use('/leads', leadsRouter);
+apiRouter.use('/employees', employeesRouter);
+apiRouter.use('/supplier-payables', supplierPayablesRouter);
+apiRouter.use('/operations', operationsRouter);
 
 // Health check endpoint
 apiRouter.get('/health', (req: Request, res: Response) => {

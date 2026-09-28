@@ -37,6 +37,7 @@ import { SettingsView } from './components/operations/SettingsView';
 import { AccommodationInventoryView } from './components/inventory/AccommodationInventoryView';
 import { TransportInventoryView } from './components/inventory/TransportInventoryView';
 import { ActivityInventoryView } from './components/inventory/ActivityInventoryView';
+import { SupplierPayablesView } from './components/finance/SupplierPayablesView';
 
 export function AppContent() {
   const [activeNav, setActiveNav] = useState<NavSectionKey>('dashboard');
@@ -78,6 +79,8 @@ export function AppContent() {
         return <TripBuilderView initialLeadId={targetId} onNavigate={handleNavigate} />;
       case 'bookings':
         return <BookingsView />;
+      case 'supplier-payables':
+        return <SupplierPayablesView />;
       case 'marketing-strategy':
         return <MarketingStrategyView />;
       case 'content-calendar':

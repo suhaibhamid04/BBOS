@@ -229,6 +229,8 @@ export interface BookingTransport {
   bookingId: string;
   tripId: string;
   customerId: string;
+  /** Quote line identifier used to resolve the immutable financial snapshot. */
+  sourceQuoteServiceId?: string;
 
   // [A] Commercial / Sales-Safe Fields (Readable: Sales, Ops, Accounts)
   vehicleCategoryId: string;
@@ -268,6 +270,8 @@ export interface BookingActivity {
   bookingId: string;
   tripId: string;
   customerId: string;
+  /** Quote line identifier used to resolve the immutable financial snapshot. */
+  sourceQuoteServiceId?: string;
 
   // [A] Commercial / Sales-Safe Fields (Readable: Sales, Ops, Accounts)
   activityMasterId: string;

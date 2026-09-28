@@ -8,6 +8,47 @@ export const leadsRouter = Router();
 // Allowed roles for basic lead management
 const crmRoles: import('../../src/types/index.js').UserRole[] = ['Founder', 'Admin', 'Sales Manager', 'Sales Executive'];
 
+interface ActiveSalesAssignee {
+  employeeId: string;
+  name: string;
+}
+
+async function resolveActiveSalesAssignee(
+  db: ReturnType<typeof getAdminDb>,
+  employeeId: string,
+): Promise<ActiveSalesAssignee | null> {
+  const normalizedEmployeeId = typeof employeeId === 'string' ? employeeId.trim() : '';
+  if (!normalizedEmployeeId) return null;
+
+  const employees = db.collection('employees');
+  const [canonicalSnapshot, legacyDocument] = await Promise.all([
+    employees.where('employeeId', '==', normalizedEmployeeId).limit(2).get(),
+    employees.doc(normalizedEmployeeId).get(),
+  ]);
+  const candidates = new Map<string, FirebaseFirestore.DocumentSnapshot>();
+  for (const document of canonicalSnapshot.docs) candidates.set(document.id, document);
+  if (legacyDocument.exists) candidates.set(legacyDocument.id, legacyDocument);
+  if (candidates.size !== 1) return null;
+
+  const document = [...candidates.values()][0];
+  const data = document.data() || {};
+  const canonicalEmployeeId = typeof data.employeeId === 'string' && data.employeeId.trim()
+    ? data.employeeId.trim()
+    : typeof data.id === 'string' && data.id.trim()
+      ? data.id.trim()
+      : document.id;
+  if (
+    canonicalEmployeeId !== normalizedEmployeeId ||
+    data.active !== true ||
+    (data.role !== 'Sales Executive' && data.role !== 'Sales Manager') ||
+    typeof data.name !== 'string' ||
+    !data.name.trim()
+  ) {
+    return null;
+  }
+  return { employeeId: canonicalEmployeeId, name: data.name.trim() };
+}
+
 leadsRouter.post('/', requireRole(crmRoles), async (req: Request, res: Response) => {
   try {
     const actor = req.user!;
@@ -53,12 +94,25 @@ leadsRouter.post('/', requireRole(crmRoles), async (req: Request, res: Response)
     // Assignment Logic
     if (actor.role === 'Sales Executive') {
       // Sales Executives can only assign to themselves
-      newLead.assignedEmployeeId = actor.id;
+      newLead.assignedEmployeeId = actor.employeeId;
       newLead.assignedEmployeeName = actor.name;
     } else {
-      // Founder/Admin/Manager can assign to provided employee, defaulting to themselves
-      newLead.assignedEmployeeId = body.assignedEmployeeId || actor.id;
-      newLead.assignedEmployeeName = body.assignedEmployeeName || actor.name;
+      // Founder/Admin/Manager may assign a canonical, active Sales employee.
+      // An omitted assignment retains the existing default-to-actor behavior.
+      if (body.assignedEmployeeId) {
+        const assignee = await resolveActiveSalesAssignee(db, body.assignedEmployeeId);
+        if (!assignee) {
+          return res.status(422).json({
+            error: 'The assigned employee must be one active Sales employee.',
+            code: 'ACTIVE_SALES_ASSIGNEE_REQUIRED',
+          });
+        }
+        newLead.assignedEmployeeId = assignee.employeeId;
+        newLead.assignedEmployeeName = assignee.name;
+      } else {
+        newLead.assignedEmployeeId = actor.employeeId;
+        newLead.assignedEmployeeName = actor.name;
+      }
     }
 
     await db.collection('leads').doc(newLead.id!).set(newLead);
@@ -69,7 +123,7 @@ leadsRouter.post('/', requireRole(crmRoles), async (req: Request, res: Response)
       action: 'LEAD_CREATED',
       entityType: 'LEAD',
       entityId: newLead.id!,
-      actor: { id: actor.id, name: actor.name, role: actor.role },
+      actor: { id: actor.employeeId, name: actor.name, role: actor.role },
       before: null,
       after: newLead,
       summary: 'New inbound lead registered',
@@ -100,7 +154,7 @@ leadsRouter.patch('/:id', requireRole(crmRoles), async (req: Request, res: Respo
     const existingLead = docSnap.data() as Lead;
 
     // IDOR Protection: Sales Executive can only edit assigned leads
-    if (actor.role === 'Sales Executive' && existingLead.assignedEmployeeId !== actor.id) {
+    if (actor.role === 'Sales Executive' && existingLead.assignedEmployeeId !== actor.employeeId) {
       return res.status(403).json({ error: 'Access Denied: You are not assigned to this lead.' });
     }
 
@@ -113,7 +167,7 @@ leadsRouter.patch('/:id', requireRole(crmRoles), async (req: Request, res: Respo
 
     // Field Allowlist
     const allowedFields = [
-      'status', 'notes', 'assignedEmployeeId', 'assignedEmployeeName',
+      'status', 'notes', 'assignedEmployeeId',
       'priority', 'lastContactAt', 'nextFollowUpAt', 'destination',
       'travelStartDate', 'travelEndDate', 'travelerCount', 'tripType',
       'budget', 'customerName', 'customerPhone', 'customerEmail'
@@ -128,6 +182,18 @@ leadsRouter.patch('/:id', requireRole(crmRoles), async (req: Request, res: Respo
 
     if (Object.keys(safeUpdates).length === 0) {
       return res.status(400).json({ error: 'No valid fields provided for update.' });
+    }
+
+    if (safeUpdates.assignedEmployeeId && safeUpdates.assignedEmployeeId !== existingLead.assignedEmployeeId) {
+      const assignee = await resolveActiveSalesAssignee(db, safeUpdates.assignedEmployeeId);
+      if (!assignee) {
+        return res.status(422).json({
+          error: 'The assigned employee must be one active Sales employee.',
+          code: 'ACTIVE_SALES_ASSIGNEE_REQUIRED',
+        });
+      }
+      safeUpdates.assignedEmployeeId = assignee.employeeId;
+      safeUpdates.assignedEmployeeName = assignee.name;
     }
 
     safeUpdates.updatedAt = new Date().toISOString();
@@ -151,7 +217,7 @@ leadsRouter.patch('/:id', requireRole(crmRoles), async (req: Request, res: Respo
       action,
       entityType: 'LEAD',
       entityId: leadId,
-      actor: { id: actor.id, name: actor.name, role: actor.role },
+      actor: { id: actor.employeeId, name: actor.name, role: actor.role },
       before: existingLead,
       after: { ...existingLead, ...safeUpdates },
       summary,

@@ -36,6 +36,7 @@ function makeBooking(overrides: Partial<Booking> = {}): Booking {
     travelStartDate: '2026-12-01',
     travelEndDate: '2026-12-07',
     assignedReservationsEmployeeId: 'emp-res-01',
+    assignedOperationsEmployeeId: 'emp-ops-01',
     confirmationProgress: {
       totalServices: 3,
       confirmedServices: 0,

@@ -13,14 +13,38 @@ mock.module('../../server/firebaseAdmin.ts', () => {
       protectedField: 'secret'
     }
   };
+  const employeesData: any = {
+    'legacy-active-sales-doc': {
+      employeeId: 'emp-active-sales',
+      name: 'Active Sales',
+      role: 'Sales Executive',
+      active: true,
+    },
+    'emp-inactive-sales': {
+      employeeId: 'emp-inactive-sales',
+      name: 'Inactive Sales',
+      role: 'Sales Executive',
+      active: false,
+    },
+  };
   let auditLogs: any[] = [];
   return {
     getAdminDb: () => ({
       collection: (col: string) => ({
+        where: (field: string, _operator: string, value: unknown) => ({
+          limit: (_count: number) => ({
+            get: async () => ({
+              docs: Object.entries(employeesData)
+                .filter(([, data]: any) => field === 'employeeId' && data.employeeId === value)
+                .map(([id, data]) => ({ id, exists: true, data: () => data })),
+            }),
+          }),
+        }),
         doc: (id: string) => ({
           get: async () => ({
-            exists: !!leadsData[id],
-            data: () => leadsData[id]
+            id,
+            exists: col === 'employees' ? !!employeesData[id] : !!leadsData[id],
+            data: () => col === 'employees' ? employeesData[id] : leadsData[id]
           }),
           update: async (updates: any) => {
             if (col === 'leads') {
@@ -48,7 +72,7 @@ describe('POST /api/leads', () => {
     jsonMock = mock((data: any) => data);
     statusMock = mock((code: number) => ({ json: jsonMock }));
     req = {
-      user: { id: 'emp-1', role: 'Sales Executive', name: 'John' } as any,
+      user: { id: 'emp-1', employeeId: 'emp-1', role: 'Sales Executive', name: 'John' } as any,
       body: {}
     };
     res = { json: jsonMock, status: statusMock };
@@ -78,7 +102,7 @@ describe('POST /api/leads', () => {
   });
 
   it('enforces IDOR on assignment for Sales Executive', async () => {
-    req.user = { id: 'emp-exec', role: 'Sales Executive', name: 'Exec' } as any;
+    req.user = { id: 'compatibility-id', employeeId: 'emp-exec', role: 'Sales Executive', name: 'Exec' } as any;
     req.body = {
       customerName: 'Test', customerPhone: '123', destination: 'Kashmir',
       travelStartDate: '2026-10-01', travelEndDate: '2026-10-05',
@@ -103,6 +127,39 @@ describe('POST /api/leads', () => {
     
     expect(statusMock).toHaveBeenCalledWith(400);
   });
+
+  it('allows assignment only to a canonical active Sales employee', async () => {
+    req.user = { id: 'legacy-admin', employeeId: 'emp-admin-01', role: 'Admin', name: 'Admin' } as any;
+    req.body = {
+      customerName: 'Test', customerPhone: '123', destination: 'Kashmir',
+      travelStartDate: '2026-10-01', travelEndDate: '2026-10-05',
+      travelerCount: 2, tripType: 'Honeymoon', budget: 50000, source: 'Website',
+      assignedEmployeeId: 'emp-active-sales', assignedEmployeeName: 'Forged Name',
+    };
+    const route = (leadsRouter as any).stack.find((r: any) => r.route && r.route.path === '/' && r.route.methods.post);
+    const handler = route.route.stack[1].handle;
+    await handler(req as Request, res as Response, () => {});
+
+    const result = jsonMock.mock.calls[0][0];
+    expect(result.data.assignedEmployeeId).toBe('emp-active-sales');
+    expect(result.data.assignedEmployeeName).toBe('Active Sales');
+  });
+
+  it('rejects a new assignment to an inactive employee', async () => {
+    req.user = { id: 'legacy-admin', employeeId: 'emp-admin-01', role: 'Admin', name: 'Admin' } as any;
+    req.body = {
+      customerName: 'Test', customerPhone: '123', destination: 'Kashmir',
+      travelStartDate: '2026-10-01', travelEndDate: '2026-10-05',
+      travelerCount: 2, tripType: 'Honeymoon', budget: 50000, source: 'Website',
+      assignedEmployeeId: 'emp-inactive-sales',
+    };
+    const route = (leadsRouter as any).stack.find((r: any) => r.route && r.route.path === '/' && r.route.methods.post);
+    const handler = route.route.stack[1].handle;
+    await handler(req as Request, res as Response, () => {});
+
+    expect(statusMock).toHaveBeenCalledWith(422);
+    expect(jsonMock.mock.calls[0][0].code).toBe('ACTIVE_SALES_ASSIGNEE_REQUIRED');
+  });
 });
 
 describe('PATCH /api/leads/:id', () => {
@@ -116,7 +173,7 @@ describe('PATCH /api/leads/:id', () => {
     statusMock = mock((code: number) => ({ json: jsonMock }));
     req = {
       params: { id: 'lead-1' },
-      user: { id: 'emp-1', role: 'Sales Executive' } as any,
+      user: { id: 'emp-1', employeeId: 'emp-1', role: 'Sales Executive' } as any,
       body: {}
     };
     res = { json: jsonMock, status: statusMock };
@@ -137,7 +194,7 @@ describe('PATCH /api/leads/:id', () => {
   });
 
   it('blocks IDOR for Sales Executive', async () => {
-    req.user = { id: 'emp-2', role: 'Sales Executive' } as any; // Not assigned
+    req.user = { id: 'compatibility-id', employeeId: 'emp-2', role: 'Sales Executive' } as any; // Not assigned
     req.body = { status: 'CONTACTED' };
     const route = (leadsRouter as any).stack.find((r: any) => r.route && r.route.path === '/:id' && r.route.methods.patch);
     const handler = route.route.stack[1].handle;

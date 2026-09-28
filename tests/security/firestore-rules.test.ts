@@ -142,6 +142,7 @@ describe('3. Firestore Security Rules Specification Verification', () => {
   it('Documents security invariants enforced by firestore.rules', async () => {
     const rules = await Bun.file('firestore.rules').text();
     const quoteRules = rules.match(/match \/quotes\/\{quoteId\} \{([\s\S]*?)\n    \}/)?.[1] || '';
+    const paymentRules = rules.match(/match \/payments\/\{paymentId\} \{([\s\S]*?)\n    \}/)?.[1] || '';
     const auditRules = rules.match(/match \/audit_logs\/\{logId\} \{([\s\S]*?)\n    \}/)?.[1] || '';
     const securityInvariants = {
       unauthenticatedAccessDenied: true,
@@ -152,10 +153,20 @@ describe('3. Firestore Security Rules Specification Verification', () => {
       auditLogsReadableOnlyByAdminAndAccounts: true,
       catchAllRuleDeniesUnlistedPaths: true,
       quotesAreServerOnly: /allow read, create, update, delete: if false;/.test(quoteRules),
+      paymentsAreServerOnly: /allow read, create, update, delete: if false;/.test(paymentRules),
       quoteAuditEventsAreServerOnly:
         auditRules.includes('QUOTE_CREATED') &&
         auditRules.includes('QUOTE_UPDATED') &&
         auditRules.includes('QUOTE_CONVERTED_TO_BOOKING'),
+      paymentAuditEventsAreServerOnly:
+        auditRules.includes("entityType != 'PAYMENT'") &&
+        auditRules.includes('PAYMENT_RECORDED') &&
+        auditRules.includes('PAYMENT_VERIFIED') &&
+        auditRules.includes('PAYMENT_REJECTED') &&
+        auditRules.includes('BOOKING_CONFIRMED_FROM_PAYMENT'),
+      operationsAssignmentAuditsAreServerOnly:
+        auditRules.includes('OPERATIONS_ASSIGNED') &&
+        auditRules.includes('OPERATIONS_REASSIGNED'),
     };
 
     expect(securityInvariants.unauthenticatedAccessDenied).toBe(true);
@@ -163,6 +174,9 @@ describe('3. Firestore Security Rules Specification Verification', () => {
     expect(securityInvariants.messagesAppendOnly).toBe(true);
     expect(securityInvariants.employeePermissionsModifiableOnlyByAdminOrFounder).toBe(true);
     expect(securityInvariants.quotesAreServerOnly).toBe(true);
+    expect(securityInvariants.paymentsAreServerOnly).toBe(true);
     expect(securityInvariants.quoteAuditEventsAreServerOnly).toBe(true);
+    expect(securityInvariants.paymentAuditEventsAreServerOnly).toBe(true);
+    expect(securityInvariants.operationsAssignmentAuditsAreServerOnly).toBe(true);
   });
 });

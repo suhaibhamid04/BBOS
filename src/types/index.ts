@@ -64,6 +64,50 @@ export interface SalesTeam {
   updatedAt?: string;
 }
 
+export interface EmployeeAccessSummary {
+  scope: string;
+  details: string[];
+}
+
+/** Explicit administrative projection returned only by the employee API. */
+export interface ManagedEmployee {
+  employeeId: string;
+  name: string;
+  email: string;
+  firebaseUid?: string;
+  role: UserRole;
+  active: boolean;
+  salesTeamId?: string;
+  managerEmployeeId?: string;
+  department?: string;
+  designation?: string;
+  phone?: string;
+  joiningDate?: string;
+  createdAt: string;
+  updatedAt: string;
+  createdByEmployeeId: string;
+  updatedByEmployeeId: string;
+  accessSummary: EmployeeAccessSummary;
+  reassignmentRequired: boolean;
+  reassignmentNote?: string;
+}
+
+export interface EmployeeMutationInput {
+  employeeId?: string;
+  name?: string;
+  email?: string;
+  firebaseUid?: string | null;
+  role?: UserRole;
+  active?: boolean;
+  salesTeamId?: string | null;
+  managerEmployeeId?: string | null;
+  department?: string | null;
+  designation?: string | null;
+  phone?: string | null;
+  joiningDate?: string | null;
+  reason?: string;
+}
+
 export interface RolePermissions {
   role: UserRole;
   description: string;

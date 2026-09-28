@@ -44,9 +44,14 @@ function getActorFromRequest(req: Request): PaymentActor {
     id: currentUser.id,
     employeeId: currentUser.employeeId,
     uid: currentUser.uid,
+    firebaseUid: currentUser.firebaseUid,
     name: currentUser.name,
     email: currentUser.email,
     role: currentUser.role,
+    active: currentUser.active,
+    salesTeamId: currentUser.salesTeamId,
+    managerEmployeeId: currentUser.managerEmployeeId,
+    department: currentUser.department,
     isDemo: currentUser.isDemo,
   };
 }
@@ -398,7 +403,8 @@ bookingsRouter.patch(
  * Updates operational fields on a BookingTransport (driver details, vehicle reg, etc.)
  * Recalculates booking.confirmationProgress atomically.
  *
- * Authorized roles: Operations, Admin, Founder
+ * Coarse admission: Operations, Admin, Founder. The confirmation service
+ * enforces ASSIGNED/ALL scope from the authoritative stored Booking.
  */
 bookingsRouter.patch(
   '/:bookingId/services/transports/:serviceId',
@@ -406,8 +412,7 @@ bookingsRouter.patch(
   async (req: Request, res: Response) => {
     try {
       const { bookingId, serviceId } = req.params;
-      const actor = getActorFromRequest(req);
-      const result = await serviceConfirmationService.confirmTransport(bookingId, serviceId, req.body, actor);
+      const result = await serviceConfirmationService.confirmTransport(bookingId, serviceId, req.body, req.user!);
       return res.status(200).json({ success: true, ...result });
     } catch (error: any) {
       return handleLifecycleError(error, res, 'PATCH /bookings/:bookingId/services/transports/:serviceId');
@@ -420,7 +425,8 @@ bookingsRouter.patch(
  * Updates operational fields on a BookingActivity (confirmation code, guide assignment, etc.)
  * Recalculates booking.confirmationProgress atomically.
  *
- * Authorized roles: Operations, Admin, Founder
+ * Coarse admission: Operations, Admin, Founder. The confirmation service
+ * enforces ASSIGNED/ALL scope from the authoritative stored Booking.
  */
 bookingsRouter.patch(
   '/:bookingId/services/activities/:serviceId',
@@ -428,8 +434,7 @@ bookingsRouter.patch(
   async (req: Request, res: Response) => {
     try {
       const { bookingId, serviceId } = req.params;
-      const actor = getActorFromRequest(req);
-      const result = await serviceConfirmationService.confirmActivity(bookingId, serviceId, req.body, actor);
+      const result = await serviceConfirmationService.confirmActivity(bookingId, serviceId, req.body, req.user!);
       return res.status(200).json({ success: true, ...result });
     } catch (error: any) {
       return handleLifecycleError(error, res, 'PATCH /bookings/:bookingId/services/activities/:serviceId');

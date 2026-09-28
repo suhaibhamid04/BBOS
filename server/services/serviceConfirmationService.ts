@@ -6,7 +6,7 @@
 // Also recomputes booking.confirmationProgress atomically.
 // =====================================================
 
-import { UserRole, AuditLog } from '../../src/types';
+import { AuditLog } from '../../src/types';
 import {
   Booking,
   BookingAccommodation,
@@ -28,13 +28,6 @@ export interface ConfirmationActor extends AuthorizationPrincipal {
   name: string;
   email?: string;
   isDemo?: boolean;
-}
-
-interface LegacyConfirmationActor {
-  id: string;
-  uid?: string;
-  name: string;
-  role: UserRole;
 }
 
 // ── DTOs ──────────────────────────────────────────────────────────────────────
@@ -132,6 +125,17 @@ interface AccommodationConfirmationCommit {
   auditLog: AuditLog;
 }
 
+interface OperationalConfirmationCommit {
+  serviceType: 'TRANSPORT' | 'ACTIVITY';
+  bookingId: string;
+  serviceId: string;
+  expectedBookingUpdatedAt: string;
+  expectedServiceUpdatedAt: string;
+  serviceUpdate: Partial<BookingTransport> | Partial<BookingActivity>;
+  bookingUpdate: Partial<Booking>;
+  auditLog: AuditLog;
+}
+
 // ── Storage abstraction ────────────────────────────────────────────────────────
 
 export interface ConfirmationStorageProvider {
@@ -151,6 +155,7 @@ export interface ConfirmationStorageProvider {
   updateBooking(bookingId: string, data: Partial<Booking>): Promise<void>;
   logAuditEvent(auditLog: AuditLog): Promise<void>;
   commitAccommodationConfirmation(commit: AccommodationConfirmationCommit): Promise<void>;
+  commitOperationalConfirmation(commit: OperationalConfirmationCommit): Promise<void>;
 }
 
 // In-memory implementation for testing
@@ -249,6 +254,37 @@ export class InMemoryConfirmationStorageProvider implements ConfirmationStorageP
     this.mutationCount += 3;
   }
 
+  async commitOperationalConfirmation(commit: OperationalConfirmationCommit): Promise<void> {
+    const booking = this.bookings.get(commit.bookingId);
+    const service = commit.serviceType === 'TRANSPORT'
+      ? this.transports.get(commit.serviceId)
+      : this.activities.get(commit.serviceId);
+    if (!booking || !service || service.bookingId !== commit.bookingId) {
+      throw new ConfirmationError(409, 'CONFIRMATION_CONFLICT', 'Booking confirmation data changed.');
+    }
+    if (booking.updatedAt !== commit.expectedBookingUpdatedAt || service.updatedAt !== commit.expectedServiceUpdatedAt) {
+      throw new ConfirmationError(409, 'CONFIRMATION_CONFLICT', 'Booking confirmation data changed; reload and retry.');
+    }
+
+    if (commit.serviceType === 'TRANSPORT') {
+      this.transports.set(commit.serviceId, {
+        ...(service as BookingTransport),
+        ...JSON.parse(JSON.stringify(commit.serviceUpdate)),
+      });
+    } else {
+      this.activities.set(commit.serviceId, {
+        ...(service as BookingActivity),
+        ...JSON.parse(JSON.stringify(commit.serviceUpdate)),
+      });
+    }
+    this.bookings.set(commit.bookingId, {
+      ...booking,
+      ...JSON.parse(JSON.stringify(commit.bookingUpdate)),
+    });
+    this.auditLogs.set(commit.auditLog.id, JSON.parse(JSON.stringify(commit.auditLog)));
+    this.mutationCount += 3;
+  }
+
   // Test helpers
   getBookingSync(id: string): Booking | undefined { return this.bookings.get(id); }
   getAccommodationSync(id: string): BookingAccommodation | undefined { return this.accommodations.get(id); }
@@ -335,21 +371,41 @@ export class FirestoreConfirmationStorageProvider implements ConfirmationStorage
       transaction.set(auditRef, commit.auditLog);
     });
   }
+
+  async commitOperationalConfirmation(commit: OperationalConfirmationCommit): Promise<void> {
+    const db = this.db();
+    const bookingRef = db.collection('bookings').doc(commit.bookingId);
+    const serviceCollection = commit.serviceType === 'TRANSPORT'
+      ? 'booking_transports'
+      : 'booking_activities';
+    const serviceRef = db.collection(serviceCollection).doc(commit.serviceId);
+    const auditRef = db.collection('audit_logs').doc(commit.auditLog.id);
+
+    await db.runTransaction(async transaction => {
+      const [bookingSnap, serviceSnap] = await Promise.all([
+        transaction.get(bookingRef),
+        transaction.get(serviceRef),
+      ]);
+      if (
+        !bookingSnap.exists || !serviceSnap.exists ||
+        serviceSnap.data()?.bookingId !== commit.bookingId
+      ) {
+        throw new ConfirmationError(409, 'CONFIRMATION_CONFLICT', 'Booking confirmation data changed.');
+      }
+      if (
+        bookingSnap.data()?.updatedAt !== commit.expectedBookingUpdatedAt ||
+        serviceSnap.data()?.updatedAt !== commit.expectedServiceUpdatedAt
+      ) {
+        throw new ConfirmationError(409, 'CONFIRMATION_CONFLICT', 'Booking confirmation data changed; reload and retry.');
+      }
+      transaction.update(serviceRef, commit.serviceUpdate as Record<string, unknown>);
+      transaction.update(bookingRef, commit.bookingUpdate as Record<string, unknown>);
+      transaction.set(auditRef, commit.auditLog);
+    });
+  }
 }
 
 // ── RBAC ──────────────────────────────────────────────────────────────────────
-
-const CONFIRMATION_ROLES: UserRole[] = ['Founder', 'Admin', 'Operations'];
-
-function assertConfirmationRole(actor: LegacyConfirmationActor) {
-  if (!CONFIRMATION_ROLES.includes(actor.role as UserRole)) {
-    throw new ConfirmationError(
-      403,
-      'FORBIDDEN',
-      `Role "${actor.role}" is not authorized to update service confirmation details.`
-    );
-  }
-}
 
 const ACCOMMODATION_CONFIRMATION_FIELDS = new Set([
   'confirmationStatus', 'supplierConfirmationCode', 'allocatedRoomNumbers', 'supplierNotes',
@@ -658,12 +714,19 @@ export class ServiceConfirmationService {
     bookingId: string,
     serviceId: string,
     dto: ConfirmTransportDTO,
-    actor: LegacyConfirmationActor
+    actor: ConfirmationActor
   ): Promise<ServiceConfirmationResult> {
-    assertConfirmationRole(actor);
-
     const booking = await this.storageProvider.getBooking(bookingId);
     if (!booking) throw new ConfirmationError(404, 'BOOKING_NOT_FOUND', `Booking "${bookingId}" not found.`);
+    const authorization = authorizeResource(
+      actor,
+      'BOOKING',
+      'UPDATE_OPERATIONAL',
+      bookingResourceContext(booking),
+    );
+    if (!authorization.allowed) {
+      throw new ConfirmationError(403, authorization.code, authorization.reason);
+    }
     if (booking.status === 'CANCELLED') throw new ConfirmationError(422, 'BOOKING_CANCELLED', 'Cannot update services on a cancelled booking.');
 
     const service = await this.storageProvider.getTransport(serviceId);
@@ -683,15 +746,19 @@ export class ServiceConfirmationService {
     if (dto.supplierNotes !== undefined) allowedUpdate.supplierNotes = dto.supplierNotes;
     allowedUpdate.updatedAt = now;
 
-    await this.storageProvider.updateTransport(serviceId, allowedUpdate);
-
-    const progress = await this.recomputeAndSaveProgress(bookingId, now);
+    const services = await this.storageProvider.getServicesByBooking(bookingId);
+    const updatedTransport = { ...service, ...allowedUpdate } as BookingTransport;
+    const progress = computeConfirmationProgress(
+      services.accommodations,
+      services.transports.map(item => item.id === serviceId ? updatedTransport : item),
+      services.activities,
+    );
 
     const auditLog: AuditLog = {
       id: generateAuditId(),
       timestamp: now,
       actorType: 'HUMAN',
-      actorId: actor.uid || actor.id,
+      actorId: actor.employeeId,
       actorName: `${actor.name} (${actor.role})`,
       action: 'SERVICE_TRANSPORT_CONFIRMED',
       entityType: 'BOOKING',
@@ -700,7 +767,16 @@ export class ServiceConfirmationService {
       after: { confirmationStatus: dto.confirmationStatus ?? service.confirmationStatus, serviceId },
       reason: `Transport "${serviceId}" updated by ${actor.name}`,
     };
-    await this.storageProvider.logAuditEvent(auditLog);
+    await this.storageProvider.commitOperationalConfirmation({
+      serviceType: 'TRANSPORT',
+      bookingId,
+      serviceId,
+      expectedBookingUpdatedAt: booking.updatedAt,
+      expectedServiceUpdatedAt: service.updatedAt,
+      serviceUpdate: allowedUpdate,
+      bookingUpdate: { confirmationProgress: progress, updatedAt: now },
+      auditLog,
+    });
 
     return { success: true, confirmationProgress: progress, message: 'Transport service updated successfully.' };
   }
@@ -713,12 +789,19 @@ export class ServiceConfirmationService {
     bookingId: string,
     serviceId: string,
     dto: ConfirmActivityDTO,
-    actor: LegacyConfirmationActor
+    actor: ConfirmationActor
   ): Promise<ServiceConfirmationResult> {
-    assertConfirmationRole(actor);
-
     const booking = await this.storageProvider.getBooking(bookingId);
     if (!booking) throw new ConfirmationError(404, 'BOOKING_NOT_FOUND', `Booking "${bookingId}" not found.`);
+    const authorization = authorizeResource(
+      actor,
+      'BOOKING',
+      'UPDATE_OPERATIONAL',
+      bookingResourceContext(booking),
+    );
+    if (!authorization.allowed) {
+      throw new ConfirmationError(403, authorization.code, authorization.reason);
+    }
     if (booking.status === 'CANCELLED') throw new ConfirmationError(422, 'BOOKING_CANCELLED', 'Cannot update services on a cancelled booking.');
 
     const service = await this.storageProvider.getActivity(serviceId);
@@ -737,15 +820,19 @@ export class ServiceConfirmationService {
     if (dto.operationalNotes !== undefined) allowedUpdate.operationalNotes = dto.operationalNotes;
     allowedUpdate.updatedAt = now;
 
-    await this.storageProvider.updateActivity(serviceId, allowedUpdate);
-
-    const progress = await this.recomputeAndSaveProgress(bookingId, now);
+    const services = await this.storageProvider.getServicesByBooking(bookingId);
+    const updatedActivity = { ...service, ...allowedUpdate } as BookingActivity;
+    const progress = computeConfirmationProgress(
+      services.accommodations,
+      services.transports,
+      services.activities.map(item => item.id === serviceId ? updatedActivity : item),
+    );
 
     const auditLog: AuditLog = {
       id: generateAuditId(),
       timestamp: now,
       actorType: 'HUMAN',
-      actorId: actor.uid || actor.id,
+      actorId: actor.employeeId,
       actorName: `${actor.name} (${actor.role})`,
       action: 'SERVICE_ACTIVITY_CONFIRMED',
       entityType: 'BOOKING',
@@ -754,7 +841,16 @@ export class ServiceConfirmationService {
       after: { confirmationStatus: dto.confirmationStatus ?? service.confirmationStatus, serviceId },
       reason: `Activity "${serviceId}" updated by ${actor.name}`,
     };
-    await this.storageProvider.logAuditEvent(auditLog);
+    await this.storageProvider.commitOperationalConfirmation({
+      serviceType: 'ACTIVITY',
+      bookingId,
+      serviceId,
+      expectedBookingUpdatedAt: booking.updatedAt,
+      expectedServiceUpdatedAt: service.updatedAt,
+      serviceUpdate: allowedUpdate,
+      bookingUpdate: { confirmationProgress: progress, updatedAt: now },
+      auditLog,
+    });
 
     return { success: true, confirmationProgress: progress, message: 'Activity service updated successfully.' };
   }
