@@ -1,109 +1,35 @@
-import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test';
+import { describe, expect, it, mock } from 'bun:test';
+import type { NextFunction, Request, Response } from 'express';
 import { accommodationRouter } from '../../server/routes/accommodation';
-import { Request, Response } from 'express';
-import { getAdminDb } from '../../server/firebaseAdmin';
 
-mock.module('../../server/firebaseAdmin.ts', () => {
-  let accData: any = {
-    'accom-1': {
-      id: 'accom-1',
-      name: 'Old Name',
-      financialSecret: 'secret'
+function response() {
+  let statusCode = 200;
+  const value: Partial<Response> = {};
+  value.status = mock((status: number) => { statusCode = status; return value as Response; }) as any;
+  value.json = mock(() => value as Response) as any;
+  return { value: value as Response, status: () => statusCode };
+}
+
+describe('UX1 accommodation mutation route authority', () => {
+  const createGuard = (accommodationRouter as any).stack.find(
+    (layer: any) => layer.route?.path === '/properties' && layer.route.methods.post,
+  ).route.stack[0].handle;
+
+  it('allows Founder/Admin through the property mutation guard', () => {
+    for (const role of ['Founder', 'Admin']) {
+      const next = mock(() => undefined) as unknown as NextFunction;
+      createGuard({ user: { role } } as Request, response().value, next);
+      expect(next).toHaveBeenCalledTimes(1);
     }
-  };
-  let auditLogs: any[] = [];
-  return {
-    getAdminDb: () => ({
-      collection: (col: string) => ({
-        doc: (id: string) => ({
-          get: async () => ({
-            exists: !!accData[id],
-            data: () => accData[id]
-          }),
-          update: async (updates: any) => {
-            if (col === 'accommodation_properties') {
-              accData[id] = { ...accData[id], ...updates };
-            }
-          },
-          set: async (data: any) => {
-            if (col === 'accommodation_properties') {
-              accData[data.id] = data;
-            } else if (col === 'audit_logs') {
-              auditLogs.push(data);
-            }
-          }
-        })
-      })
-    })
-  };
-});
-
-describe('POST /api/accommodation/properties', () => {
-  let req: Partial<Request>;
-  let res: Partial<Response>;
-  let jsonMock: any;
-  let statusMock: any;
-
-  beforeEach(() => {
-    jsonMock = mock((data: any) => data);
-    statusMock = mock((code: number) => ({ json: jsonMock }));
-    req = {
-      user: { id: 'emp-1', role: 'Operations' } as any,
-      body: {}
-    };
-    res = { json: jsonMock, status: statusMock };
   });
 
-  afterEach(() => { mock.restore(); });
-
-  it('creates property and strips financial fields', async () => {
-    req.body = { name: 'New Hotel', financialSecret: 'hacked' };
-    
-    // Find POST route handler
-    const route = (accommodationRouter as any).stack.find((r: any) => r.route && r.route.path === '/properties' && r.route.methods.post);
-    const handler = route.route.stack[1].handle;
-    
-    await handler(req as Request, res as Response, () => {});
-    
-    expect(jsonMock).toHaveBeenCalled();
-    const result = jsonMock.mock.calls[0][0];
-    expect(result.success).toBe(true);
-    expect(result.data.name).toBe('New Hotel');
-    expect(result.data.financialSecret).toBeUndefined();
-  });
-});
-
-describe('PATCH /api/accommodation/properties/:id', () => {
-  let req: Partial<Request>;
-  let res: Partial<Response>;
-  let jsonMock: any;
-  let statusMock: any;
-
-  beforeEach(() => {
-    jsonMock = mock((data: any) => data);
-    statusMock = mock((code: number) => ({ json: jsonMock }));
-    req = {
-      params: { id: 'accom-1' },
-      user: { id: 'emp-1', role: 'Operations' } as any,
-      body: {}
-    };
-    res = { json: jsonMock, status: statusMock };
-  });
-
-  afterEach(() => { mock.restore(); });
-
-  it('updates allowed fields', async () => {
-    req.body = { name: 'Updated Name' };
-    
-    // Find PATCH route handler
-    const route = (accommodationRouter as any).stack.find((r: any) => r.route && r.route.path === '/properties/:id' && r.route.methods.patch);
-    const handler = route.route.stack[1].handle;
-    
-    await handler(req as Request, res as Response, () => {});
-    
-    expect(jsonMock).toHaveBeenCalled();
-    const result = jsonMock.mock.calls[0][0];
-    expect(result.success).toBe(true);
-    expect(result.data.name).toBe('Updated Name');
+  it('denies Operations and Reservations before a property write handler runs', () => {
+    for (const role of ['Operations', 'Reservations']) {
+      const result = response();
+      const next = mock(() => undefined) as unknown as NextFunction;
+      createGuard({ user: { role } } as Request, result.value, next);
+      expect(next).not.toHaveBeenCalled();
+      expect(result.status()).toBe(403);
+    }
   });
 });

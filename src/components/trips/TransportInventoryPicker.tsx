@@ -3,34 +3,38 @@ import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { Car, AlertTriangle, ShieldAlert } from 'lucide-react';
 import { TransportServiceType } from '../../types/transport';
+import { TransportItineraryMetadata } from '../../types';
+import { authenticatedMutationHeaders } from '../../services/auth/authenticatedApi';
 
 interface TransportInventoryPickerProps {
   startDate: string;
-  onConfirm: (metadata: any) => void;
+  initialMetadata?: TransportItineraryMetadata;
+  onConfirm: (metadata: TransportItineraryMetadata) => void;
   onCancel: () => void;
 }
 
 export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> = ({ 
   startDate, 
+  initialMetadata,
   onConfirm,
   onCancel
 }) => {
   const { vehicleCategories, transportRoutes, destinations } = useData();
   const { currentUser } = useAuth();
   
-  const [serviceType, setServiceType] = useState<TransportServiceType>('MULTI_DAY_JOURNEY');
-  const [selectedVehicleId, setSelectedVehicleId] = useState<string>('');
+  const [serviceType, setServiceType] = useState<TransportServiceType>((initialMetadata?.serviceType as TransportServiceType) || 'MULTI_DAY_JOURNEY');
+  const [selectedVehicleId, setSelectedVehicleId] = useState<string>(initialMetadata?.vehicleCategoryId || '');
   
   // Specific params based on service type
-  const [vehicleDays, setVehicleDays] = useState(1);
-  const [nightHalts, setNightHalts] = useState(0);
-  const [occurrences, setOccurrences] = useState(1);
-  const [distanceKm, setDistanceKm] = useState(0);
-  const [hours, setHours] = useState(0);
+  const [vehicleDays, setVehicleDays] = useState(initialMetadata?.vehicleDays || 1);
+  const [nightHalts, setNightHalts] = useState(initialMetadata?.nightHalts || 0);
+  const [occurrences, setOccurrences] = useState(initialMetadata?.occurrences || 1);
+  const [distanceKm, setDistanceKm] = useState(initialMetadata?.distanceKm || 0);
+  const [hours, setHours] = useState(initialMetadata?.hours || 0);
 
   const [pickupLocation, setPickupLocation] = useState('');
   const [dropoffLocation, setDropoffLocation] = useState('');
-  const [selectedRouteId, setSelectedRouteId] = useState('');
+  const [selectedRouteId, setSelectedRouteId] = useState(initialMetadata?.routeId || '');
 
   const [isCalculating, setIsCalculating] = useState(false);
   const [calculatedRate, setCalculatedRate] = useState<any>(null);
@@ -57,10 +61,7 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
     try {
       const res = await fetch('/api/transport/calculate-rate', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Demo-User-Id': currentUser.id
-        },
+        headers: await authenticatedMutationHeaders(currentUser.employeeId),
         body: JSON.stringify({
           vehicleCategoryId: selectedVehicleId,
           startDate,
@@ -85,7 +86,7 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
     } finally {
       setIsCalculating(false);
     }
-  }, [selectedVehicleId, serviceType, startDate, vehicleDays, nightHalts, occurrences, distanceKm, hours, currentUser.id]);
+  }, [selectedVehicleId, serviceType, startDate, vehicleDays, nightHalts, occurrences, distanceKm, hours, currentUser.employeeId]);
 
   useEffect(() => {
     if (selectedVehicleId && serviceType) {
@@ -94,12 +95,12 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
   }, [calculateRate]);
 
   const handleConfirm = () => {
-    if (!calculatedRate) return;
+    if (!calculatedRate?.available || !calculatedRate.rateId || !calculatedRate.supplierId) return;
 
     const vehicle = vehicleCategories.find(v => v.id === selectedVehicleId);
     let routeName = '';
     
-    if (serviceType === 'POINT_TO_POINT_TRANSFER' || serviceType === 'SIGHTSEEING_DAY_TRIP') {
+    if (serviceType !== 'MULTI_DAY_JOURNEY') {
        if (selectedRouteId) {
          const r = transportRoutes.find(rt => rt.id === selectedRouteId);
          routeName = r ? r.name : '';
@@ -111,13 +112,22 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
     }
 
     onConfirm({
+      inventoryType: 'TRANSPORT',
       vehicleCategoryId: selectedVehicleId,
       vehicleName: vehicle?.displayName || 'Vehicle',
+      rateId: calculatedRate.rateId,
+      supplierId: calculatedRate.supplierId,
+      supplierName: calculatedRate.supplierName,
       serviceType,
+      pricingUnit: calculatedRate.pricingUnit,
+      ...(selectedRouteId ? { routeId: selectedRouteId } : {}),
       routeName,
       startDate,
       vehicleDays,
       nightHalts,
+      occurrences,
+      distanceKm,
+      hours,
       needsConfirmation: calculatedRate.needsConfirmation,
       taxDescription: calculatedRate.taxDescription
     });
@@ -125,7 +135,7 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
 
   if (activeVehicles.length === 0) {
     return (
-      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full overflow-hidden">
+      <div data-testid="transport-inventory-picker" className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full overflow-hidden">
         <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
           <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
             <Car className="w-5 h-5 text-[#7056EE]" /> Add Transport
@@ -148,7 +158,7 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
   }
 
   return (
-    <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full overflow-hidden flex flex-col max-h-[90vh]">
+    <div data-testid="transport-inventory-picker" className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full overflow-hidden flex flex-col max-h-[90vh]">
       <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50 shrink-0">
         <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
           <Car className="w-5 h-5 text-[#7056EE]" /> Add Transport
@@ -164,21 +174,21 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">Service Type</label>
               <select
+                data-testid="trip-transport-service-type"
                 value={serviceType}
                 onChange={(e) => setServiceType(e.target.value as TransportServiceType)}
                 className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#7056EE]/20 focus:border-[#7056EE]"
               >
                 <option value="MULTI_DAY_JOURNEY">Multi-Day Journey</option>
-                <option value="POINT_TO_POINT_TRANSFER">Point-to-Point Transfer</option>
-                <option value="SIGHTSEEING_DAY_TRIP">Sightseeing Day Trip</option>
-                <option value="HOURLY_DISPOSAL">Hourly Disposal</option>
-                <option value="KM_BASED">KM Based</option>
+                <option value="AIRPORT_TRANSFER">Airport Transfer</option>
+                <option value="LOCAL_SIGHTSEEING">Local Sightseeing</option>
               </select>
             </div>
             
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">Vehicle Category</label>
               <select
+                data-testid="trip-transport-vehicle"
                 value={selectedVehicleId}
                 onChange={(e) => setSelectedVehicleId(e.target.value)}
                 className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#7056EE]/20 focus:border-[#7056EE]"
@@ -220,7 +230,7 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
             </div>
           )}
 
-          {(serviceType === 'POINT_TO_POINT_TRANSFER' || serviceType === 'SIGHTSEEING_DAY_TRIP') && (
+          {serviceType !== 'MULTI_DAY_JOURNEY' && (
             <div className="grid grid-cols-2 gap-4">
               <div className="col-span-2">
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Select Route</label>
@@ -263,35 +273,6 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
             </div>
           )}
 
-          {serviceType === 'HOURLY_DISPOSAL' && (
-            <div className="grid grid-cols-1 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Chargeable Hours</label>
-                <input
-                  type="number"
-                  min="1"
-                  value={hours}
-                  onChange={(e) => setHours(parseInt(e.target.value) || 1)}
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
-                />
-              </div>
-            </div>
-          )}
-
-          {serviceType === 'KM_BASED' && (
-            <div className="grid grid-cols-1 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Estimated Distance (KM)</label>
-                <input
-                  type="number"
-                  min="1"
-                  value={distanceKm}
-                  onChange={(e) => setDistanceKm(parseInt(e.target.value) || 1)}
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
-                />
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Step 3: Calculation Result */}
@@ -320,8 +301,9 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
                     {calculatedRate.needsConfirmation ? 'Confirmation Required' : 'Available instantly'}
                   </h5>
                   <p className={`text-xs ${calculatedRate.needsConfirmation ? 'text-amber-700' : 'text-emerald-700'} mt-1`}>
-                    Selling Price: <span className="font-bold text-base">₹{calculatedRate.sellingPrice.toLocaleString('en-IN')}</span> 
+                    <span className="font-bold text-base">{calculatedRate.supplierCost === undefined ? 'Authoritative rate found' : `₹${calculatedRate.supplierCost.toLocaleString('en-IN')}`}</span>
                     <span className="text-[10px] ml-1 uppercase">{calculatedRate.taxDescription}</span>
+                    {calculatedRate.supplierName ? <span className="block mt-1">{calculatedRate.supplierName} · {calculatedRate.pricingUnit}</span> : null}
                   </p>
                 </div>
               </div>
@@ -362,6 +344,7 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
           Cancel
         </button>
         <button
+          data-testid="confirm-trip-transport"
           onClick={handleConfirm}
           disabled={!calculatedRate || !!error || isCalculating}
           className="px-6 py-2 text-sm font-bold text-white bg-[#7056EE] hover:bg-[#5b43d6] rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"

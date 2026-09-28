@@ -190,17 +190,22 @@ describe('Stage B demo and navigation behavior', () => {
 describe('Stage B targeted Firestore rate policy', () => {
   const rules = readFileSync('firestore.rules', 'utf8');
 
-  it('recognizes Reservations and removes Operations from rate collection blocks', () => {
+  it('keeps migrated inventory collections server-only and legacy rate collections scoped away from Operations', () => {
     expect(rules).toContain("getUserRole() == 'Reservations'");
 
+    for (const collection of ['rate_periods', 'transport_rate_periods', 'activity_rate_periods']) {
+      const marker = `match /${collection}/`;
+      const start = rules.indexOf(marker);
+      const block = rules.slice(start, rules.indexOf('\n    }', start));
+      expect(start).toBeGreaterThan(-1);
+      expect(block).toContain('allow read, create, update, delete: if false');
+    }
+
     for (const collection of [
-      'rate_periods',
       'rate_supplements',
       'negotiated_rates',
-      'transport_rate_periods',
       'transport_supplements',
       'negotiated_transport_rates',
-      'activity_rate_periods',
       'negotiated_activity_rates',
     ]) {
       const marker = `match /${collection}/`;

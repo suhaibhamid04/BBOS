@@ -5,7 +5,7 @@ import { BookingListItem, BookingListResponse } from '../../types/bookingApi';
 import { BookingDetailPanel } from './BookingDetailPanel';
 import { bookingReadHeaders } from '../../services/auth/authenticatedApi';
 
-export const BookingsView: React.FC = () => {
+export const BookingsView: React.FC<{ initialBookingId?: string }> = ({ initialBookingId }) => {
   const { currentUser } = useAuth();
   
   const [bookings, setBookings] = useState<BookingListItem[]>([]);
@@ -14,7 +14,7 @@ export const BookingsView: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   
-  const [selectedBookingId, setSelectedBookingId] = useState<string | null>(null);
+  const [selectedBookingId, setSelectedBookingId] = useState<string | null>(initialBookingId || null);
   const [searchQuery, setSearchQuery] = useState('');
   
   // Debounce search query

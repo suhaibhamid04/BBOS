@@ -451,6 +451,7 @@ export function buildRoleGatedResult(
     propertyName,
     roomCategoryId: ratePeriod.roomCategoryId,
     roomCategoryName,
+    rateId: ratePeriod.id,
     mealPlan: ratePeriod.mealPlan,
     nights: stayCalc.nights,
     taxIncluded: ratePeriod.taxTreatment === 'NET',

@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { requireRole } from '../middleware/auth.js';
 import { getAdminDb } from '../firebaseAdmin.js';
 import { APP_CONFIG } from '../../src/config.js';
-import { DEMO_TRIPS } from '../../src/services/demoData.js';
+import { DEMO_ITINERARIES, DEMO_TRIPS } from '../../src/services/demoData.js';
 import { assertAuthorizedResource, ResourceAuthorizationError } from '../authorization/assertAuthorizedResource.js';
 import { tripResourceContext } from '../authorization/resourceContext.js';
 import { buildResourceDto } from '../authorization/resourceDto.js';
@@ -29,7 +29,7 @@ import { calculateTransportCost } from '../../src/services/transportEngine.js';
 import { DEMO_ACTIVITY_RATE_PERIODS } from '../../src/services/activityDemoData.js';
 import { calculateActivityCost } from '../../src/services/activityEngine.js';
 
-import { ItineraryItem } from '../../src/types/index.js';
+import { ItineraryDay, ItineraryItem } from '../../src/types/index.js';
 import { TripDomainError, TripService } from '../services/tripService.js';
 
 export const tripsRouter = Router();
@@ -96,6 +96,7 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
     );
 
     let items: ItineraryItem[];
+    let persistedDays: Array<{ id: string; items: ItineraryItem[] }> = [];
     if (APP_CONFIG.DEMO_MODE) {
       if (!Array.isArray(clientItems)) {
         return res.status(400).json({ error: 'Trip items must be an array', code: 'INVALID_TRIP_ITEMS' });
@@ -105,9 +106,9 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
       // D2B: persisted itinerary days, not client input, are the only source
       // for a production supplier-cost calculation.
       const days = await getAdminDb().collection('itinerary_days').where('tripId', '==', tripId).get();
-      items = days.docs.flatMap(day => {
-        const value = day.data().items;
-        return Array.isArray(value) ? value as ItineraryItem[] : [];
+      persistedDays = days.docs.map(day => ({ id: day.id, items: Array.isArray(day.data().items) ? day.data().items as ItineraryItem[] : [] }));
+      items = persistedDays.flatMap(day => {
+        return day.items;
       });
     }
 
@@ -116,13 +117,17 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
     }
 
     let totalTripCost = 0;
+    const itemSupplierCosts: Record<string, number> = {};
 
     // We process each item, calculate its true cost independently of what the client sends
     for (const item of items as ItineraryItem[]) {
       if (item.type === 'HOTEL' && item.metadata) {
-        const { propertyId, roomCategoryId, checkInDate, nights, adults, children, childrenWithBed, childrenWithoutBed, mealPlan } = item.metadata;
+        const { propertyId, roomCategoryId, rateId, checkInDate, nights, rooms = 1, adults, children, childrenWithBed, childrenWithoutBed, mealPlan } = item.metadata;
 
-        if (!propertyId || !checkInDate || !nights) continue;
+        if (!propertyId || !roomCategoryId || !rateId || !checkInDate || !nights) {
+          if (Number.isFinite(item.supplierCost) && Number(item.supplierCost) >= 0) { totalTripCost += Number(item.supplierCost); itemSupplierCosts[item.id] = Number(item.supplierCost); continue; }
+          throw new Error('Accommodation item is missing authoritative inventory linkage.');
+        }
 
         // Find the rate period (Query Firestore in production)
         let ratePeriodsForRoom: RatePeriod[] = [];
@@ -151,7 +156,7 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
         for (const rp of ratePeriodsForRoom) {
           const from = new Date(rp.validFrom);
           const to = rp.validTo ? new Date(rp.validTo) : new Date('2099-12-31');
-          if (targetDate >= from && targetDate <= to) {
+          if (rp.id === rateId && rp.status === 'ACTIVE' && rp.mealPlan === mealPlan && targetDate >= from && targetDate <= to) {
             activeRate = rp;
             break;
           }
@@ -175,8 +180,10 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
              childrenWithoutBed || 0,
              mealPlan
            );
-           if (stayCalc.available && stayCalc.totalAmount) {
-             totalTripCost += stayCalc.totalAmount;
+           if (stayCalc.available && Number.isFinite(stayCalc.totalAmount)) {
+             const itemCost = (stayCalc.totalAmount || 0) * Number(rooms || 1);
+             totalTripCost += itemCost;
+             itemSupplierCosts[item.id] = itemCost;
            } else {
              throw new Error(`Stay is unavailable for room category ${roomCategoryId}`);
            }
@@ -185,9 +192,12 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
         }
       } else if (item.type === 'TRANSPORT' && item.metadata) {
         // Phase 2B-4: Calculate Transport Cost
-        const { vehicleCategoryId, startDate, vehicleDays, nightHalts, serviceType } = item.metadata;
+        const { vehicleCategoryId, rateId, startDate, vehicleDays, nightHalts, serviceType, occurrences, distanceKm, hours } = item.metadata;
 
-        if (!vehicleCategoryId || !startDate || !vehicleDays) continue;
+        if (!vehicleCategoryId || !rateId || !startDate || !vehicleDays || !serviceType) {
+          if (Number.isFinite(item.supplierCost) && Number(item.supplierCost) >= 0) { totalTripCost += Number(item.supplierCost); itemSupplierCosts[item.id] = Number(item.supplierCost); continue; }
+          throw new Error('Transport item is missing authoritative inventory linkage.');
+        }
 
         // In production, query Firestore transport_rate_periods where vehicleCategoryId matches.
         let ratePeriods = [];
@@ -210,7 +220,7 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
         for (const rp of ratePeriods) {
           const from = new Date(rp.validFrom);
           const to = rp.validTo ? new Date(rp.validTo) : new Date('2099-12-31');
-          if (targetDate >= from && targetDate <= to) {
+          if (rp.id === rateId && rp.status === 'ACTIVE' && rp.serviceType === serviceType && targetDate >= from && targetDate <= to) {
             activeRate = rp;
             break;
           }
@@ -225,21 +235,28 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
           supplements: transportSupplements,
           serviceParams: {
             vehicleDays,
-            nightHalts: nightHalts || 0
+            nightHalts: nightHalts || 0,
+            occurrences: occurrences || 1,
+            distanceKm: distanceKm || 0,
+            hours: hours || 0,
           }
         });
 
-        if (transportCalc.available && transportCalc.totalAmount) {
+        if (transportCalc.available && Number.isFinite(transportCalc.totalAmount)) {
            totalTripCost += transportCalc.totalAmount;
+           itemSupplierCosts[item.id] = transportCalc.totalAmount;
         } else {
            throw new Error(`Transport is unavailable for category ${vehicleCategoryId}`);
         }
 
       } else if (item.type === 'ACTIVITY' && item.metadata) {
          // Phase 2B-4: Calculate Activity Cost
-         const { activityId, date, adults, children } = item.metadata;
+         const { activityId, rateId, date, adults, children, infants, vehicles, groups, tickets, hours, days, sessions } = item.metadata;
 
-         if (!activityId || !date) continue;
+         if (!activityId || !rateId || !date) {
+           if (Number.isFinite(item.supplierCost) && Number(item.supplierCost) >= 0) { totalTripCost += Number(item.supplierCost); itemSupplierCosts[item.id] = Number(item.supplierCost); continue; }
+           throw new Error('Activity item is missing authoritative inventory linkage.');
+         }
 
          // In production, query Firestore activity_rate_periods where activityId matches.
          let ratePeriods = [];
@@ -257,7 +274,7 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
          for (const rp of ratePeriods) {
            const from = new Date(rp.validFrom);
            const to = rp.validTo ? new Date(rp.validTo) : new Date('2099-12-31');
-           if (targetDate >= from && targetDate <= to) {
+           if (rp.id === rateId && rp.status === 'ACTIVE' && targetDate >= from && targetDate <= to) {
              activeRate = rp;
              break;
            }
@@ -269,11 +286,12 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
 
          const activityCalc = calculateActivityCost({
            ratePeriod: activeRate,
-           params: { adults, children }
+           params: { adults, children, infants, vehicles, groups, tickets, hours, days, sessions }
          });
 
-         if (activityCalc.available && activityCalc.totalAmount) {
+         if (activityCalc.available && Number.isFinite(activityCalc.totalAmount)) {
            totalTripCost += activityCalc.totalAmount;
+           itemSupplierCosts[item.id] = activityCalc.totalAmount;
          } else {
            throw new Error(`Activity is unavailable for ${activityId}`);
          }
@@ -293,13 +311,20 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
     // Persist securely to Firestore bypassing client rules
     if (!APP_CONFIG.DEMO_MODE) {
       const db = getAdminDb();
-      await db.collection('trips').doc(tripId).update({
+      const batch = db.batch();
+      for (const day of persistedDays) {
+        batch.update(db.collection('itinerary_days').doc(day.id), {
+          items: day.items.map(item => itemSupplierCosts[item.id] === undefined ? item : { ...item, supplierCost: itemSupplierCosts[item.id] }),
+        });
+      }
+      batch.update(db.collection('trips').doc(tripId), {
         totalSupplierCost: totalTripCost,
         grossProfit,
         grossMargin,
         costingStatus: 'CALCULATED',
         updatedAt: new Date().toISOString()
       });
+      await batch.commit();
     }
 
     // Return the response.
@@ -308,6 +333,7 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
       grossProfit,
       grossMargin,
       costingStatus: 'CALCULATED',
+      itemSupplierCosts,
     };
 
     return res.json({
@@ -389,6 +415,21 @@ tripsRouter.post(
   },
 );
 
+tripsRouter.patch(
+  '/itinerary-days/:dayId/items/:itemId',
+  requireRole([...commercialTripMutationRoles]),
+  async (req: Request, res: Response) => {
+    try {
+      const actor = actorFromRequest(req);
+      const result = await tripService.updateItineraryItem(req.params.dayId, req.params.itemId, req.body, actor);
+      const authorization = assertAuthorizedResource(actor, 'TRIP', 'READ_DETAIL', tripResourceContext(result.trip));
+      return res.status(200).json({ success: true, data: buildResourceDto(actor, 'TRIP', result, authorization) });
+    } catch (error) {
+      return sendTripMutationError(res, error, 'update itinerary item');
+    }
+  },
+);
+
 tripsRouter.delete(
   '/itinerary-days/:dayId/items/:itemId',
   requireRole([...commercialTripMutationRoles]),
@@ -400,6 +441,33 @@ tripsRouter.delete(
       return res.status(200).json({ success: true, data: buildResourceDto(actor, 'TRIP', result, authorization) });
     } catch (error) {
       return sendTripMutationError(res, error, 'delete itinerary item');
+    }
+  },
+);
+
+tripsRouter.get(
+  '/:tripId/itinerary-days',
+  requireRole(['Founder', 'Admin', 'Accounts', 'Sales Manager', 'Sales Executive', 'Reservations', 'Operations']),
+  async (req: Request, res: Response) => {
+    try {
+      const principal = req.user!; const tripId = req.params.tripId;
+      let trip: Record<string, any> | undefined; let days: ItineraryDay[] = [];
+      if (APP_CONFIG.DEMO_MODE) {
+        trip = DEMO_TRIPS.find(candidate => candidate.id === tripId) as unknown as Record<string, any> | undefined;
+        days = DEMO_ITINERARIES.filter(day => day.tripId === tripId);
+      } else {
+        const db = getAdminDb(); const tripSnapshot = await db.collection('trips').doc(tripId).get();
+        if (tripSnapshot.exists) trip = { ...tripSnapshot.data(), id: tripSnapshot.id };
+        if (trip) {
+          const snapshot = await db.collection('itinerary_days').where('tripId', '==', tripId).orderBy('dayNumber', 'asc').limit(60).get();
+          days = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as ItineraryDay));
+        }
+      }
+      if (!trip) return res.status(404).json({ error: 'Trip not found', code: 'TRIP_NOT_FOUND' });
+      const authorization = assertAuthorizedResource(principal, 'TRIP', 'READ_DETAIL', tripResourceContext(trip));
+      return res.json({ success: true, data: buildResourceDto(principal, 'TRIP', { days }, authorization) });
+    } catch (error) {
+      return sendTripMutationError(res, error, 'read Trip itinerary');
     }
   },
 );

@@ -165,16 +165,11 @@ service cloud.firestore {
 
     // 11. Accommodation Inventory & Rate Management
     match /accommodation_properties/{propertyId} {
-      allow read: if isAuthenticated();
-      // Only Admin and Operations can manage base accommodation details
-      allow create, update: if isAdmin() || isOperations();
-      allow delete: if isAdmin();
+      allow read, create, update, delete: if false;
     }
 
     match /room_categories/{categoryId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAdmin() || isOperations();
-      allow delete: if isAdmin();
+      allow read, create, update, delete: if false;
     }
 
     match /property_photos/{photoId} {
@@ -184,11 +179,7 @@ service cloud.firestore {
 
     // Rate Management — STRICLTY GATED
     match /rate_periods/{rateId} {
-      // Readable by Reservations, Accounts, and Leadership (not Operations)
-      allow read: if isReservations() || isAccounts();
-      // Reservations overrides remain deferred until Stage C DTO/audit policy.
-      allow create, update: if isAdmin();
-      allow delete: if isAdmin();
+      allow read, create, update, delete: if false;
     }
 
     match /rate_supplements/{supplementId} {
@@ -215,9 +206,7 @@ service cloud.firestore {
     // =========================================================================
 
     match /vehicle_categories/{docId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAdmin() || isOperations();
-      allow delete: if isAdmin();
+      allow read, create, update, delete: if false;
     }
 
     match /destinations/{docId} {
@@ -233,15 +222,12 @@ service cloud.firestore {
     }
 
     match /transport_rate_periods/{docId} {
-      allow read: if isReservations() || isAccounts();
-      allow create, update: if isAdmin();
-      allow delete: if isAdmin();
+      allow read, create, update, delete: if false;
     }
 
     match /transport_supplements/{docId} {
       allow read: if isReservations() || isAccounts();
-      allow create, update: if isAdmin();
-      allow delete: if isAdmin();
+      allow create, update, delete: if false;
     }
 
     match /negotiated_transport_rates/{docId} {
@@ -251,15 +237,11 @@ service cloud.firestore {
     }
 
     match /activity_masters/{docId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAdmin() || isOperations();
-      allow delete: if isAdmin();
+      allow read, create, update, delete: if false;
     }
 
     match /activity_rate_periods/{docId} {
-      allow read: if isReservations() || isAccounts();
-      allow create, update: if isAdmin();
-      allow delete: if isAdmin();
+      allow read, create, update, delete: if false;
     }
 
     match /negotiated_activity_rates/{docId} {
@@ -425,9 +407,8 @@ service cloud.firestore {
 
     // 12. Suppliers & Vouchers
     match /suppliers/{supplierId} {
-      allow read: if isOperations() || isAccounts();
-      allow create, update: if isOperations();
-      allow delete: if isAdmin();
+      // UX1 supplier identity and inventory linkage are server-authoritative.
+      allow read, create, update, delete: if false;
     }
 
     match /vouchers/{voucherId} {
@@ -504,10 +485,9 @@ service cloud.firestore {
     }
 
     match /approvals/{approvalId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update: if isSalesManager() || isAccounts();
-      allow delete: if false;
+      // Unified approval listing/decisions are mediated by authenticated APIs.
+      // This legacy collection is not an authoritative approval workflow.
+      allow read, create, update, delete: if false;
     }
 
     // Default: Deny all unauthenticated or unlisted collection access

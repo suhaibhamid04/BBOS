@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useData } from '../../context/DataContext';
-import { Trip, ItineraryDay, Hotel, Transport, Activity, ItineraryItem, HotelRoom, Customer } from '../../types';
+import { ActivityItineraryMetadata, AccommodationItineraryMetadata, Trip, ItineraryDay, ItineraryItem, TransportItineraryMetadata } from '../../types';
 import {
   Plane,
   Calendar,
@@ -52,7 +52,10 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
     updateItineraryDay,
     deleteItineraryDay,
     addItineraryItem,
+    updateItineraryItem,
     deleteItineraryItem,
+    loadTripItinerary,
+    recalculateTripCost,
     createQuote
   } = useData();
   const { currentUser, availableUsers } = useAuth();
@@ -69,6 +72,8 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
   const [showTransportModal, setShowTransportModal] = useState(false);
   const [showActivityModal, setShowActivityModal] = useState(false);
   const [showCustomModal, setShowCustomModal] = useState(false);
+  const [editingItem, setEditingItem] = useState<ItineraryItem | null>(null);
+  const [isCalculatingCosts, setIsCalculatingCosts] = useState(false);
 
   // Form state for New / Edit Trip
   const [tripForm, setTripForm] = useState({
@@ -119,6 +124,10 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
       setSelectedTripId(initialTripId);
     }
   }, [initialTripId]);
+
+  useEffect(() => {
+    if (selectedTripId) void loadTripItinerary(selectedTripId).catch(error => notify(error.message || 'Unable to load the saved itinerary.'));
+  }, [selectedTripId]);
 
   // Automatically pre-fill from Lead if initialLeadId is provided.
   // Include `leads` in the dependency array so this re-fires once the leads
@@ -439,57 +448,68 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
   };
 
   // Add Hotel Handler (from HotelInventoryPicker)
-  const handleAddHotel = async (metadata: any) => {
+  const handleAddHotel = async (metadata: AccommodationItineraryMetadata) => {
     if (!activeDay) return;
-
-    const title = `${metadata.propertyName} - ${metadata.roomCategoryName}`;
-    const desc = `${metadata.mealPlan} • ${metadata.nights} Nights (${metadata.adults}A, ${metadata.children}C) • ${metadata.taxDescription}`;
-
-    await addItineraryItem(activeDay.id, {
+    const wasEditing = Boolean(editingItem);
+    const payload = {
       type: 'HOTEL',
-      title,
-      description: desc,
+      title: `${metadata.propertyName} — ${metadata.roomCategoryName} — ${metadata.mealPlan}`,
+      description: `${metadata.nights} night${metadata.nights === 1 ? '' : 's'} · ${metadata.rooms} room${metadata.rooms === 1 ? '' : 's'}`,
       referenceId: metadata.propertyId,
-      supplierCost: undefined, // Authoritative cost calculated securely by backend
-      sellingPrice: undefined, // Deferred to package price
+      inventoryId: metadata.propertyId,
       metadata
-    });
-
+    } as Omit<ItineraryItem, 'id' | 'dayId' | 'tripId' | 'supplierCost'>;
+    if (editingItem) await updateItineraryItem(activeDay.id, editingItem.id, payload);
+    else await addItineraryItem(activeDay.id, payload);
+    setEditingItem(null);
     setShowHotelModal(false);
-    notify(`Added ${metadata.propertyName} to Day ${activeDay.dayNumber}!`);
+    notify(`${wasEditing ? 'Updated' : 'Added'} ${metadata.propertyName}. Costing is pending recalculation.`);
   };
 
   // Add Transport Handler
-  const handleAddTransport = (metadata: any) => {
+  const handleAddTransport = async (metadata: TransportItineraryMetadata) => {
     if (!activeDay) return;
-    
-    // Add item with metadata only, let the server calculate costs when quote is generated
-    addItineraryItem(activeDay.id, {
+    const wasEditing = Boolean(editingItem);
+    const payload = {
       type: 'TRANSPORT',
-      title: `Transport: ${metadata.vehicleName}`,
+      title: `${metadata.vehicleName} — ${metadata.supplierName || 'Contracted supplier'} — ${metadata.pricingUnit}`,
       description: metadata.routeName,
+      referenceId: metadata.vehicleCategoryId,
       inventoryId: metadata.vehicleCategoryId,
-      transportMetadata: metadata,
-      sellingPrice: 0 // Prices calculated on server
-    });
-    
+      metadata
+    } as Omit<ItineraryItem, 'id' | 'dayId' | 'tripId' | 'supplierCost'>;
+    if (editingItem) await updateItineraryItem(activeDay.id, editingItem.id, payload);
+    else await addItineraryItem(activeDay.id, payload);
+    setEditingItem(null);
     setShowTransportModal(false);
+    notify(`${wasEditing ? 'Updated' : 'Added'} ${metadata.vehicleName}. Costing is pending recalculation.`);
   };
 
   // Add Activity Handler
-  const handleAddActivity = (metadata: any) => {
+  const handleAddActivity = async (metadata: ActivityItineraryMetadata) => {
     if (!activeDay) return;
-    
-    addItineraryItem(activeDay.id, {
+    const wasEditing = Boolean(editingItem);
+    const payload = {
       type: 'ACTIVITY',
-      title: `Activity: ${metadata.activityName}`,
-      description: `Model: ${metadata.pricingModel}`,
+      title: `${metadata.activityName}${metadata.duration ? ` — ${metadata.duration}` : ''}`,
+      description: `${metadata.pricingModel} · ${metadata.supplierName || 'Contracted provider'}`,
+      referenceId: metadata.activityId,
       inventoryId: metadata.activityId,
-      activityMetadata: metadata,
-      sellingPrice: 0 // Prices calculated on server
-    });
-    
+      metadata
+    } as Omit<ItineraryItem, 'id' | 'dayId' | 'tripId' | 'supplierCost'>;
+    if (editingItem) await updateItineraryItem(activeDay.id, editingItem.id, payload);
+    else await addItineraryItem(activeDay.id, payload);
+    setEditingItem(null);
     setShowActivityModal(false);
+    notify(`${wasEditing ? 'Updated' : 'Added'} ${metadata.activityName}. Costing is pending recalculation.`);
+  };
+
+  const handleCalculateCosts = async () => {
+    if (!activeTrip) return;
+    setIsCalculatingCosts(true);
+    try { await recalculateTripCost(activeTrip.id); notify('Authoritative inventory costing completed.'); }
+    catch (error: any) { notify(error.message || 'Unable to calculate Trip costs.'); }
+    finally { setIsCalculatingCosts(false); }
   };
 
   // Add Custom / Sightseeing Item Handler
@@ -708,6 +728,14 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
           </div>
 
           <div className="text-right">
+            <div className="flex items-center justify-end gap-2 mb-1">
+              <span data-testid="trip-costing-status" className={`text-[10px] font-bold px-2 py-1 rounded ${activeTrip.costingStatus === 'CALCULATED' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-800'}`}>
+                {activeTrip.costingStatus || 'PENDING'}
+              </span>
+              <button data-testid="calculate-trip-costs" type="button" disabled={isCalculatingCosts} onClick={() => void handleCalculateCosts()} className="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold disabled:opacity-50">
+                {isCalculatingCosts ? 'Calculating…' : 'Calculate costs'}
+              </button>
+            </div>
             <span className="text-[11px] font-medium text-slate-500">
               Budget Target: <strong>₹{activeTrip.budget?.toLocaleString('en-IN') || 'Flexible'}</strong>
             </span>
@@ -829,7 +857,9 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
                       <Bed className="w-4 h-4 text-emerald-600" /> Accommodation / Stays
                     </h4>
                     <button
+                      data-testid="add-trip-hotel"
                       onClick={() => {
+                        setEditingItem(null);
                         setSelectedHotelId(hotels[0]?.id || '');
                         setShowHotelModal(true);
                       }}
@@ -849,11 +879,14 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
                           </div>
                           <div className="flex items-center gap-4">
                             <div className="text-right">
-                              <p className="text-xs font-bold text-slate-900">₹{item.sellingPrice?.toLocaleString('en-IN')}</p>
+                              <p className="text-xs font-bold text-slate-500">{item.metadata?.rateId ? 'Inventory linked' : 'Legacy item'}</p>
                               {canSeeSupplierCosts && (
                                 <p className="text-[10px] text-slate-400">Cost: ₹{item.supplierCost?.toLocaleString('en-IN')}</p>
                               )}
                             </div>
+                            {item.metadata?.inventoryType === 'ACCOMMODATION' && (
+                              <button data-testid={`edit-trip-item-${item.id}`} onClick={() => { setEditingItem(item); setShowHotelModal(true); }} className="p-1.5 text-slate-400 hover:text-[#7056EE] rounded-lg hover:bg-purple-50"><Edit2 className="w-4 h-4" /></button>
+                            )}
                             <button
                               onClick={() => deleteItineraryItem(activeDay.id, item.id)}
                               className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors"
@@ -878,7 +911,9 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
                       <Car className="w-4 h-4 text-amber-500" /> Transportation & Logistics
                     </h4>
                     <button
+                      data-testid="add-trip-transport"
                       onClick={() => {
+                        setEditingItem(null);
                         setSelectedTransportId(transports[0]?.id || '');
                         setShowTransportModal(true);
                       }}
@@ -898,11 +933,14 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
                           </div>
                           <div className="flex items-center gap-4">
                             <div className="text-right">
-                              <p className="text-xs font-bold text-slate-900">₹{item.sellingPrice?.toLocaleString('en-IN')}</p>
+                              <p className="text-xs font-bold text-slate-500">{item.metadata?.rateId ? 'Inventory linked' : 'Legacy item'}</p>
                               {canSeeSupplierCosts && (
                                 <p className="text-[10px] text-slate-400">Cost: ₹{item.supplierCost?.toLocaleString('en-IN')}</p>
                               )}
                             </div>
+                            {item.metadata?.inventoryType === 'TRANSPORT' && (
+                              <button data-testid={`edit-trip-item-${item.id}`} onClick={() => { setEditingItem(item); setShowTransportModal(true); }} className="p-1.5 text-slate-400 hover:text-[#7056EE] rounded-lg hover:bg-purple-50"><Edit2 className="w-4 h-4" /></button>
+                            )}
                             <button
                               onClick={() => deleteItineraryItem(activeDay.id, item.id)}
                               className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors"
@@ -928,7 +966,9 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
                     </h4>
                     <div className="flex items-center gap-2">
                       <button
+                        data-testid="add-trip-activity"
                         onClick={() => {
+                          setEditingItem(null);
                           setSelectedActivityId(activities[0]?.id || '');
                           setShowActivityModal(true);
                         }}
@@ -961,11 +1001,14 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
                           </div>
                           <div className="flex items-center gap-4">
                             <div className="text-right">
-                              <p className="text-xs font-bold text-slate-900">₹{item.sellingPrice?.toLocaleString('en-IN')}</p>
+                              <p className="text-xs font-bold text-slate-500">{item.metadata?.rateId ? 'Inventory linked' : item.sellingPrice !== undefined ? `₹${item.sellingPrice.toLocaleString('en-IN')}` : 'Legacy item'}</p>
                               {canSeeSupplierCosts && item.supplierCost ? (
                                 <p className="text-[10px] text-slate-400">Cost: ₹{item.supplierCost?.toLocaleString('en-IN')}</p>
                               ) : null}
                             </div>
+                            {item.type === 'ACTIVITY' && item.metadata?.inventoryType === 'ACTIVITY' && (
+                              <button data-testid={`edit-trip-item-${item.id}`} onClick={() => { setEditingItem(item); setShowActivityModal(true); }} className="p-1.5 text-slate-400 hover:text-[#7056EE] rounded-lg hover:bg-purple-50"><Edit2 className="w-4 h-4" /></button>
+                            )}
                             <button
                               onClick={() => deleteItineraryItem(activeDay.id, item.id)}
                               className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors"
@@ -1010,8 +1053,9 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
                   childrenCount={activeTrip?.children || 0}
                   childrenWithBed={0} // Can be enhanced later to pick exact child ages
                   childrenWithoutBed={activeTrip?.children || 0}
+                  initialMetadata={editingItem?.type === 'HOTEL' && editingItem.metadata?.inventoryType === 'ACCOMMODATION' ? editingItem.metadata as AccommodationItineraryMetadata : undefined}
                   onConfirm={handleAddHotel}
-                  onCancel={() => setShowHotelModal(false)}
+                  onCancel={() => { setEditingItem(null); setShowHotelModal(false); }}
                 />
              </div>
           </div>
@@ -1023,8 +1067,9 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
             <div className="animate-in fade-in zoom-in duration-150 w-full max-w-2xl">
               <TransportInventoryPicker
                 startDate={activeDay?.date || new Date().toISOString().split('T')[0]}
+                initialMetadata={editingItem?.type === 'TRANSPORT' && editingItem.metadata?.inventoryType === 'TRANSPORT' ? editingItem.metadata as TransportItineraryMetadata : undefined}
                 onConfirm={handleAddTransport}
-                onCancel={() => setShowTransportModal(false)}
+                onCancel={() => { setEditingItem(null); setShowTransportModal(false); }}
               />
             </div>
           </div>
@@ -1038,8 +1083,9 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
                 date={activeDay?.date || new Date().toISOString().split('T')[0]}
                 defaultAdults={activeTrip?.adults || 2}
                 defaultChildren={activeTrip?.children || 0}
+                initialMetadata={editingItem?.type === 'ACTIVITY' && editingItem.metadata?.inventoryType === 'ACTIVITY' ? editingItem.metadata as ActivityItineraryMetadata : undefined}
                 onConfirm={handleAddActivity}
-                onCancel={() => setShowActivityModal(false)}
+                onCancel={() => { setEditingItem(null); setShowActivityModal(false); }}
               />
             </div>
           </div>

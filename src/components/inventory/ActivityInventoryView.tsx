@@ -1,60 +1,74 @@
-import React, { useState } from 'react';
-import { useData } from '../../context/DataContext';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Edit2, Loader2, Plus, RefreshCw, Sparkles } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { Sparkles, ActivitySquare, CalendarDays } from 'lucide-react';
-import { ActivityMasterManager } from './ActivityMasterManager';
-import { ActivityRateManager } from './ActivityRateManager';
+import { inventoryApi } from '../../services/inventory/inventoryApi';
+import type { Supplier } from '../../types';
+import type { ActivityMaster, ActivityRatePeriod } from '../../types/activity';
 
-type TabKey = 'masters' | 'rates';
+type Tab = 'activities' | 'providers' | 'rates';
+type Modal = { type: 'activity'; value?: ActivityMaster } | { type: 'provider'; value?: Supplier } | { type: 'rate'; value?: ActivityRatePeriod } | null;
+const inputClass = 'w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-[#7056EE] focus:outline-none';
+const labelClass = 'space-y-1 text-xs font-bold text-slate-600';
+
+function Dialog({ title, children, close }: { title: string; children: React.ReactNode; close: () => void }) {
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4"><div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl"><div className="mb-5 flex items-center justify-between"><h3 className="text-lg font-bold text-slate-900">{title}</h3><button type="button" onClick={close} className="text-sm font-bold text-slate-500">Cancel</button></div>{children}</div></div>;
+}
 
 export const ActivityInventoryView: React.FC = () => {
-  const { permissions } = useAuth();
-  const [activeTab, setActiveTab] = useState<TabKey>('masters');
+  const { currentUser } = useAuth();
+  const canManage = ['Founder', 'Admin'].includes(currentUser.role);
+  const canReadRates = ['Founder', 'Admin', 'Accounts', 'Reservations'].includes(currentUser.role);
+  const [tab, setTab] = useState<Tab>('activities');
+  const [activities, setActivities] = useState<ActivityMaster[]>([]);
+  const [providers, setProviders] = useState<Supplier[]>([]);
+  const [rates, setRates] = useState<ActivityRatePeriod[]>([]);
+  const [modal, setModal] = useState<Modal>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
 
-  const tabs: { key: TabKey; label: string; icon: any; show: boolean }[] = [
-    { key: 'masters', label: 'Activity Masters', icon: ActivitySquare, show: true },
-    { key: 'rates', label: 'Activity Rates', icon: CalendarDays, show: permissions.canViewSupplierRates },
-  ];
+  const load = useCallback(async () => {
+    setLoading(true); setError('');
+    try {
+      const [nextActivities, nextProviders, nextRates] = await Promise.all([
+        inventoryApi.activities(currentUser.employeeId),
+        canReadRates ? inventoryApi.activityProviders(currentUser.employeeId) : Promise.resolve([]),
+        canReadRates ? inventoryApi.activityRates(currentUser.employeeId) : Promise.resolve([]),
+      ]);
+      setActivities(nextActivities); setProviders(nextProviders); setRates(nextRates);
+    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Unable to load activity inventory.'); }
+    finally { setLoading(false); }
+  }, [canReadRates, currentUser.employeeId]);
+  useEffect(() => { void load(); }, [load]);
+  const act = async (task: () => Promise<unknown>) => { setSaving(true); setError(''); try { await task(); setModal(null); await load(); } catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Unable to save inventory.'); } finally { setSaving(false); } };
 
-  return (
-    <div className="flex flex-col h-full bg-slate-50">
-      <div className="px-6 py-5 border-b border-slate-200 bg-white sticky top-0 z-10">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2 tracking-tight">
-              <Sparkles className="w-6 h-6 text-[#7056EE]" />
-              Activity Inventory
-            </h1>
-            <p className="text-slate-500 text-sm mt-1">Manage activities, excursions, and flexible pricing models.</p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-6 mt-6">
-          {tabs.filter(t => t.show).map(tab => {
-            const Icon = tab.icon;
-            const isActive = activeTab === tab.key;
-            return (
-              <button
-                key={tab.key}
-                onClick={() => setActiveTab(tab.key)}
-                className={`flex items-center gap-2 pb-3 px-1 text-sm font-bold border-b-2 transition-colors ${
-                  isActive 
-                    ? 'border-[#7056EE] text-[#7056EE]' 
-                    : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
-                }`}
-              >
-                <Icon className="w-4 h-4" />
-                {tab.label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="flex-1 overflow-auto p-6">
-        {activeTab === 'masters' && <ActivityMasterManager />}
-        {activeTab === 'rates' && <ActivityRateManager />}
-      </div>
-    </div>
-  );
+  return <div className="flex h-full flex-col bg-slate-50"><header className="border-b border-slate-200 bg-white px-6 py-5"><div className="flex items-center justify-between"><div><h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900"><Sparkles className="text-[#7056EE]"/>Activity Inventory</h1><p className="mt-1 text-sm text-slate-500">Authoritative activity, provider and contracted-rate records.</p></div><button type="button" aria-label="Refresh" onClick={() => void load()} className="rounded-lg border border-slate-200 p-2 text-slate-500"><RefreshCw className="h-4 w-4"/></button></div><nav className="mt-6 flex gap-6">{(['activities', ...(canReadRates ? ['providers', 'rates'] : [])] as Tab[]).map((key) => <button type="button" key={key} data-testid={`activity-tab-${key}`} onClick={() => setTab(key)} className={`border-b-2 pb-3 text-sm font-bold capitalize ${tab === key ? 'border-[#7056EE] text-[#7056EE]' : 'border-transparent text-slate-500'}`}>{key}</button>)}</nav></header>
+    <main className="flex-1 overflow-auto p-6">{error && <p className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}{loading ? <Loader2 className="mx-auto mt-16 animate-spin text-[#7056EE]"/> : <>
+      {tab === 'activities' && <Section title="Activity masters" addLabel="Add activity" testId="add-activity" canAdd={canManage} add={() => setModal({ type: 'activity' })}>{activities.map((item) => <Card key={item.id} title={item.name} subtitle={`${item.category.replaceAll('_', ' ')} · ${item.destinationId} · ${item.duration || 'Duration not set'}`} active={item.active} edit={canManage ? () => setModal({ type: 'activity', value: item }) : undefined}/>)}</Section>}
+      {tab === 'providers' && canReadRates && <Section title="Activity providers" addLabel="Add provider" testId="add-activity-provider" canAdd={canManage} add={() => setModal({ type: 'provider' })}>{providers.map((item) => <Card key={item.id} title={item.name} subtitle={`${item.contactPerson || 'No contact'} · ${item.city || 'No city'}`} active={item.active} edit={canManage ? () => setModal({ type: 'provider', value: item }) : undefined}/>)}</Section>}
+      {tab === 'rates' && canReadRates && <Section title="Contracted rates" addLabel="Add rate" testId="add-activity-rate" canAdd={canManage} add={() => setModal({ type: 'rate' })}>{rates.map((item) => <Card key={item.id} title={`${activities.find((v) => v.id === item.activityId)?.name || item.activityId} · ${item.pricingModel.replaceAll('_', ' ')}`} subtitle={`${Object.entries(item.pricingComponents).map(([key, amount]) => `${key}: ₹${amount.toLocaleString()}`).join(' · ')} · ${item.validFrom} to ${item.validTo || 'open ended'}`} active={item.status === 'ACTIVE'} editTestId={`edit-activity-rate-${item.id}`} edit={canManage ? () => setModal({ type: 'rate', value: item }) : undefined}/>)}</Section>}
+    </>}</main>
+    {modal?.type === 'activity' && <ActivityForm value={modal.value} providers={providers.filter((s) => s.active)} saving={saving} close={() => setModal(null)} submit={(payload) => act(() => modal.value ? inventoryApi.updateActivity(modal.value.id, payload, currentUser.employeeId) : inventoryApi.createActivity(payload, currentUser.employeeId))}/>}
+    {modal?.type === 'provider' && <ProviderForm value={modal.value} saving={saving} close={() => setModal(null)} submit={(payload) => act(() => modal.value ? inventoryApi.updateActivityProvider(modal.value.id, payload, currentUser.employeeId) : inventoryApi.createActivityProvider(payload, currentUser.employeeId))}/>}
+    {modal?.type === 'rate' && <RateForm value={modal.value} activities={activities.filter((v) => v.active)} providers={providers.filter((s) => s.active)} saving={saving} close={() => setModal(null)} submit={(payload) => act(() => modal.value ? inventoryApi.updateActivityRate(modal.value.id, payload, currentUser.employeeId) : inventoryApi.createActivityRate(payload, currentUser.employeeId))}/>}
+  </div>;
 };
+
+function Section({ title, addLabel, testId, canAdd, add, children }: { title: string; addLabel: string; testId: string; canAdd: boolean; add: () => void; children: React.ReactNode }) { return <section><div className="mb-4 flex items-center justify-between"><h2 className="text-lg font-bold text-slate-900">{title}</h2>{canAdd && <button type="button" data-testid={testId} onClick={add} className="flex items-center gap-2 rounded-lg bg-[#7056EE] px-4 py-2 text-sm font-bold text-white"><Plus className="h-4 w-4"/>{addLabel}</button>}</div><div className="grid gap-3">{children}</div></section>; }
+function Card({ title, subtitle, active, edit, editTestId }: { key?: React.Key; title: string; subtitle: string; active: boolean; edit?: () => void; editTestId?: string }) { return <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-4"><div><div className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-[#7056EE]"/><strong className="text-sm text-slate-900">{title}</strong><span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{active ? 'ACTIVE' : 'INACTIVE'}</span></div><p className="mt-1 text-xs text-slate-500">{subtitle}</p></div>{edit && <button data-testid={editTestId} type="button" onClick={edit} aria-label={`Edit ${title}`} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><Edit2 className="h-4 w-4"/></button>}</div>; }
+
+function ActivityForm({ value, providers, saving, close, submit }: { value?: ActivityMaster; providers: Supplier[]; saving: boolean; close: () => void; submit: (value: Partial<ActivityMaster>) => void }) {
+  const [form, setForm] = useState({ name: value?.name || '', category: value?.category || 'SIGHTSEEING', destinationId: value?.destinationId || '', supplierId: value?.supplierId || providers[0]?.id || '', description: value?.description || '', customerDescription: value?.customerDescription || '', duration: value?.duration || '', active: value?.active ?? true });
+  return <Dialog title={value ? 'Edit activity' : 'Add activity'} close={close}><form onSubmit={(event) => { event.preventDefault(); submit(form); }} className="grid grid-cols-2 gap-4"><label className={`${labelClass} col-span-2`}>Name<input data-testid="activity-name" required className={inputClass} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}/></label><label className={labelClass}>Category<select className={inputClass} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value as ActivityMaster['category'] })}>{['SIGHTSEEING','GUIDED_TOUR','EXCURSION','ADVENTURE','GONDOLA_CABLE_CAR','PONY_RIDE','RAFTING','SKIING','ATV','LOCAL_EXPERIENCE','ENTRY_TICKET','GUIDE_SERVICE','PERMIT','CUSTOM'].map((v) => <option key={v}>{v}</option>)}</select></label><label className={labelClass}>Destination identifier<input required className={inputClass} value={form.destinationId} onChange={(e) => setForm({ ...form, destinationId: e.target.value })}/></label><label className={`${labelClass} col-span-2`}>Provider<select required className={inputClass} value={form.supplierId} onChange={(e) => setForm({ ...form, supplierId: e.target.value })}><option value="">Select</option>{providers.map((p) => <option value={p.id} key={p.id}>{p.name}</option>)}</select></label><label className={`${labelClass} col-span-2`}>Internal description<textarea required className={inputClass} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}/></label><label className={`${labelClass} col-span-2`}>Customer description<textarea className={inputClass} value={form.customerDescription} onChange={(e) => setForm({ ...form, customerDescription: e.target.value })}/></label><label className={`${labelClass} col-span-2`}>Duration<input className={inputClass} value={form.duration} onChange={(e) => setForm({ ...form, duration: e.target.value })}/></label>{value && <label className="col-span-2 flex gap-2 text-sm"><input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })}/>Active</label>}<button data-testid="save-activity" disabled={saving} className="col-span-2 rounded-lg bg-[#7056EE] py-2.5 text-sm font-bold text-white">Save activity</button></form></Dialog>;
+}
+
+function ProviderForm({ value, saving, close, submit }: { value?: Supplier; saving: boolean; close: () => void; submit: (value: Partial<Supplier>) => void }) {
+  const [form, setForm] = useState({ name: value?.name || '', contactPerson: value?.contactPerson || '', phone: value?.phone || '', email: value?.email || '', city: value?.city || '', paymentTerms: value?.paymentTerms || '', active: value?.active ?? true });
+  return <Dialog title={value ? 'Edit activity provider' : 'Add activity provider'} close={close}><form onSubmit={(event) => { event.preventDefault(); submit(form); }} className="grid grid-cols-2 gap-4"><label className={`${labelClass} col-span-2`}>Provider name<input data-testid="activity-provider-name" required className={inputClass} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}/></label>{(['contactPerson','phone','email','city','paymentTerms'] as const).map((key) => <label key={key} className={key === 'paymentTerms' ? `${labelClass} col-span-2` : labelClass}>{key.replace(/([A-Z])/g, ' $1')}<input className={inputClass} type={key === 'email' ? 'email' : 'text'} value={form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.value })}/></label>)}{value && <label className="col-span-2 flex gap-2 text-sm"><input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })}/>Active</label>}<button data-testid="save-activity-provider" disabled={saving} className="col-span-2 rounded-lg bg-[#7056EE] py-2.5 text-sm font-bold text-white">Save provider</button></form></Dialog>;
+}
+
+function RateForm({ value, activities, providers, saving, close, submit }: { value?: ActivityRatePeriod; activities: ActivityMaster[]; providers: Supplier[]; saving: boolean; close: () => void; submit: (value: Partial<ActivityRatePeriod>) => void }) {
+  const firstComponent = value ? Object.entries(value.pricingComponents)[0] : undefined;
+  const [form, setForm] = useState({ activityId: value?.activityId || activities[0]?.id || '', supplierId: value?.supplierId || providers[0]?.id || '', pricingModel: value?.pricingModel || 'PER_PERSON', component: firstComponent?.[0] || 'adult', amount: firstComponent?.[1] || 0, validFrom: value?.validFrom || '', validTo: value?.validTo || '', status: value?.status || 'ACTIVE' });
+  return <Dialog title={value ? 'Edit activity rate' : 'Add activity rate'} close={close}><form onSubmit={(event) => { event.preventDefault(); const payload: Partial<ActivityRatePeriod> = { supplierId: form.supplierId, pricingModel: form.pricingModel, pricingComponents: { [form.component]: form.amount }, validFrom: form.validFrom, validTo: form.validTo || null, status: form.status }; if (!value) payload.activityId = form.activityId; submit(payload); }} className="grid grid-cols-2 gap-4"><label className={`${labelClass} col-span-2`}>Activity<select data-testid="activity-rate-activity" disabled={!!value} required className={inputClass} value={form.activityId} onChange={(e) => setForm({ ...form, activityId: e.target.value })}><option value="">Select</option>{activities.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label><label className={`${labelClass} col-span-2`}>Provider<select data-testid="activity-rate-provider" required className={inputClass} value={form.supplierId} onChange={(e) => setForm({ ...form, supplierId: e.target.value })}><option value="">Select</option>{providers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label className={`${labelClass} col-span-2`}>Pricing model<select className={inputClass} value={form.pricingModel} onChange={(e) => setForm({ ...form, pricingModel: e.target.value as ActivityRatePeriod['pricingModel'] })}>{['PER_PERSON','PER_ADULT_CHILD','PER_COUPLE','PER_GROUP','PER_VEHICLE','PER_SESSION','PER_TICKET','PER_HOUR','PER_DAY','FIXED','CUSTOM'].map((v) => <option key={v}>{v}</option>)}</select></label><label className={labelClass}>Price component<input required className={inputClass} value={form.component} onChange={(e) => setForm({ ...form, component: e.target.value })}/></label><label className={labelClass}>Amount<input data-testid="activity-rate-amount" required min="0" type="number" className={inputClass} value={form.amount} onChange={(e) => setForm({ ...form, amount: Number(e.target.value) })}/></label><label className={labelClass}>Valid from<input required type="date" className={inputClass} value={form.validFrom} onChange={(e) => setForm({ ...form, validFrom: e.target.value })}/></label><label className={labelClass}>Valid to<input type="date" className={inputClass} value={form.validTo} onChange={(e) => setForm({ ...form, validTo: e.target.value })}/></label>{value && <label className={`${labelClass} col-span-2`}>Status<select className={inputClass} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as 'ACTIVE' | 'ARCHIVED' })}><option>ACTIVE</option><option>ARCHIVED</option></select></label>}<button data-testid="save-activity-rate" disabled={saving} className="col-span-2 rounded-lg bg-[#7056EE] py-2.5 text-sm font-bold text-white">Save rate</button></form></Dialog>;
+}

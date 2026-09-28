@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { Building2, AlertTriangle, ShieldAlert } from 'lucide-react';
-import { MealPlanType } from '../../types';
+import { AccommodationItineraryMetadata, MealPlanType } from '../../types';
+import { authenticatedMutationHeaders } from '../../services/auth/authenticatedApi';
 
 interface HotelInventoryPickerProps {
   checkInDate: string;
@@ -11,21 +12,8 @@ interface HotelInventoryPickerProps {
   childrenCount: number;
   childrenWithBed: number;
   childrenWithoutBed: number;
-  onConfirm: (metadata: {
-    propertyId: string;
-    propertyName: string;
-    roomCategoryId: string;
-    roomCategoryName: string;
-    mealPlan: MealPlanType;
-    checkInDate: string;
-    nights: number;
-    adults: number;
-    children: number;
-    childrenWithBed: number;
-    childrenWithoutBed: number;
-    needsConfirmation: boolean;
-    taxDescription: string;
-  }) => void;
+  initialMetadata?: AccommodationItineraryMetadata;
+  onConfirm: (metadata: AccommodationItineraryMetadata) => void;
   onCancel: () => void;
 }
 
@@ -36,6 +24,7 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
   childrenCount, 
   childrenWithBed, 
   childrenWithoutBed, 
+  initialMetadata,
   onConfirm,
   onCancel
 }) => {
@@ -43,9 +32,10 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
   const { currentUser } = useAuth();
   
   const [destinationFilter, setDestinationFilter] = useState<string>('');
-  const [selectedPropertyId, setSelectedPropertyId] = useState<string>('');
-  const [selectedRoomId, setSelectedRoomId] = useState<string>('');
-  const [selectedMealPlan, setSelectedMealPlan] = useState<MealPlanType>('MAP');
+  const [selectedPropertyId, setSelectedPropertyId] = useState<string>(initialMetadata?.propertyId || '');
+  const [selectedRoomId, setSelectedRoomId] = useState<string>(initialMetadata?.roomCategoryId || '');
+  const [selectedMealPlan, setSelectedMealPlan] = useState<MealPlanType>(initialMetadata?.mealPlan || 'MAP');
+  const [roomCount, setRoomCount] = useState(initialMetadata?.rooms || 1);
   
   const [isCalculating, setIsCalculating] = useState(false);
   const [calculatedRate, setCalculatedRate] = useState<any>(null);
@@ -76,12 +66,12 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
   }, [activeProperties, selectedPropertyId]);
 
   useEffect(() => {
-    if (availableRooms.length > 0) {
+    if (availableRooms.length > 0 && !availableRooms.some(room => room.id === selectedRoomId)) {
       setSelectedRoomId(availableRooms[0].id);
-    } else {
+    } else if (availableRooms.length === 0) {
       setSelectedRoomId('');
     }
-  }, [selectedPropertyId, availableRooms]);
+  }, [availableRooms, selectedRoomId]);
 
   const calculateRate = useCallback(async () => {
     if (!selectedPropertyId || !selectedRoomId || !checkInDate || nights < 1) return;
@@ -92,10 +82,7 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
     try {
       const res = await fetch('/api/accommodation/calculate-rate', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Demo-User-Id': currentUser.id
-        },
+        headers: await authenticatedMutationHeaders(currentUser.employeeId),
         body: JSON.stringify({
           propertyId: selectedPropertyId,
           roomCategoryId: selectedRoomId,
@@ -115,13 +102,13 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
         throw new Error(data.error || 'Failed to calculate rate');
       }
       
-      setCalculatedRate(data);
+      setCalculatedRate(data.data);
     } catch (err: any) {
       setError(err.message);
     } finally {
       setIsCalculating(false);
     }
-  }, [selectedPropertyId, selectedRoomId, selectedMealPlan, checkInDate, nights, adults, childrenCount, childrenWithBed, childrenWithoutBed, currentUser.id]);
+  }, [selectedPropertyId, selectedRoomId, selectedMealPlan, checkInDate, nights, adults, childrenCount, childrenWithBed, childrenWithoutBed, currentUser.employeeId]);
 
   useEffect(() => {
     if (selectedPropertyId && selectedRoomId) {
@@ -130,16 +117,24 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
   }, [calculateRate]);
 
   const handleSelect = () => {
-    if (!calculatedRate || !calculatedRate.available || !selectedPropertyId || !selectedRoomId) return;
+    if (!calculatedRate?.available || !calculatedRate.rateId || !selectedPropertyId || !selectedRoomId) return;
+    const checkOut = new Date(`${checkInDate}T00:00:00Z`);
+    checkOut.setUTCDate(checkOut.getUTCDate() + nights);
     
     onConfirm({
+      inventoryType: 'ACCOMMODATION',
       propertyId: selectedPropertyId,
       propertyName: calculatedRate.propertyName || 'Unknown Property',
       roomCategoryId: selectedRoomId,
       roomCategoryName: calculatedRate.roomCategoryName || 'Unknown Room',
+      rateId: calculatedRate.rateId,
+      supplierId: calculatedRate.supplierId,
+      supplierName: calculatedRate.supplierName,
       mealPlan: selectedMealPlan,
       checkInDate,
+      checkOutDate: checkOut.toISOString().slice(0, 10),
       nights,
+      rooms: roomCount,
       adults,
       children: childrenCount,
       childrenWithBed,
@@ -151,7 +146,7 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
 
   if (activeProperties.length === 0) {
     return (
-      <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm max-w-2xl mx-auto">
+      <div data-testid="hotel-inventory-picker" className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm max-w-2xl mx-auto">
         <div className="flex justify-between items-center mb-4">
           <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
             <Building2 className="w-4 h-4 text-[#7056EE]" />
@@ -171,7 +166,7 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
   }
 
   return (
-    <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm max-w-2xl mx-auto">
+    <div data-testid="hotel-inventory-picker" className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm max-w-2xl mx-auto">
       <div className="flex justify-between items-center mb-4">
         <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
           <Building2 className="w-4 h-4 text-[#7056EE]" />
@@ -202,6 +197,7 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">Select Property</label>
             <select
+              data-testid="trip-hotel-property"
               value={selectedPropertyId}
               onChange={(e) => setSelectedPropertyId(e.target.value)}
               className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-[#7056EE]"
@@ -218,6 +214,7 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">Room Category</label>
             <select
+              data-testid="trip-hotel-room"
               value={selectedRoomId}
               onChange={(e) => setSelectedRoomId(e.target.value)}
               className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-[#7056EE]"
@@ -231,6 +228,7 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">Meal Plan</label>
             <select
+              data-testid="trip-hotel-meal-plan"
               value={selectedMealPlan}
               onChange={(e) => setSelectedMealPlan(e.target.value as MealPlanType)}
               className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-[#7056EE]"
@@ -241,6 +239,11 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
               <option value="AP">AP (Full Board)</option>
             </select>
           </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-slate-700 mb-1">Rooms</label>
+          <input data-testid="trip-hotel-rooms" type="number" min="1" value={roomCount} onChange={(event) => setRoomCount(Math.max(1, Number(event.target.value) || 1))} className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg" />
         </div>
 
         {/* Occupancy Info (Read-only as it's passed from Trip) */}
@@ -303,7 +306,9 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
                       <span className={`text-base font-black ${
                         calculatedRate.needsConfirmation ? 'text-amber-800' : 'text-emerald-800'
                       }`}>
-                        ₹{(calculatedRate.totalAmount ?? calculatedRate.sellingPrice ?? 0).toLocaleString('en-IN')}
+                        {calculatedRate.totalSupplierCost === undefined
+                          ? 'Authoritative rate found'
+                          : `₹${calculatedRate.totalSupplierCost.toLocaleString('en-IN')}`}
                       </span>
                     </div>
                     {calculatedRate.breakdown && (
@@ -313,6 +318,7 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
                   </div>
 
                   <button
+                    data-testid="confirm-trip-hotel"
                     type="button"
                     onClick={handleSelect}
                     className="w-full mt-4 py-2.5 bg-[#7056EE] hover:bg-[#5e43dc] text-white font-bold rounded-lg transition-colors text-sm shadow-sm"

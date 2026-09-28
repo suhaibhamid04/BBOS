@@ -13,7 +13,7 @@ import {
   type LiveOperationsActor,
 } from './liveOperationsService.js';
 
-interface ApprovalInboxSources {
+export interface ApprovalInboxSources {
   bookings: Booking[];
   emergencySpends: EmergencySpendRequest[];
   supplierRateDiscrepancies: BookingAccommodation[];
@@ -108,7 +108,7 @@ export class ApprovalInboxService {
         requiredApproverRoles: ['Founder', 'Admin', 'Accounts'],
         sourceVersion: spend.updatedAt,
         actionable: canDecide,
-        route: { section: 'operations-dashboard', entityId: booking.id },
+        route: { section: 'bookings', entityId: booking.id },
         context: {
           ...(booking.customerName ? { customerName: booking.customerName } : {}),
           reason: spend.reason,
@@ -171,7 +171,7 @@ export class ApprovalInboxService {
         requiredApproverRoles: ['Founder', 'Admin'],
         sourceVersion: change.updatedAt,
         actionable: false,
-        route: { section: 'operations-dashboard', entityId: booking.id },
+        route: { section: 'bookings', entityId: booking.id },
         context: {
           ...(booking.customerName ? { customerName: booking.customerName } : {}),
           ...(change.linkedService ? {

@@ -3,14 +3,14 @@ import { APP_CONFIG } from '../config';
 import {
   CustomerRepo, CompanyRepo, LeadRepo, ConversationRepo, MessageRepo,
   TaskRepo, PackageRepo, AuditLogRepo, AiRecommendationRepo,
-  AiActionRepo, ApprovalRepo, ItineraryDayRepo, HotelRepo, HotelRoomRepo,
+  AiActionRepo, ItineraryDayRepo, HotelRepo, HotelRoomRepo,
   HotelBookingRepo, TransportRepo, DriverRepo, ActivityRepo, ActivityBookingRepo,
-  SupplierRepo, VoucherRepo,
-  AccommodationPropertyRepo, RoomCategoryRepo, RatePeriodRepo, NegotiatedRateRepo,
+  VoucherRepo,
+  NegotiatedRateRepo,
   PropertyPhotoRepo, RateHistoryRepo,
-  VehicleCategoryRepo, DestinationRepo, TransportRouteRepo, TransportRatePeriodRepo,
-  TransportSupplementRepo, ActivityMasterRepo, ActivityRatePeriodRepo
+  DestinationRepo, TransportRouteRepo
 } from '../services/db/repositories';
+import { inventoryApi } from '../services/inventory/inventoryApi';
 import {
   Lead,
   Customer,
@@ -270,7 +270,10 @@ interface DataContextType {
   updateItineraryDay: (id: string, updates: Partial<ItineraryDay>) => Promise<void>;
   deleteItineraryDay: (id: string) => Promise<void>;
   addItineraryItem: (dayId: string, item: Omit<ItineraryItem, 'id' | 'dayId'>) => Promise<ItineraryItem>;
+  updateItineraryItem: (dayId: string, itemId: string, item: Omit<ItineraryItem, 'id' | 'dayId' | 'tripId' | 'supplierCost'>) => Promise<ItineraryItem>;
   deleteItineraryItem: (dayId: string, itemId: string) => Promise<void>;
+  loadTripItinerary: (tripId: string) => Promise<void>;
+  recalculateTripCost: (tripId: string) => Promise<void>;
 
   // Lead actions
   createLead: (lead: Omit<Lead, 'id' | 'createdAt' | 'updatedAt'>) => Promise<Lead>;
@@ -576,22 +579,26 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         ] = await Promise.all([
           LeadRepo.getAll(), CustomerRepo.getAll(), CompanyRepo.getAll(), TaskRepo.getAll(),
           ConversationRepo.getAll(), MessageRepo.getAll(), canReadQuotes ? fetchApi('/api/quotes') : Promise.resolve([]), fetchApi('/api/bookings'),
-          AiRecommendationRepo.getAll(), AiActionRepo.getAll(), ApprovalRepo.getAll(), AuditLogRepo.getAll(),
+          AiRecommendationRepo.getAll(), AiActionRepo.getAll(), Promise.resolve([]), AuditLogRepo.getAll(),
           PackageRepo.getAll(),
           fetchApi('/api/trips'), 
           canReadInventory ? HotelRepo.getAll() : Promise.resolve([]), 
           canReadInventory ? TransportRepo.getAll() : Promise.resolve([]), 
           DriverRepo.getAll(), 
           canReadInventory ? ActivityRepo.getAll() : Promise.resolve([]), 
-          SupplierRepo.getAll(), VoucherRepo.getAll(),
-          AccommodationPropertyRepo.getAll(), RoomCategoryRepo.getAll(), 
-          canReadRates ? RatePeriodRepo.getAll() : Promise.resolve([]), 
+          canReadRates ? Promise.all([
+            fetchApi('/api/accommodation/suppliers'),
+            fetchApi('/api/transport/suppliers'),
+            fetchApi('/api/activities/providers')
+          ]).then((groups) => groups.flat()) : Promise.resolve([]), VoucherRepo.getAll(),
+          fetchApi('/api/accommodation/properties'), fetchApi('/api/accommodation/rooms'),
+          canReadRates ? fetchApi('/api/accommodation/rates') : Promise.resolve([]),
           canReadRates ? NegotiatedRateRepo.getAll() : Promise.resolve([]),
-          VehicleCategoryRepo.getAll(), DestinationRepo.getAll(), TransportRouteRepo.getAll(), 
-          canReadRates ? TransportRatePeriodRepo.getAll() : Promise.resolve([]), 
-          canReadRates ? TransportSupplementRepo.getAll() : Promise.resolve([]),
-          ActivityMasterRepo.getAll(), 
-          canReadRates ? ActivityRatePeriodRepo.getAll() : Promise.resolve([])
+          fetchApi('/api/transport/vehicle-categories'), DestinationRepo.getAll(), TransportRouteRepo.getAll(),
+          canReadRates ? fetchApi('/api/transport/rates') : Promise.resolve([]),
+          Promise.resolve([]),
+          fetchApi('/api/activities/masters'),
+          canReadRates ? fetchApi('/api/activities/rates') : Promise.resolve([])
         ]);
         
         setLeads(fetchedLeads as any);
@@ -817,109 +824,76 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Accommodation CRUD
   const addAccommodationProperty = async (propertyData: Omit<AccommodationProperty, 'id' | 'createdAt' | 'updatedAt'>): Promise<AccommodationProperty> => {
-    try {
-      const res = await fetch('/api/accommodation/properties', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Demo-User-Id': currentUser.id
-        },
-        body: JSON.stringify(propertyData)
-      });
-      if (!res.ok) throw new Error('Failed to create property');
-      const { data: newProperty } = await res.json();
-      setAccommodationProperties(prev => [newProperty, ...prev]);
-      return newProperty;
-    } catch (err) {
-      console.error('API create property failed:', err);
-      throw err;
-    }
+    const newProperty = await inventoryApi.createProperty(propertyData, currentUser.employeeId);
+    setAccommodationProperties(prev => [newProperty, ...prev]);
+    return newProperty;
   };
 
   const updateAccommodationProperty = async (id: string, updates: Partial<AccommodationProperty>) => {
     const prevProp = accommodationProperties.find(p => p.id === id);
     if (!prevProp) return;
 
-    try {
-      const res = await fetch(`/api/accommodation/properties/${id}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Demo-User-Id': currentUser.id
-        },
-        body: JSON.stringify(updates)
-      });
-      if (res.ok) {
-        const { data: updated } = await res.json();
-        setAccommodationProperties(prev => prev.map(p => (p.id === id ? updated : p)));
-      } else {
-        console.error('Failed to update property via API');
-      }
-    } catch (err) {
-      console.error('API update property failed:', err);
-    }
+    const updated = await inventoryApi.updateProperty(id, updates, currentUser.employeeId);
+    setAccommodationProperties(prev => prev.map(p => (p.id === id ? updated : p)));
   };
 
   // Phase 2B-4: Transport CRUD
   const addTransportRatePeriod = async (data: Omit<TransportRatePeriod, 'id' | 'createdAt' | 'updatedAt'>) => {
-    const newRate = { ...data, id: `trate-${Date.now()}`, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const newRate = await inventoryApi.createTransportRate(data, currentUser.employeeId);
     setTransportRatePeriods(prev => [newRate, ...prev]);
-    if (db) await setDoc(doc(db, 'transport_rate_periods', newRate.id), newRate).catch(console.warn);
     return newRate;
   };
   const updateTransportRatePeriod = async (id: string, updates: Partial<TransportRatePeriod>) => {
-    setTransportRatePeriods(prev => prev.map(r => r.id === id ? { ...r, ...updates, updatedAt: new Date().toISOString() } : r));
-    if (db) await setDoc(doc(db, 'transport_rate_periods', id), { ...updates, updatedAt: new Date().toISOString() }, { merge: true }).catch(console.warn);
+    const updated = await inventoryApi.updateTransportRate(id, updates, currentUser.employeeId);
+    setTransportRatePeriods(prev => prev.map(r => r.id === id ? updated : r));
   };
   const deleteTransportRatePeriod = async (id: string) => {
-    setTransportRatePeriods(prev => prev.filter(r => r.id !== id));
-    if (db) await deleteDoc(doc(db, 'transport_rate_periods', id)).catch(console.warn);
+    const updated = await inventoryApi.updateTransportRate(id, { status: 'ARCHIVED' }, currentUser.employeeId);
+    setTransportRatePeriods(prev => prev.map(r => r.id === id ? updated : r));
   };
 
   const addTransportSupplement = async (data: Omit<TransportSupplement, 'id' | 'createdAt' | 'updatedAt'>) => {
+    if (!APP_CONFIG.DEMO_MODE) throw new Error('Transport supplements require a server API before they can be changed in production.');
     const newSupp = { ...data, id: `tsupp-${Date.now()}`, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
     setTransportSupplements(prev => [newSupp, ...prev]);
-    if (db) await setDoc(doc(db, 'transport_supplements', newSupp.id), newSupp).catch(console.warn);
     return newSupp;
   };
   const updateTransportSupplement = async (id: string, updates: Partial<TransportSupplement>) => {
+    if (!APP_CONFIG.DEMO_MODE) throw new Error('Transport supplements require a server API before they can be changed in production.');
     setTransportSupplements(prev => prev.map(s => s.id === id ? { ...s, ...updates, updatedAt: new Date().toISOString() } : s));
-    if (db) await setDoc(doc(db, 'transport_supplements', id), { ...updates, updatedAt: new Date().toISOString() }, { merge: true }).catch(console.warn);
   };
   const deleteTransportSupplement = async (id: string) => {
+    if (!APP_CONFIG.DEMO_MODE) throw new Error('Transport supplements require a server API before they can be changed in production.');
     setTransportSupplements(prev => prev.filter(s => s.id !== id));
-    if (db) await deleteDoc(doc(db, 'transport_supplements', id)).catch(console.warn);
   };
 
   // Phase 2B-4: Activity CRUD
   const addActivityMaster = async (data: Omit<ActivityMaster, 'id' | 'createdAt' | 'updatedAt'>) => {
-    const newMaster = { ...data, id: `actm-${Date.now()}`, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const newMaster = await inventoryApi.createActivity(data, currentUser.employeeId);
     setActivityMasters(prev => [newMaster, ...prev]);
-    if (db) await setDoc(doc(db, 'activity_masters', newMaster.id), newMaster).catch(console.warn);
     return newMaster;
   };
   const updateActivityMaster = async (id: string, updates: Partial<ActivityMaster>) => {
-    setActivityMasters(prev => prev.map(m => m.id === id ? { ...m, ...updates, updatedAt: new Date().toISOString() } : m));
-    if (db) await setDoc(doc(db, 'activity_masters', id), { ...updates, updatedAt: new Date().toISOString() }, { merge: true }).catch(console.warn);
+    const updated = await inventoryApi.updateActivity(id, updates, currentUser.employeeId);
+    setActivityMasters(prev => prev.map(m => m.id === id ? updated : m));
   };
   const deleteActivityMaster = async (id: string) => {
-    setActivityMasters(prev => prev.filter(m => m.id !== id));
-    if (db) await deleteDoc(doc(db, 'activity_masters', id)).catch(console.warn);
+    const updated = await inventoryApi.updateActivity(id, { active: false }, currentUser.employeeId);
+    setActivityMasters(prev => prev.map(m => m.id === id ? updated : m));
   };
 
   const addActivityRatePeriod = async (data: Omit<ActivityRatePeriod, 'id' | 'createdAt' | 'updatedAt'>) => {
-    const newRate = { ...data, id: `actr-${Date.now()}`, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const newRate = await inventoryApi.createActivityRate(data, currentUser.employeeId);
     setActivityRatePeriods(prev => [newRate, ...prev]);
-    if (db) await setDoc(doc(db, 'activity_rate_periods', newRate.id), newRate).catch(console.warn);
     return newRate;
   };
   const updateActivityRatePeriod = async (id: string, updates: Partial<ActivityRatePeriod>) => {
-    setActivityRatePeriods(prev => prev.map(r => r.id === id ? { ...r, ...updates, updatedAt: new Date().toISOString() } : r));
-    if (db) await setDoc(doc(db, 'activity_rate_periods', id), { ...updates, updatedAt: new Date().toISOString() }, { merge: true }).catch(console.warn);
+    const updated = await inventoryApi.updateActivityRate(id, updates, currentUser.employeeId);
+    setActivityRatePeriods(prev => prev.map(r => r.id === id ? updated : r));
   };
   const deleteActivityRatePeriod = async (id: string) => {
-    setActivityRatePeriods(prev => prev.filter(r => r.id !== id));
-    if (db) await deleteDoc(doc(db, 'activity_rate_periods', id)).catch(console.warn);
+    const updated = await inventoryApi.updateActivityRate(id, { status: 'ARCHIVED' }, currentUser.employeeId);
+    setActivityRatePeriods(prev => prev.map(r => r.id === id ? updated : r));
   };
 
   // Customer CRUD
@@ -1157,9 +1131,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const recalculateTripCost = async (tripId: string) => {
-    try {
       const trip = trips.find(t => t.id === tripId);
-      if (!trip) return;
+      if (!trip) throw new Error('Trip not found.');
 
       const tripDaysLocal = itineraryDays.filter(d => d.tripId === tripId);
       const allItems = tripDaysLocal.flatMap(d => d.items || []);
@@ -1174,8 +1147,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         })
       });
 
-      const data = await response.json();
+      const data = await readApiResponse(response);
       if (data.success && data.data) {
+        const itemSupplierCosts = data.data.itemSupplierCosts || {};
+        setItineraryDays(prev => prev.map(day => day.tripId !== tripId ? day : {
+          ...day,
+          items: (day.items || []).map(item => itemSupplierCosts[item.id] === undefined ? item : { ...item, supplierCost: itemSupplierCosts[item.id] }),
+        }));
         setTrips(prev =>
           prev.map(t => (t.id === tripId ? { 
             ...t, 
@@ -1187,9 +1165,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           } : t))
         );
       }
-    } catch (err) {
-      console.error('Failed to recalculate trip cost:', err);
-    }
+  };
+
+  const loadTripItinerary = async (tripId: string) => {
+    if (APP_CONFIG.DEMO_MODE) return;
+    const response = await fetch(`/api/trips/${encodeURIComponent(tripId)}/itinerary-days`, { headers: await getAuthHeaders() });
+    const result = await readApiResponse(response);
+    const days = (result.data?.days || []) as ItineraryDay[];
+    setItineraryDays(prev => [...prev.filter(day => day.tripId !== tripId), ...days]);
   };
 
   const addItineraryDay = async (tripId: string, dayData?: Partial<ItineraryDay>): Promise<ItineraryDay> => {
@@ -1233,11 +1216,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const updatedTrip = result.data.trip as Trip;
       setItineraryDays(prev => [...prev, created]);
       setTrips(prev => prev.map(item => item.id === tripId ? updatedTrip : item));
-      setTimeout(() => { recalculateTripCost(tripId); }, 50);
       return created;
     }
 
     setItineraryDays(prev => [...prev, newDay]);
+    setTrips(prev => prev.map(item => item.id === tripId ? { ...item, costingStatus: 'PENDING', updatedAt: new Date().toISOString() } : item));
     logAuditEvent('itinerary.day.created', 'ITINERARY_DAY', newDay.id, null, newDay, `Added Day ${nextDayNumber} to trip ${trip?.title || tripId}`);
 
     if (db && APP_CONFIG.DEMO_MODE) {
@@ -1271,12 +1254,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const updatedTrip = result.data.trip as Trip;
       setItineraryDays(prev => prev.map(item => item.id === id ? updatedDay : item));
       setTrips(prev => prev.map(item => item.id === day.tripId ? updatedTrip : item));
-      setTimeout(() => { recalculateTripCost(day.tripId); }, 50);
       return;
     }
     setItineraryDays(prev =>
       prev.map(d => (d.id === id ? { ...d, ...updates } : d))
     );
+    setTrips(prev => prev.map(item => item.id === day.tripId ? { ...item, costingStatus: 'PENDING', updatedAt: new Date().toISOString() } : item));
     if (db && APP_CONFIG.DEMO_MODE) {
       try {
         await setDoc(doc(db, 'itinerary_days', id), { ...day, ...updates });
@@ -1285,8 +1268,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
     
-    // Ensure state is updated so recalculateTripCost sends the right items
-    setTimeout(() => { recalculateTripCost(day.tripId); }, 50);
   };
 
   const deleteItineraryDay = async (id: string) => {
@@ -1301,14 +1282,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const updatedTrip = result.data.trip as Trip;
       setItineraryDays(prev => prev.filter(item => item.id !== id));
       setTrips(prev => prev.map(item => item.id === day.tripId ? updatedTrip : item));
-      setTimeout(() => { recalculateTripCost(day.tripId); }, 50);
       return;
     }
     const remainingDays = itineraryDays.filter(d => d.id !== id);
     setItineraryDays(remainingDays);
 
-    // Recompute costing for trip via server
-    recalculateTripCost(day.tripId);
+    setTrips(prev => prev.map(item => item.id === day.tripId ? { ...item, costingStatus: 'PENDING', updatedAt: new Date().toISOString() } : item));
 
     if (db && APP_CONFIG.DEMO_MODE) {
       try {
@@ -1343,7 +1322,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const updatedTrip = result.data.trip as Trip;
       setItineraryDays(prev => prev.map(day => day.id === dayId ? updatedDay : day));
       setTrips(prev => prev.map(item => item.id === targetDay.tripId ? updatedTrip : item));
-      setTimeout(() => { recalculateTripCost(targetDay.tripId); }, 50);
       return createdItem;
     }
 
@@ -1351,11 +1329,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const updatedDays = itineraryDays.map(d => (d.id === dayId ? updatedDay : d));
 
     setItineraryDays(updatedDays);
-
-    // Ensure state is updated so recalculateTripCost sends the right items
-    setTimeout(() => {
-      recalculateTripCost(targetDay.tripId);
-    }, 50);
+    setTrips(prev => prev.map(item => item.id === targetDay.tripId ? { ...item, costingStatus: 'PENDING', updatedAt: new Date().toISOString() } : item));
 
     const actionName = itemData.type === 'HOTEL' ? 'hotel.added_to_trip' :
                        itemData.type === 'TRANSPORT' ? 'transport.added_to_trip' :
@@ -1374,6 +1348,27 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return newItem;
   };
 
+  const updateItineraryItem = async (dayId: string, itemId: string, itemData: Omit<ItineraryItem, 'id' | 'dayId' | 'tripId' | 'supplierCost'>): Promise<ItineraryItem> => {
+    const targetDay = itineraryDays.find(day => day.id === dayId);
+    const existing = targetDay?.items?.find(item => item.id === itemId);
+    if (!targetDay || !existing) throw new Error('Itinerary item not found.');
+    if (!APP_CONFIG.DEMO_MODE) {
+      const response = await fetch(`/api/trips/itinerary-days/${encodeURIComponent(dayId)}/items/${encodeURIComponent(itemId)}`, {
+        method: 'PATCH', headers: await getAuthHeaders(), body: JSON.stringify(itemData),
+      });
+      const result = await readApiResponse(response);
+      setItineraryDays(prev => prev.map(day => day.id === dayId ? result.data.day as ItineraryDay : day));
+      setTrips(prev => prev.map(trip => trip.id === targetDay.tripId ? result.data.trip as Trip : trip));
+      return result.data.item as ItineraryItem;
+    }
+    const updatedItem = { ...itemData, id: itemId, dayId, tripId: targetDay.tripId } as ItineraryItem;
+    const updatedDay = { ...targetDay, items: targetDay.items.map(item => item.id === itemId ? updatedItem : item) };
+    setItineraryDays(prev => prev.map(day => day.id === dayId ? updatedDay : day));
+    setTrips(prev => prev.map(trip => trip.id === targetDay.tripId ? { ...trip, costingStatus: 'PENDING', updatedAt: new Date().toISOString() } : trip));
+    if (db) await setDoc(doc(db, 'itinerary_days', dayId), updatedDay).catch(console.warn);
+    return updatedItem;
+  };
+
   const deleteItineraryItem = async (dayId: string, itemId: string) => {
     const targetDay = itineraryDays.find(d => d.id === dayId);
     if (!targetDay) return;
@@ -1387,7 +1382,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const updatedTrip = result.data.trip as Trip;
       setItineraryDays(prev => prev.map(day => day.id === dayId ? updatedDay : day));
       setTrips(prev => prev.map(item => item.id === targetDay.tripId ? updatedTrip : item));
-      setTimeout(() => { recalculateTripCost(targetDay.tripId); }, 50);
       return;
     }
 
@@ -1395,11 +1389,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const updatedDays = itineraryDays.map(d => (d.id === dayId ? updatedDay : d));
 
     setItineraryDays(updatedDays);
-
-    // Ensure state is updated so recalculateTripCost sends the right items
-    setTimeout(() => {
-      recalculateTripCost(targetDay.tripId);
-    }, 50);
+    setTrips(prev => prev.map(item => item.id === targetDay.tripId ? { ...item, costingStatus: 'PENDING', updatedAt: new Date().toISOString() } : item));
 
     if (db && APP_CONFIG.DEMO_MODE) {
       try {
@@ -1599,6 +1589,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Approvals
   const approveAction = async (approvalId: string, feedback?: string) => {
+    if (!APP_CONFIG.DEMO_MODE) throw new Error('Production approvals must use the authoritative Needs Attention API.');
     const approval = approvals.find(a => a.id === approvalId);
     if (!approval) return;
 
@@ -1616,6 +1607,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const rejectAction = async (approvalId: string, feedback?: string) => {
+    if (!APP_CONFIG.DEMO_MODE) throw new Error('Production approvals must use the authoritative Needs Attention API.');
     const approval = approvals.find(a => a.id === approvalId);
     if (!approval) return;
 
@@ -1633,6 +1625,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const submitForApproval = async (itemData: Omit<ApprovalItem, 'id' | 'createdAt' | 'status'>): Promise<ApprovalItem> => {
+    if (!APP_CONFIG.DEMO_MODE) throw new Error('Production approval requests must be created by an authoritative domain workflow.');
     const newItem: ApprovalItem = {
       ...itemData,
       id: `appr-${Date.now()}`,
@@ -1868,7 +1861,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updateItineraryDay,
         deleteItineraryDay,
         addItineraryItem,
+        updateItineraryItem,
         deleteItineraryItem,
+        loadTripItinerary,
+        recalculateTripCost,
         createLead,
         updateLead,
         updateLeadStatus,

@@ -218,6 +218,50 @@
         { "fieldPath": "status", "order": "ASCENDING" },
         { "fieldPath": "requestedAt", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "rate_periods",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "propertyId", "order": "ASCENDING" },
+        { "fieldPath": "roomCategoryId", "order": "ASCENDING" },
+        { "fieldPath": "mealPlan", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "transport_rate_periods",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "vehicleCategoryId", "order": "ASCENDING" },
+        { "fieldPath": "supplierId", "order": "ASCENDING" },
+        { "fieldPath": "serviceType", "order": "ASCENDING" },
+        { "fieldPath": "pricingUnit", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "transport_rate_periods",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "vehicleCategoryId", "order": "ASCENDING" },
+        { "fieldPath": "serviceType", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "activity_rate_periods",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "activityId", "order": "ASCENDING" },
+        { "fieldPath": "supplierId", "order": "ASCENDING" },
+        { "fieldPath": "pricingModel", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "itinerary_days",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tripId", "order": "ASCENDING" },
+        { "fieldPath": "dayNumber", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

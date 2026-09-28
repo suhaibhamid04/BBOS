@@ -243,6 +243,9 @@ export interface RateCalculationResult {
   propertyName?: string;
   roomCategoryId?: string;
   roomCategoryName?: string;
+  rateId?: string;
+  supplierId?: string;
+  supplierName?: string;
   mealPlan?: MealPlanType;
   nights?: number;
   sellingPricePerNight?: never; // REMOVED: Business rules dictate no automatic markup. Selling price is a package concern.

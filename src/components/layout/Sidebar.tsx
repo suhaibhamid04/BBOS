@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { APP_CONFIG } from '../../config';
 import {
   LayoutDashboard,
@@ -35,6 +35,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { useData } from '../../context/DataContext';
 import { getRoleNavigationVisibility } from '../../services/navigationAccess';
+import { fetchApprovalInboxSummary } from '../../services/approvals/approvalInboxApi';
 
 export type NavSectionKey =
   | 'dashboard'
@@ -98,7 +99,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onClose
 }) => {
   const { currentUser, permissions } = useAuth();
-  const { tasks, approvals, leads } = useData();
+  const { tasks, leads } = useData();
+  const [pendingApprovalCount, setPendingApprovalCount] = useState<number | undefined>();
 
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({
     'COMMAND CENTER': true,
@@ -118,9 +120,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const pendingTasksCount = tasks.filter(t => t.status !== 'COMPLETED').length;
-  const pendingApprovalsCount = approvals.filter(a => a.status === 'PENDING').length;
   const hotLeadsCount = leads.filter(l => l.priority === 'HIGH' || l.priority === 'URGENT').length;
   const navigation = getRoleNavigationVisibility(permissions);
+  const canSeeApprovalInbox = currentUser.role !== 'Marketing';
+
+  useEffect(() => {
+    let active = true;
+    if (!canSeeApprovalInbox) {
+      setPendingApprovalCount(undefined);
+      return () => { active = false; };
+    }
+    void fetchApprovalInboxSummary(currentUser.employeeId)
+      .then((summary) => { if (active) setPendingApprovalCount(summary.pendingCount || undefined); })
+      .catch(() => { if (active) setPendingApprovalCount(undefined); });
+    return () => { active = false; };
+  }, [canSeeApprovalInbox, currentUser.employeeId]);
 
   const allNavGroups: NavGroup[] = [
     {
@@ -129,6 +143,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ...(permissions.canViewAllSales ? [{ key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard } as any] : []),
         ...(permissions.canAccessAiCommand ? [{ key: 'ai-command', label: 'AI Command Center', icon: Bot, badge: 'Live AI', badgeColor: 'bg-[#7056EE]/15 text-[#7056EE]' } as any] : []),
         { key: 'tasks', label: 'Tasks', icon: CheckSquare, badge: pendingTasksCount > 0 ? pendingTasksCount : undefined, badgeColor: 'bg-amber-100 text-amber-800' },
+        ...(canSeeApprovalInbox ? [{ key: 'approvals', label: 'Needs Attention', icon: ShieldAlert, badge: pendingApprovalCount, badgeColor: 'bg-rose-500 text-white font-bold' } as any] : []),
         { key: 'notifications', label: 'Notifications', icon: Bell },
       ]
     },
@@ -202,7 +217,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ...(permissions.canManageUsers ? [{ key: 'roles-permissions', label: 'Roles & Permissions', icon: ShieldCheck } as any] : []),
         ...(permissions.canManageSettings ? [{ key: 'ai-permissions', label: 'AI Permissions', icon: Cpu } as any] : []),
         ...(permissions.canManageSettings ? [{ key: 'integrations', label: 'Integrations', icon: Boxes } as any] : []),
-        ...(permissions.canApproveActions ? [{ key: 'approvals', label: 'Approval Center', icon: ShieldAlert, badge: pendingApprovalsCount > 0 ? pendingApprovalsCount : undefined, badgeColor: 'bg-rose-500 text-white font-bold' } as any] : []),
         ...(permissions.canViewAuditLogs ? [{ key: 'audit-logs', label: 'Audit Logs', icon: History } as any] : []),
         ...(permissions.canManageSettings ? [{ key: 'settings', label: 'Settings', icon: Settings } as any] : []),
       ]

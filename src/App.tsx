@@ -78,7 +78,7 @@ export function AppContent() {
       case 'trips-new':
         return <TripBuilderView initialLeadId={targetId} onNavigate={handleNavigate} />;
       case 'bookings':
-        return <BookingsView />;
+        return <BookingsView initialBookingId={targetId} />;
       case 'supplier-payables':
         return <SupplierPayablesView />;
       case 'marketing-strategy':
@@ -100,7 +100,7 @@ export function AppContent() {
       case 'ai-permissions':
         return <AiPermissionsView />;
       case 'approvals':
-        return <ApprovalsView />;
+        return <ApprovalsView onNavigate={handleNavigate} />;
       case 'audit-logs':
         return <AuditLogsView />;
       case 'tasks':

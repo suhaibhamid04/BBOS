@@ -3,12 +3,15 @@ import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { Compass, AlertTriangle, ShieldAlert } from 'lucide-react';
 import { ActivityPricingModel } from '../../types/activity';
+import { ActivityItineraryMetadata } from '../../types';
+import { authenticatedMutationHeaders } from '../../services/auth/authenticatedApi';
 
 interface ActivityInventoryPickerProps {
   date: string;
   defaultAdults: number;
   defaultChildren: number;
-  onConfirm: (metadata: any) => void;
+  initialMetadata?: ActivityItineraryMetadata;
+  onConfirm: (metadata: ActivityItineraryMetadata) => void;
   onCancel: () => void;
 }
 
@@ -16,25 +19,26 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
   date,
   defaultAdults,
   defaultChildren,
+  initialMetadata,
   onConfirm,
   onCancel
 }) => {
   const { activityMasters } = useData();
   const { currentUser } = useAuth();
   
-  const [selectedActivityId, setSelectedActivityId] = useState<string>('');
-  const [pricingModel, setPricingModel] = useState<ActivityPricingModel>('PER_PERSON');
+  const [selectedActivityId, setSelectedActivityId] = useState<string>(initialMetadata?.activityId || '');
+  const [pricingModel, setPricingModel] = useState<ActivityPricingModel>((initialMetadata?.pricingModel as ActivityPricingModel) || 'PER_PERSON');
   
   // Specific params based on pricing model
-  const [adults, setAdults] = useState(defaultAdults || 2);
-  const [children, setChildren] = useState(defaultChildren || 0);
-  const [infants, setInfants] = useState(0);
-  const [vehicles, setVehicles] = useState(1);
-  const [groups, setGroups] = useState(1);
-  const [tickets, setTickets] = useState(1);
-  const [hours, setHours] = useState(1);
-  const [days, setDays] = useState(1);
-  const [sessions, setSessions] = useState(1);
+  const [adults, setAdults] = useState(initialMetadata?.adults ?? defaultAdults ?? 2);
+  const [children, setChildren] = useState(initialMetadata?.children ?? defaultChildren ?? 0);
+  const [infants, setInfants] = useState(initialMetadata?.infants || 0);
+  const [vehicles, setVehicles] = useState(initialMetadata?.vehicles || 1);
+  const [groups, setGroups] = useState(initialMetadata?.groups || 1);
+  const [tickets, setTickets] = useState(initialMetadata?.tickets || 1);
+  const [hours, setHours] = useState(initialMetadata?.hours || 1);
+  const [days, setDays] = useState(initialMetadata?.days || 1);
+  const [sessions, setSessions] = useState(initialMetadata?.sessions || 1);
 
   const [isCalculating, setIsCalculating] = useState(false);
   const [calculatedRate, setCalculatedRate] = useState<any>(null);
@@ -61,10 +65,7 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
     try {
       const res = await fetch('/api/activities/calculate-rate', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Demo-User-Id': currentUser.id
-        },
+        headers: await authenticatedMutationHeaders(currentUser.employeeId),
         body: JSON.stringify({
           activityId: selectedActivityId,
           date,
@@ -95,7 +96,7 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
     } finally {
       setIsCalculating(false);
     }
-  }, [selectedActivityId, date, adults, children, infants, vehicles, groups, tickets, hours, days, sessions, currentUser.id]);
+  }, [selectedActivityId, date, adults, children, infants, vehicles, groups, tickets, hours, days, sessions, currentUser.employeeId]);
 
   useEffect(() => {
     if (selectedActivityId) {
@@ -104,15 +105,29 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
   }, [calculateRate]);
 
   const handleConfirm = () => {
-    if (!calculatedRate) return;
+    if (!calculatedRate?.available || !calculatedRate.rateId || !calculatedRate.supplierId) return;
 
     const activity = activityMasters.find(a => a.id === selectedActivityId);
 
     onConfirm({
+      inventoryType: 'ACTIVITY',
       activityId: selectedActivityId,
       activityName: activity?.name || 'Activity',
+      rateId: calculatedRate.rateId,
+      supplierId: calculatedRate.supplierId,
+      supplierName: calculatedRate.supplierName,
       pricingModel: calculatedRate.pricingModel,
       date,
+      adults,
+      children,
+      infants,
+      vehicles,
+      groups,
+      tickets,
+      hours,
+      days,
+      sessions,
+      duration: activity?.duration,
       needsConfirmation: calculatedRate.needsConfirmation,
       taxDescription: calculatedRate.taxDescription
     });
@@ -120,7 +135,7 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
 
   if (activeActivities.length === 0) {
     return (
-      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full overflow-hidden">
+      <div data-testid="activity-inventory-picker" className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full overflow-hidden">
         <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
           <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
             <Compass className="w-5 h-5 text-[#F0A608]" /> Add Activity
@@ -143,7 +158,7 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
   }
 
   return (
-    <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full overflow-hidden flex flex-col max-h-[90vh]">
+    <div data-testid="activity-inventory-picker" className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full overflow-hidden flex flex-col max-h-[90vh]">
       <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50 shrink-0">
         <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
           <Compass className="w-5 h-5 text-[#F0A608]" /> Add Activity
@@ -158,12 +173,13 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">Activity / Excursion</label>
             <select
+              data-testid="trip-activity-master"
               value={selectedActivityId}
               onChange={(e) => setSelectedActivityId(e.target.value)}
               className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#F0A608]/20 focus:border-[#F0A608]"
             >
               {activeActivities.map(a => (
-                <option key={a.id} value={a.id}>{a.name} ({a.destination})</option>
+                <option key={a.id} value={a.id}>{a.name} ({a.destinationId})</option>
               ))}
             </select>
           </div>
@@ -178,7 +194,7 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
             </h4>
             
             <div className="grid grid-cols-2 gap-4">
-              {(pricingModel === 'PER_PERSON' || pricingModel === 'PER_ADULT_CHILD' || pricingModel === 'TIERED_GROUP_SIZE') && (
+              {(pricingModel === 'PER_PERSON' || pricingModel === 'PER_ADULT_CHILD') && (
                 <>
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">Adults</label>
@@ -203,7 +219,7 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
                 </>
               )}
 
-              {(pricingModel === 'PER_VEHICLE' || pricingModel === 'PER_VEHICLE_TYPE') && (
+              {pricingModel === 'PER_VEHICLE' && (
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Number of Vehicles</label>
                   <input
@@ -229,7 +245,7 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
                 </div>
               )}
 
-              {(pricingModel === 'PER_HOUR' || pricingModel === 'PER_PERSON_PER_HOUR') && (
+              {pricingModel === 'PER_HOUR' && (
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Hours</label>
                   <input
@@ -271,8 +287,9 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
                     {calculatedRate.needsConfirmation ? 'Confirmation Required' : 'Available instantly'}
                   </h5>
                   <p className={`text-xs ${calculatedRate.needsConfirmation ? 'text-amber-700' : 'text-emerald-700'} mt-1`}>
-                    Selling Price: <span className="font-bold text-base">₹{calculatedRate.sellingPrice.toLocaleString('en-IN')}</span> 
+                    <span className="font-bold text-base">{calculatedRate.supplierCost === undefined ? 'Authoritative rate found' : `₹${calculatedRate.supplierCost.toLocaleString('en-IN')}`}</span>
                     <span className="text-[10px] ml-1 uppercase">{calculatedRate.taxDescription}</span>
+                    {calculatedRate.supplierName ? <span className="block mt-1">{calculatedRate.supplierName}</span> : null}
                   </p>
                 </div>
               </div>
@@ -303,6 +320,7 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
           Cancel
         </button>
         <button
+          data-testid="confirm-trip-activity"
           onClick={handleConfirm}
           disabled={!calculatedRate || !!error || isCalculating}
           className="px-6 py-2 text-sm font-bold text-white bg-[#F0A608] hover:bg-[#d69306] rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"

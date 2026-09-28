@@ -42,7 +42,7 @@ const SECTION_TITLES: Record<NavSectionKey, string> = {
   'roles-permissions': 'Role-Based Access Control Matrix',
   'ai-permissions': 'AI Access & Permissions',
   'integrations': 'App Integrations',
-  'approvals': 'Approval Center',
+  'approvals': 'Needs Attention',
   'audit-logs': 'System Audit Logs',
   'settings': 'System Settings',
   'accommodation': 'Accommodation Inventory',

@@ -540,6 +540,77 @@ export interface Trip {
 
 export type ItineraryItemType = 'HOTEL' | 'TRANSPORT' | 'ACTIVITY' | 'MEAL' | 'SIGHTSEEING' | 'TRANSFER' | 'FREE_TIME' | 'OTHER';
 
+export interface AccommodationItineraryMetadata {
+  inventoryType: 'ACCOMMODATION';
+  propertyId: string;
+  propertyName: string;
+  roomCategoryId: string;
+  roomCategoryName: string;
+  rateId: string;
+  supplierId?: string;
+  supplierName?: string;
+  mealPlan: 'EP' | 'CP' | 'MAP' | 'AP' | 'CUSTOM';
+  checkInDate: string;
+  checkOutDate: string;
+  nights: number;
+  rooms: number;
+  adults: number;
+  children: number;
+  childrenWithBed: number;
+  childrenWithoutBed: number;
+  needsConfirmation: boolean;
+  taxDescription: string;
+}
+
+export interface TransportItineraryMetadata {
+  inventoryType: 'TRANSPORT';
+  vehicleCategoryId: string;
+  vehicleName: string;
+  rateId: string;
+  supplierId: string;
+  supplierName?: string;
+  serviceType: string;
+  pricingUnit: string;
+  routeId?: string;
+  routeName: string;
+  startDate: string;
+  vehicleDays: number;
+  nightHalts: number;
+  occurrences: number;
+  distanceKm: number;
+  hours: number;
+  needsConfirmation: boolean;
+  taxDescription: string;
+}
+
+export interface ActivityItineraryMetadata {
+  inventoryType: 'ACTIVITY';
+  activityId: string;
+  activityName: string;
+  rateId: string;
+  supplierId: string;
+  supplierName?: string;
+  pricingModel: string;
+  date: string;
+  adults: number;
+  children: number;
+  infants: number;
+  vehicles: number;
+  groups: number;
+  tickets: number;
+  hours: number;
+  days: number;
+  sessions: number;
+  duration?: string;
+  needsConfirmation: boolean;
+  taxDescription: string;
+}
+
+export type InventoryItineraryMetadata =
+  | AccommodationItineraryMetadata
+  | TransportItineraryMetadata
+  | ActivityItineraryMetadata;
+
 export interface ItineraryItem {
   id: string;
   dayId: string;
@@ -550,6 +621,8 @@ export interface ItineraryItem {
   startTime?: string;
   endTime?: string;
   referenceId?: string;
+  /** Stable UX2 inventory master reference; legacy items may omit it. */
+  inventoryId?: string;
   supplierCost?: number;
   sellingPrice?: number;
   notes?: string;

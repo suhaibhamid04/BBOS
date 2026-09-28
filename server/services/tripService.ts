@@ -113,6 +113,106 @@ function validateDate(value: unknown, field: string): string {
   return date;
 }
 
+function dateIsWithin(date: string, validFrom: unknown, validTo: unknown): boolean {
+  const from = typeof validFrom === 'string' ? validFrom.slice(0, 10) : '';
+  const to = typeof validTo === 'string' && validTo ? validTo.slice(0, 10) : null;
+  return Boolean(from) && date >= from && (!to || date <= to);
+}
+
+async function resolveInventoryItem(tx: ConversionTransaction, input: UnknownRecord): Promise<UnknownRecord> {
+  if (!['HOTEL', 'TRANSPORT', 'ACTIVITY'].includes(String(input.type))) return input;
+  const metadata = input.metadata;
+  if (!isRecord(metadata)) {
+    throw new TripDomainError(422, 'INVENTORY_LINK_REQUIRED', `${input.type} itinerary items must reference authoritative inventory.`);
+  }
+
+  const rateId = nonEmptyString(metadata.rateId, 'metadata.rateId');
+  if (input.type === 'HOTEL') {
+    const propertyId = nonEmptyString(metadata.propertyId, 'metadata.propertyId');
+    const roomCategoryId = nonEmptyString(metadata.roomCategoryId, 'metadata.roomCategoryId');
+    const checkInDate = validateDate(metadata.checkInDate, 'metadata.checkInDate');
+    const nights = nonNegativeInteger(metadata.nights, 'metadata.nights');
+    const rooms = metadata.rooms === undefined ? 1 : nonNegativeInteger(metadata.rooms, 'metadata.rooms');
+    if (nights < 1 || rooms < 1) throw new TripDomainError(400, 'INVALID_ITINERARY_FIELD', 'Accommodation nights and rooms must be at least 1.');
+    const [property, room, rate] = await Promise.all([
+      tx.get('accommodation_properties', propertyId),
+      tx.get('room_categories', roomCategoryId),
+      tx.get('rate_periods', rateId),
+    ]);
+    if (!property || !room || !rate) throw new TripDomainError(422, 'INVENTORY_REFERENCE_NOT_FOUND', 'Selected accommodation inventory or rate no longer exists.');
+    if (property.status !== 'ACTIVE' || !room.active || rate.status !== 'ACTIVE') throw new TripDomainError(409, 'INVENTORY_INACTIVE', 'Only active accommodation inventory may be newly selected.');
+    if (room.propertyId !== propertyId || rate.propertyId !== propertyId || rate.roomCategoryId !== roomCategoryId || rate.mealPlan !== metadata.mealPlan || !dateIsWithin(checkInDate, rate.validFrom, rate.validTo)) {
+      throw new TripDomainError(422, 'INVENTORY_RATE_MISMATCH', 'The selected accommodation rate does not match the property, room, meal plan, or service date.');
+    }
+    const supplier = property.supplierId ? await tx.get('suppliers', property.supplierId) : null;
+    const checkOut = new Date(`${checkInDate}T00:00:00Z`); checkOut.setUTCDate(checkOut.getUTCDate() + nights);
+    return {
+      ...input,
+      referenceId: propertyId,
+      inventoryId: propertyId,
+      title: `${property.name} — ${room.name} — ${rate.mealPlan}`,
+      description: `${nights} night${nights === 1 ? '' : 's'} · ${rooms} room${rooms === 1 ? '' : 's'}`,
+      metadata: {
+        ...metadata, inventoryType: 'ACCOMMODATION', propertyId, propertyName: property.name,
+        roomCategoryId, roomCategoryName: room.name, rateId, supplierId: property.supplierId,
+        supplierName: supplier?.name, mealPlan: rate.mealPlan, checkInDate,
+        checkOutDate: checkOut.toISOString().slice(0, 10), nights, rooms,
+      },
+    };
+  }
+
+  if (input.type === 'TRANSPORT') {
+    const vehicleCategoryId = nonEmptyString(metadata.vehicleCategoryId, 'metadata.vehicleCategoryId');
+    const startDate = validateDate(metadata.startDate, 'metadata.startDate');
+    const serviceType = nonEmptyString(metadata.serviceType, 'metadata.serviceType');
+    const [vehicle, rate] = await Promise.all([
+      tx.get('vehicle_categories', vehicleCategoryId),
+      tx.get('transport_rate_periods', rateId),
+    ]);
+    if (!vehicle || !rate) throw new TripDomainError(422, 'INVENTORY_REFERENCE_NOT_FOUND', 'Selected transport inventory or rate no longer exists.');
+    if (!vehicle.active || rate.status !== 'ACTIVE') throw new TripDomainError(409, 'INVENTORY_INACTIVE', 'Only active transport inventory may be newly selected.');
+    if (rate.vehicleCategoryId !== vehicleCategoryId || rate.serviceType !== serviceType || !dateIsWithin(startDate, rate.validFrom, rate.validTo)) {
+      throw new TripDomainError(422, 'INVENTORY_RATE_MISMATCH', 'The selected transport rate does not match the vehicle, service type, or service date.');
+    }
+    const supplier = await tx.get('suppliers', rate.supplierId);
+    return {
+      ...input,
+      referenceId: vehicleCategoryId,
+      inventoryId: vehicleCategoryId,
+      title: `${vehicle.displayName || vehicle.name} — ${supplier?.name || 'Contracted supplier'} — ${rate.pricingUnit}`,
+      metadata: {
+        ...metadata, inventoryType: 'TRANSPORT', vehicleCategoryId,
+        vehicleName: vehicle.displayName || vehicle.name, rateId, supplierId: rate.supplierId,
+        supplierName: supplier?.name, serviceType, pricingUnit: rate.pricingUnit, startDate,
+      },
+    };
+  }
+
+  const activityId = nonEmptyString(metadata.activityId, 'metadata.activityId');
+  const date = validateDate(metadata.date, 'metadata.date');
+  const [activity, rate] = await Promise.all([
+    tx.get('activity_masters', activityId),
+    tx.get('activity_rate_periods', rateId),
+  ]);
+  if (!activity || !rate) throw new TripDomainError(422, 'INVENTORY_REFERENCE_NOT_FOUND', 'Selected activity inventory or rate no longer exists.');
+  if (!activity.active || rate.status !== 'ACTIVE') throw new TripDomainError(409, 'INVENTORY_INACTIVE', 'Only active activity inventory may be newly selected.');
+  if (rate.activityId !== activityId || !dateIsWithin(date, rate.validFrom, rate.validTo)) {
+    throw new TripDomainError(422, 'INVENTORY_RATE_MISMATCH', 'The selected activity rate does not match the activity or service date.');
+  }
+  const supplier = await tx.get('suppliers', rate.supplierId);
+  return {
+    ...input,
+    referenceId: activityId,
+    inventoryId: activityId,
+    title: `${activity.name}${activity.duration ? ` — ${activity.duration}` : ''}`,
+    metadata: {
+      ...metadata, inventoryType: 'ACTIVITY', activityId, activityName: activity.name,
+      rateId, supplierId: rate.supplierId, supplierName: supplier?.name,
+      pricingModel: rate.pricingModel, date, duration: activity.duration,
+    },
+  };
+}
+
 function validateTripFields(value: UnknownRecord): UnknownRecord {
   const adults = nonNegativeInteger(value.adults, 'adults');
   const children = nonNegativeInteger(value.children, 'children');
@@ -455,8 +555,9 @@ export class TripService {
       if (!storedDay) throw new TripDomainError(404, 'ITINERARY_DAY_NOT_FOUND', 'Itinerary day not found.');
       const trip = await this.loadAuthorizedCommercialTrip(tx, storedDay.tripId, actor);
       const now = new Date().toISOString();
+      const resolvedInput = await resolveInventoryItem(tx, input);
       const item: ItineraryItem = {
-        ...input,
+        ...resolvedInput,
         id: `item-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         dayId,
         tripId: storedDay.tripId,
@@ -466,6 +567,26 @@ export class TripService {
       tx.update('itinerary_days', dayId, day);
       tx.update('trips', trip.id, updatedTrip);
       const audit = auditEvent('ITINERARY_ITEM_CREATED', 'ITINERARY_ITEM', item.id, actor, null, item as UnknownRecord, now);
+      tx.set('audit_logs', audit.id, audit);
+      return { day, item, trip: updatedTrip as Trip };
+    });
+  }
+
+  async updateItineraryItem(dayId: string, itemId: string, rawInput: unknown, actor: TripMutationActor): Promise<{ day: ItineraryDay; item: ItineraryItem; trip: Trip }> {
+    nonEmptyString(dayId, 'dayId'); nonEmptyString(itemId, 'itemId');
+    const input = sanitizeItineraryItemInput(rawInput);
+    return this.storage.runTransaction(async tx => {
+      const storedDay = await tx.get('itinerary_days', dayId) as ItineraryDay | null;
+      if (!storedDay) throw new TripDomainError(404, 'ITINERARY_DAY_NOT_FOUND', 'Itinerary day not found.');
+      const existing = (storedDay.items || []).find(candidate => candidate.id === itemId);
+      if (!existing) throw new TripDomainError(404, 'ITINERARY_ITEM_NOT_FOUND', 'Itinerary item not found.');
+      const trip = await this.loadAuthorizedCommercialTrip(tx, storedDay.tripId, actor);
+      const resolvedInput = await resolveInventoryItem(tx, input);
+      const item = { ...resolvedInput, id: existing.id, dayId, tripId: storedDay.tripId } as ItineraryItem;
+      const day = { ...storedDay, items: (storedDay.items || []).map(candidate => candidate.id === itemId ? item : candidate) } as ItineraryDay;
+      const now = new Date().toISOString(); const updatedTrip = this.markCostingPending(trip, actor, now);
+      tx.update('itinerary_days', dayId, day); tx.update('trips', trip.id, updatedTrip);
+      const audit = auditEvent('ITINERARY_ITEM_UPDATED', 'ITINERARY_ITEM', itemId, actor, existing as UnknownRecord, item as UnknownRecord, now);
       tx.set('audit_logs', audit.id, audit);
       return { day, item, trip: updatedTrip as Trip };
     });
