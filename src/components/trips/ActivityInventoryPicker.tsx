@@ -23,7 +23,7 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
   onConfirm,
   onCancel
 }) => {
-  const { activityMasters } = useData();
+  const { activityMasters, dataLoadErrors, isLoading } = useData();
   const { currentUser } = useAuth();
   
   const [selectedActivityId, setSelectedActivityId] = useState<string>(initialMetadata?.activityId || '');
@@ -133,6 +133,20 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
     });
   };
 
+  if (isLoading && activityMasters.length === 0) {
+    return <div data-testid="activity-inventory-picker" className="bg-white border border-slate-200 rounded-xl p-6 text-sm text-slate-600">Loading activity inventory…</div>;
+  }
+
+  if (dataLoadErrors.activities) {
+    return (
+      <div data-testid="activity-inventory-picker" className="bg-white border border-rose-200 rounded-xl p-6">
+        <p className="text-sm font-bold text-rose-800">Activity inventory could not be loaded</p>
+        <p className="text-xs text-rose-700 mt-1">{dataLoadErrors.activities}</p>
+        <button onClick={onCancel} className="mt-4 text-xs font-bold text-slate-600">Cancel</button>
+      </div>
+    );
+  }
+
   if (activeActivities.length === 0) {
     return (
       <div data-testid="activity-inventory-picker" className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full overflow-hidden">
@@ -145,7 +159,7 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
           <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
             <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
             <div>
-              <p className="text-sm font-bold text-amber-800">No Active Activities Found</p>
+              <p className="text-sm font-bold text-amber-800">No activity inventory configured</p>
               <p className="text-xs text-amber-700 mt-1">Add active activity masters in the Inventory section before adding activities to a trip.</p>
             </div>
           </div>

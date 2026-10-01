@@ -87,6 +87,11 @@ export class InMemoryConversionStorageProvider implements ConversionStorageProvi
     return data ? JSON.parse(JSON.stringify(data)) : null;
   }
 
+  rawList(collection: string): any[] {
+    return Array.from(this.getCollection(collection).values())
+      .map(value => JSON.parse(JSON.stringify(value)));
+  }
+
   rawSet(collection: string, id: string, data: any): void {
     const col = this.getCollection(collection);
     col.set(id, JSON.parse(JSON.stringify(data)));

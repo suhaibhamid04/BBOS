@@ -7,6 +7,7 @@ import { bookingReadHeaders } from '../../services/auth/authenticatedApi';
 
 export const BookingsView: React.FC<{ initialBookingId?: string }> = ({ initialBookingId }) => {
   const { currentUser } = useAuth();
+  const isAdmin = currentUser.role === 'Admin' || currentUser.role === 'Founder';
   
   const [bookings, setBookings] = useState<BookingListItem[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -63,6 +64,13 @@ export const BookingsView: React.FC<{ initialBookingId?: string }> = ({ initialB
     loadBookings();
   }, [debouncedQuery, currentUser.id]);
 
+  const reservationsAssignmentRequired = isAdmin
+    ? bookings.filter(booking =>
+        ['PENDING_PAYMENT', 'CONFIRMED'].includes(booking.status) &&
+        !booking.assignedReservationsEmployeeId,
+      ).length
+    : 0;
+
   return (
     <div id="bookings-view" className="h-full flex gap-4">
       {/* List Pane */}
@@ -78,6 +86,11 @@ export const BookingsView: React.FC<{ initialBookingId?: string }> = ({ initialB
               )}
             </div>
             <p className="text-xs text-slate-500 mt-0.5">Central repository for operational bookings.</p>
+            {reservationsAssignmentRequired > 0 && (
+              <div data-testid="reservations-assignment-attention" className="mt-2 inline-flex rounded-full bg-amber-100 px-3 py-1 text-[11px] font-bold text-amber-800">
+                {reservationsAssignmentRequired} RESERVATIONS_ASSIGNMENT_REQUIRED
+              </div>
+            )}
           </div>
         </div>
 
@@ -115,6 +128,7 @@ export const BookingsView: React.FC<{ initialBookingId?: string }> = ({ initialB
                   {bookings.map((booking) => (
                     <tr 
                       key={booking.id} 
+                      data-testid={`booking-row-${booking.id}`}
                       className={`transition-colors cursor-pointer ${selectedBookingId === booking.id ? 'bg-[#7056EE]/5' : 'hover:bg-slate-50/80'}`}
                       onClick={() => setSelectedBookingId(booking.id)}
                     >
@@ -133,9 +147,15 @@ export const BookingsView: React.FC<{ initialBookingId?: string }> = ({ initialB
                         }`}>
                           {booking.status}
                         </span>
+                        {isAdmin && ['PENDING_PAYMENT', 'CONFIRMED'].includes(booking.status) && !booking.assignedReservationsEmployeeId && (
+                          <span className="ml-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-100 text-amber-800">
+                            Reservations required
+                          </span>
+                        )}
                       </td>
                       <td className="py-3 px-4 text-right">
                         <button 
+                          data-testid={`booking-view-${booking.id}`}
                           onClick={(e) => { e.stopPropagation(); setSelectedBookingId(booking.id); }}
                           className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-colors ${
                             selectedBookingId === booking.id 

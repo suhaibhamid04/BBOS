@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
 import { InMemoryConversionStorageProvider } from '../../src/services/conversion/conversionStorageProvider';
 import { QuoteService, type QuoteMutationActor } from '../../server/services/quoteService';
+import { QuoteConversionService } from '../../server/services/quoteConversionService';
+import { DefaultInventoryDataProvider } from '../../src/services/quoteValidation/inventoryProvider';
 import { authorizeResource } from '../../server/authorization/policyEngine';
 import { quoteResourceContext } from '../../server/authorization/resourceContext';
 import { buildQuoteConversionDto, buildQuoteDto } from '../../server/authorization/quoteDto';
@@ -71,6 +73,38 @@ describe('Stage D1 server-authoritative Quote mutations', () => {
       name: executive.name,
       salesTeamId: executive.salesTeamId,
     });
+    storage.rawSet('itinerary_days', 'day-trip-01', {
+      id: 'day-trip-01', tripId: 'trip-01', dayNumber: 1, date: '2026-10-15',
+      items: [{
+        id: 'trip-hotel-01', type: 'HOTEL', title: 'Hotel Kareem Residency', description: 'Primary stay',
+        metadata: {
+          inventoryType: 'ACCOMMODATION', propertyId: 'accom-sgr-kareemresidency',
+          propertyName: 'Hotel Kareem Residency', roomCategoryId: 'rc-accom-sgr-kareemresidency',
+          roomCategoryName: 'Deluxe Room', rateId: 'rp-accom-sgr-kareemresidency-oct',
+          mealPlan: 'MAP', checkInDate: '2026-10-15', checkOutDate: '2026-10-17',
+          nights: 2, rooms: 1, adults: 2, children: 0,
+        },
+      }, {
+        id: 'trip-transport-01', type: 'TRANSPORT', title: 'Innova Crysta AC', description: 'Airport and sightseeing',
+        metadata: {
+          inventoryType: 'TRANSPORT', vehicleCategoryId: 'vc_innova_crysta', vehicleName: 'Innova Crysta AC',
+          rateId: 'trp_innova_kashmir_season', serviceType: 'MULTI_DAY_JOURNEY', pricingUnit: 'PER_DAY',
+          routeName: 'Srinagar Airport Transfer', startDate: '2026-10-15', vehicleDays: 2,
+        },
+      }, {
+        id: 'trip-activity-01', type: 'ACTIVITY', title: 'Private Shikara Ride', description: 'Dal Lake experience',
+        metadata: {
+          inventoryType: 'ACTIVITY', activityId: 'act_shikara_ride', activityName: 'Private Shikara Ride on Dal Lake',
+          rateId: 'arp_shikara_standard', pricingModel: 'PER_PERSON', date: '2026-10-16', adults: 2, children: 0,
+        },
+      }],
+    });
+    storage.rawSet('accommodation_properties', 'backup-property', { id: 'backup-property', name: 'Backup Palace', status: 'ACTIVE' });
+    storage.rawSet('room_categories', 'backup-room', { id: 'backup-room', propertyId: 'backup-property', name: 'Lake Room', active: true });
+    storage.rawSet('rate_periods', 'backup-rate', {
+      id: 'backup-rate', propertyId: 'backup-property', roomCategoryId: 'backup-room', mealPlan: 'MAP',
+      validFrom: '2026-10-01', validTo: '2026-10-31', status: 'ACTIVE', baseRate: 4500,
+    });
     service = new QuoteService(storage);
   });
 
@@ -86,11 +120,58 @@ describe('Stage D1 server-authoritative Quote mutations', () => {
     expect(quote.grossProfit).toBe(55_000);
     expect(quote.grossMargin).toBe(57.9);
     expect(quote.supplierCostSource).toMatchObject({ type: 'TRIP', sourceId: 'trip-01' });
+    expect(quote.hotels?.[0]).toMatchObject({
+      sourceTripItemId: 'trip-hotel-01',
+      propertyId: 'accom-sgr-kareemresidency',
+      ratePeriodId: 'rp-accom-sgr-kareemresidency-oct',
+    });
     expect(storage.rawGet('quotes', quote.id)).toBeDefined();
 
     const audit = storage.getAllAuditLogs()[0];
     expect(audit.action).toBe('QUOTE_CREATED');
     expect(audit.actorId).toBe(executive.employeeId);
+  });
+
+  it('returns the existing Trip Quote when creation is retried', async () => {
+    const first = await service.createQuote(createInput(), executive);
+    const retried = await service.createQuote({ ...createInput(), totalAmount: 999_999 }, executive);
+
+    expect(retried.id).toBe(first.id);
+    expect(retried.totalAmount).toBe(first.totalAmount);
+    expect(storage.getAllAuditLogs().filter(log => log.action === 'QUOTE_CREATED')).toHaveLength(1);
+  });
+
+  it('derives all primary services, validates backups, versions revisions, and converts without financial leakage', async () => {
+    const options = await service.getBackupAccommodationOptions('trip-01', 'trip-hotel-01', executive);
+    expect(options).toHaveLength(1);
+    expect(options[0]).toMatchObject({ propertyId: 'backup-property', ratePeriodId: 'backup-rate' });
+
+    const quote = await service.createQuote({
+      ...createInput(),
+      hotels: [{ hotelName: 'Forged Hotel', roomType: 'Forged', mealPlan: 'EP', nights: 99 }],
+      transports: [{ vehicleType: 'Forged Vehicle', route: 'Forged', days: 99, rate: 1 }],
+      activities: [{ name: 'Forged Activity', pax: 99, rate: 1 }],
+      backupAccommodations: [{
+        sourceTripItemId: 'trip-hotel-01', propertyId: 'backup-property', roomCategoryId: 'backup-room',
+        ratePeriodId: 'backup-rate', mealPlan: 'MAP',
+      }],
+    }, executive);
+    expect(quote.hotels?.[0].hotelName).toBe('Hotel Kareem Residency');
+    expect(quote.transports?.[0].vehicleCategoryId).toBe('vc_innova_crysta');
+    expect(quote.activities?.[0].activityMasterId).toBe('act_shikara_ride');
+    expect(quote.backupAccommodations?.[0]).toMatchObject({ propertyName: 'Backup Palace', roomCategoryName: 'Lake Room' });
+
+    const revised = await service.updateQuote(quote.id, { totalAmount: 110_000, discountAmount: 5_000 }, executive);
+    expect(revised.version).toBe(2);
+    expect(revised.versionHistory?.[0].hotels?.[0].sourceTripItemId).toBe('trip-hotel-01');
+    const sent = await service.updateQuote(quote.id, { status: 'SENT' }, executive);
+    const conversion = await new QuoteConversionService(storage, new DefaultInventoryDataProvider())
+      .convertQuoteToBooking(sent.id, executive, { currentDate: '2026-09-29' });
+    expect(conversion.accommodations[0].sourceQuoteServiceId).toBe('trip-hotel-01');
+    expect(conversion.transports[0].sourceQuoteServiceId).toBe('trip-transport-01');
+    expect(conversion.activities[0].sourceQuoteServiceId).toBe('trip-activity-01');
+    expect((conversion.booking as any).totalSupplierCost).toBeUndefined();
+    expect((conversion.booking as any).grossProfit).toBeUndefined();
   });
 
   it('derives Sales ownership from the Lead when a Manager or Admin creates the Quote', async () => {
@@ -106,7 +187,14 @@ describe('Stage D1 server-authoritative Quote mutations', () => {
       active: true,
       name: 'Admin User',
     };
-    const adminQuote = await service.createQuote(createInput(), admin);
+    storage.rawSet('trips', 'trip-admin', { ...baseTrip, id: 'trip-admin', leadId: 'lead-admin' });
+    storage.rawSet('leads', 'lead-admin', {
+      id: 'lead-admin', customerId: 'customer-01', assignedEmployeeId: executive.employeeId,
+    });
+    storage.rawSet('itinerary_days', 'day-trip-admin', {
+      ...storage.rawGet('itinerary_days', 'day-trip-01'), id: 'day-trip-admin', tripId: 'trip-admin',
+    });
+    const adminQuote = await service.createQuote({ ...createInput(), tripId: 'trip-admin', leadId: 'lead-admin' }, admin);
     expect(adminQuote.salesEmployeeId).toBe(executive.employeeId);
     expect(adminQuote.salesTeamId).toBe(executive.salesTeamId);
     expect(adminQuote.createdByEmployeeId).toBe(admin.employeeId);
@@ -308,6 +396,48 @@ describe('Stage D1 server-authoritative Quote mutations', () => {
     await expect(service.updateQuote(quote.id, { status: 'SENT' }, executive))
       .rejects.toMatchObject({ statusCode: 422, code: 'QUOTE_FINANCIALS_INCOMPLETE' });
     expect(storage.rawGet('quotes', quote.id).status).toBe('DRAFT');
+  });
+
+  it('builds a strict customer-safe package and transactionally records QUOTE_SHARED', async () => {
+    const quote = await service.createQuote({
+      ...createInput(),
+      internalNotes: 'Never show this note',
+      inclusions: ['Hotels', 'Transfers'],
+      exclusions: ['Personal expenses'],
+      termsAndConditions: 'Subject to availability.',
+    }, executive);
+
+    const preview = await service.getCustomerPackage(quote.id, executive);
+    expect(preview).toMatchObject({
+      customerName: 'Test Customer', destination: 'Your destination', packageSellingPrice: 95_000,
+      hotels: [{ hotelName: 'Hotel Kareem Residency', roomCategoryName: 'Deluxe Room', mealPlan: 'MAP' }],
+      transports: [{ vehicleName: 'Innova Crysta AC' }], activities: [{ activityName: 'Private Shikara Ride on Dal Lake' }],
+    });
+    const serialized = JSON.stringify(preview);
+    for (const forbidden of ['totalSupplierCost', 'grossProfit', 'grossMargin', 'supplierId', 'rateId', 'internalNotes', 'supplierCost']) {
+      expect(serialized).not.toContain(forbidden);
+    }
+
+    const result = await service.shareQuote(quote.id, { channel: 'DOCUMENT', expectedVersion: 1 }, executive);
+    expect(result.quote).toMatchObject({
+      status: 'SENT', version: 2, sharedByEmployeeId: executive.employeeId, shareChannel: 'DOCUMENT',
+    });
+    expect(result.quote.sharedAt).toBeTruthy();
+    expect(storage.rawGet('quotes', quote.id).status).toBe('SENT');
+    expect(storage.getAllAuditLogs().at(-1)).toMatchObject({ action: 'QUOTE_SHARED', actorId: executive.employeeId });
+  });
+
+  it('rejects stale or unauthorized package sharing without mutating Quote state', async () => {
+    const quote = await service.createQuote(createInput(), executive);
+    const anotherExecutive: QuoteMutationActor = {
+      ...executive, firebaseUid: 'firebase-other', employeeId: 'emp-other', salesTeamId: 'sales-team-02', name: 'Other Executive',
+    };
+    await expect(service.shareQuote(quote.id, { channel: 'DOCUMENT', expectedVersion: 1 }, anotherExecutive))
+      .rejects.toMatchObject({ statusCode: 403, code: 'RESOURCE_ACCESS_DENIED' });
+    await expect(service.shareQuote(quote.id, { channel: 'DOCUMENT', expectedVersion: 99 }, executive))
+      .rejects.toMatchObject({ statusCode: 409, code: 'QUOTE_VERSION_CONFLICT' });
+    expect(storage.rawGet('quotes', quote.id)).toMatchObject({ status: 'DRAFT', version: 1 });
+    expect(storage.getAllAuditLogs().filter(log => log.action === 'QUOTE_SHARED')).toHaveLength(0);
   });
 
   it('uses explicit conversion DTO allowlists and never passes supplier snapshots through', () => {

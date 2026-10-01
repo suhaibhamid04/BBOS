@@ -62,7 +62,7 @@ export const AiSalesHeadTab: React.FC<Props> = ({ leadId }) => {
                 <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">KNOWN DATA</p>
                 <div className="space-y-2 text-sm text-slate-700">
                   <p><strong>Dest:</strong> {lead.destination}</p>
-                  <p><strong>Budget:</strong> ₹{lead.budget.toLocaleString()}</p>
+                  <p><strong>Budget:</strong> {lead.budget === undefined ? 'Not specified' : `₹${lead.budget.toLocaleString()}`}</p>
                   <p><strong>Travelers:</strong> {lead.travelerCount}</p>
                   <p><strong>Urgency:</strong> {lead.priority}</p>
                 </div>

@@ -3,7 +3,12 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './tests/e2e',
   testMatch: '**/*.e2e.ts',
+  testIgnore: '**/firebase-sales-flow.e2e.ts',
   fullyParallel: false,
+  // The explicit-demo API adapters are process-wide in-memory stores. Running
+  // files concurrently makes otherwise isolated browser contexts race on the
+  // same authoritative demo records.
+  workers: 1,
   retries: 0,
   reporter: [['list']],
   use: {

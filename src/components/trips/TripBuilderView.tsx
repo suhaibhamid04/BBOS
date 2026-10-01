@@ -36,6 +36,7 @@ interface TripBuilderViewProps {
 export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId, initialLeadId, onNavigate }) => {
   const {
     trips,
+    quotes,
     itineraryDays,
     customers,
     leads,
@@ -74,6 +75,7 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
   const [showCustomModal, setShowCustomModal] = useState(false);
   const [editingItem, setEditingItem] = useState<ItineraryItem | null>(null);
   const [isCalculatingCosts, setIsCalculatingCosts] = useState(false);
+  const [isCreatingQuote, setIsCreatingQuote] = useState(false);
 
   // Form state for New / Edit Trip
   const [tripForm, setTripForm] = useState({
@@ -534,27 +536,31 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
   // Generate Quote Handler
   const handleGenerateQuote = async () => {
     if (!activeTrip) return;
+    const existingQuote = quotes.find(quote => quote.tripId === activeTrip.id);
+    if (existingQuote) {
+      if (onNavigate) onNavigate('quotes', existingQuote.id);
+      return;
+    }
+    if (activeTrip.costingStatus !== 'CALCULATED') {
+      notify('Recalculate package cost before creating a quote.');
+      return;
+    }
+    if (!activeTrip.leadId) {
+      notify('This Trip must remain linked to an authoritative Lead before Quote creation.');
+      return;
+    }
     try {
+      setIsCreatingQuote(true);
       const customer = customers.find(c => c.id === activeTrip.customerId);
       const validUntilDate = new Date();
       validUntilDate.setDate(validUntilDate.getDate() + 7);
 
-      const quoteHotels = tripDays.flatMap(day => 
-        (day.items || []).filter(it => it.type === 'HOTEL').map(it => ({
-          hotelName: it.title.split(' - ')[0] || 'Hotel',
-          roomType: it.metadata?.roomCategoryName || it.title.split(' - ')[1] || 'Room',
-          mealPlan: it.metadata?.mealPlan || 'MAP',
-          checkInDate: it.metadata?.checkInDate || day.date,
-          nights: it.metadata?.nights || 1,
-          rate: it.sellingPrice // Pass undefined or number, supplierCost omitted
-        }))
-      );
-
       const quote = await createQuote({
-        leadId: activeTrip.leadId || `lead-${Date.now()}`,
+        leadId: activeTrip.leadId,
         customerId: activeTrip.customerId,
         customerName: customer?.name || getCustomerName(activeTrip.customerId),
         destination: activeTrip.destination,
+        tripId: activeTrip.id,
         durationNights: Math.max(1, tripDays.length - 1),
         durationDays: tripDays.length,
         packageId: 'custom-package',
@@ -563,23 +569,17 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
         discount: 0,
         finalAmount: activeTrip.totalSellingPrice || 0,
         validUntil: validUntilDate.toISOString().split('T')[0],
-        hotels: quoteHotels,
-        inclusions: [
-          `${tripDays.length} Days Handcrafted Kashmiri Itinerary`,
-          'Verified Hotel Stays & Houseboat Accommodation',
-          'Dedicated Chauffeur Driven Vehicle',
-          '24/7 Local Concierge Support'
-        ],
-        exclusions: ['Personal expenses & tips', 'Airfare unless specified', 'Gondola Phase 2 tickets'],
-        termsAndConditions: 'Standard Booking Bridge payment schedule: 30% advance, balance prior to arrival.'
+        inclusions: ['Inventory-linked itinerary services', 'BBOS trip coordination'],
+        exclusions: ['Personal expenses', 'Services not listed in this proposal'],
+        termsAndConditions: 'Services remain subject to availability until booking confirmation.'
       });
 
       notify(`Quote generated successfully: ID ${quote.id}`);
-      if (onNavigate) {
-        setTimeout(() => onNavigate('quotes'), 1200);
-      }
+      if (onNavigate) onNavigate('quotes', quote.id);
     } catch (err: any) {
       notify(`Error creating quote: ${err.message}`);
+    } finally {
+      setIsCreatingQuote(false);
     }
   };
 
@@ -657,10 +657,18 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
                   <Users className="w-3.5 h-3.5 text-slate-400" /> {activeTrip.adults} Adults {activeTrip.children > 0 ? `+ ${activeTrip.children} Kids` : ''} ({activeTrip.tripType})
                 </span>
               </div>
+              {activeTrip.leadId && <div data-testid="trip-lead-prefill" className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-600">
+                {activeTrip.childAges && activeTrip.childAges.length > 0 && <span>Child ages: {activeTrip.childAges.join(', ')}</span>}
+                {activeTrip.hotelPreference && <span>Hotel: {activeTrip.hotelPreference}</span>}
+                {activeTrip.mealPlanPreference && <span>Meal plan: {activeTrip.mealPlanPreference}</span>}
+                {activeTrip.vehiclePreference && <span>Vehicle: {activeTrip.vehiclePreference}</span>}
+                {activeTrip.specialRequirements && <span>Requirements: {activeTrip.specialRequirements}</span>}
+              </div>}
             </div>
           </div>
 
           <div className="flex items-center gap-2.5">
+            {activeTrip.leadId && onNavigate && <button data-testid="return-to-lead" onClick={() => onNavigate('lead-detail', activeTrip.leadId)} className="px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-lg border border-slate-200">Lead</button>}
             <button
               onClick={() => {
                 notify('Trip changes are saved as you work.');
@@ -670,13 +678,18 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
               <FileText className="w-3.5 h-3.5" /> Save Draft
             </button>
             <button
+              data-testid="create-quote-from-trip"
               onClick={handleGenerateQuote}
-              className="px-4 py-2 bg-[#7056EE] hover:bg-[#5e43dc] text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-2 shadow-sm"
+              disabled={isCreatingQuote || (activeTrip.costingStatus !== 'CALCULATED' && !quotes.some(quote => quote.tripId === activeTrip.id))}
+              title={activeTrip.costingStatus !== 'CALCULATED' ? 'Recalculate Trip costing before creating a Quote.' : undefined}
+              className="px-4 py-2 bg-[#7056EE] hover:bg-[#5e43dc] disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-2 shadow-sm"
             >
-              <CheckCircle2 className="w-4 h-4" /> Generate Quote
+              <CheckCircle2 className="w-4 h-4" /> {quotes.some(quote => quote.tripId === activeTrip.id) ? 'Open Quote' : isCreatingQuote ? 'Creating…' : 'Create Quote'}
             </button>
           </div>
         </div>
+
+        {activeTrip.leadId && <div data-testid="commercial-workflow" className="rounded-xl border border-purple-100 bg-purple-50 px-4 py-2 text-xs font-semibold text-purple-900">Lead → Build Package → Calculate Cost → Create Quote → Send/Manage Quote</div>}
 
         {/* Real-time Costing Engine Header */}
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs shrink-0 flex flex-wrap items-center justify-between gap-4">
@@ -1047,12 +1060,12 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
              <div className="animate-in fade-in zoom-in duration-150 w-full max-w-2xl">
                 <HotelInventoryPicker
-                  checkInDate={activeDay?.date || new Date().toISOString().split('T')[0]}
-                  nights={1} // Defaulting to 1 night for day-based itinerary adding
-                  adults={activeTrip?.adults || 2}
-                  childrenCount={activeTrip?.children || 0}
-                  childrenWithBed={0} // Can be enhanced later to pick exact child ages
-                  childrenWithoutBed={activeTrip?.children || 0}
+                  checkInDate={editingItem?.type === 'HOTEL' && editingItem.metadata?.inventoryType === 'ACCOMMODATION' ? editingItem.metadata.checkInDate : activeDay?.date || new Date().toISOString().split('T')[0]}
+                  nights={editingItem?.type === 'HOTEL' && editingItem.metadata?.inventoryType === 'ACCOMMODATION' ? editingItem.metadata.nights : 1}
+                  adults={editingItem?.type === 'HOTEL' && editingItem.metadata?.inventoryType === 'ACCOMMODATION' ? editingItem.metadata.adults : activeTrip?.adults || 2}
+                  childrenCount={editingItem?.type === 'HOTEL' && editingItem.metadata?.inventoryType === 'ACCOMMODATION' ? editingItem.metadata.children : activeTrip?.children || 0}
+                  childrenWithBed={editingItem?.type === 'HOTEL' && editingItem.metadata?.inventoryType === 'ACCOMMODATION' ? editingItem.metadata.childrenWithBed : 0}
+                  childrenWithoutBed={editingItem?.type === 'HOTEL' && editingItem.metadata?.inventoryType === 'ACCOMMODATION' ? editingItem.metadata.childrenWithoutBed : activeTrip?.children || 0}
                   initialMetadata={editingItem?.type === 'HOTEL' && editingItem.metadata?.inventoryType === 'ACCOMMODATION' ? editingItem.metadata as AccommodationItineraryMetadata : undefined}
                   onConfirm={handleAddHotel}
                   onCancel={() => { setEditingItem(null); setShowHotelModal(false); }}

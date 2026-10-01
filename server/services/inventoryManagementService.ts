@@ -46,6 +46,15 @@ const MANAGE_ROLES: readonly UserRole[] = ['Founder', 'Admin'];
 const MEAL_PLANS: readonly MealPlanType[] = ['EP', 'CP', 'MAP', 'AP', 'CUSTOM'];
 
 function clone<T>(value: T): T { return structuredClone(value); }
+function firestoreDocument(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((item) => firestoreDocument(item));
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value as UnknownRecord)
+      .filter(([, item]) => item !== undefined)
+      .map(([key, item]) => [key, firestoreDocument(item)]),
+  );
+}
 function record(value: unknown): UnknownRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new InventoryManagementError(400, 'INVALID_INVENTORY_PAYLOAD', 'A JSON object is required.');
   return value as UnknownRecord;
@@ -240,7 +249,7 @@ export class InventoryManagementService {
 export class FirestoreInventoryStorage implements InventoryStorage {
   async get<T>(collection: InventoryCollection, id: string) { const document = await getAdminDb().collection(collection).doc(id).get(); return document.exists ? ({ ...document.data(), id: document.id } as T) : null; }
   async list<T>(collection: InventoryCollection, filters: InventoryFilter[] = []) { let query: Query = getAdminDb().collection(collection); for (const filter of filters) query = query.where(filter.field, '==', filter.value); const snapshot = await query.limit(500).get(); return snapshot.docs.map((document) => ({ ...document.data(), id: document.id } as T)); }
-  async commit(collection: InventoryCollection, id: string, before: UnknownRecord | null, after: UnknownRecord, entry: AuditLog, overlap?: InventoryOverlapCheck) { const db = getAdminDb(); await db.runTransaction(async (transaction) => { const reference = db.collection(collection).doc(id); const current = await transaction.get(reference); if (before === null && current.exists) throw new InventoryManagementError(409, 'INVENTORY_ID_CONFLICT', 'Inventory identifier already exists.'); if (before !== null && !current.exists) throw new InventoryManagementError(404, 'INVENTORY_NOT_FOUND', 'Inventory record no longer exists.'); if (overlap) { let query: Query = db.collection(collection); for (const filter of overlap.filters) query = query.where(filter.field, '==', filter.value); const matches = await transaction.get(query.limit(500)); if (matches.docs.some((document) => { const data = document.data(); return document.id !== overlap.excludeId && data.status === 'ACTIVE' && overlaps(overlap.validFrom, overlap.validTo, data.validFrom, data.validTo); })) throw new InventoryManagementError(409, 'AMBIGUOUS_RATE_PERIOD', 'An active contracted rate already overlaps this validity period.'); } transaction.set(reference, after as DocumentData); transaction.create(db.collection('audit_logs').doc(entry.id), entry); }); }
+  async commit(collection: InventoryCollection, id: string, before: UnknownRecord | null, after: UnknownRecord, entry: AuditLog, overlap?: InventoryOverlapCheck) { const db = getAdminDb(); await db.runTransaction(async (transaction) => { const reference = db.collection(collection).doc(id); const current = await transaction.get(reference); if (before === null && current.exists) throw new InventoryManagementError(409, 'INVENTORY_ID_CONFLICT', 'Inventory identifier already exists.'); if (before !== null && !current.exists) throw new InventoryManagementError(404, 'INVENTORY_NOT_FOUND', 'Inventory record no longer exists.'); if (overlap) { let query: Query = db.collection(collection); for (const filter of overlap.filters) query = query.where(filter.field, '==', filter.value); const matches = await transaction.get(query.limit(500)); if (matches.docs.some((document) => { const data = document.data(); return document.id !== overlap.excludeId && data.status === 'ACTIVE' && overlaps(overlap.validFrom, overlap.validTo, data.validFrom, data.validTo); })) throw new InventoryManagementError(409, 'AMBIGUOUS_RATE_PERIOD', 'An active contracted rate already overlaps this validity period.'); } transaction.set(reference, firestoreDocument(after) as DocumentData); transaction.create(db.collection('audit_logs').doc(entry.id), firestoreDocument(entry) as DocumentData); }); }
 }
 
 export class InMemoryInventoryStorage implements InventoryStorage {

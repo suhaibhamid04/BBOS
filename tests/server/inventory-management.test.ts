@@ -16,6 +16,7 @@ const founder: InventoryActor = {
 const admin: InventoryActor = { ...founder, firebaseUid: 'firebase-admin', employeeId: 'emp-admin-01', name: 'Admin', role: 'Admin' };
 const reservations: InventoryActor = { ...founder, employeeId: 'emp-res-01', name: 'Reservations', role: 'Reservations' };
 const operations: InventoryActor = { ...founder, employeeId: 'emp-ops-01', name: 'Operations', role: 'Operations' };
+const salesExecutive: InventoryActor = { ...founder, employeeId: 'emp-sales-01', name: 'Sales', role: 'Sales Executive' };
 
 describe('UX1 authoritative inventory management', () => {
   let storage: InMemoryInventoryStorage;
@@ -101,6 +102,32 @@ describe('UX1 authoritative inventory management', () => {
     await expect(service.listActivityRates(operations)).rejects.toMatchObject({ statusCode: 403 });
     expect(await service.listTransportRates(reservations)).toEqual([]);
     expect(await service.listActivityRates(reservations)).toEqual([]);
+  });
+
+  it('gives Sales the picker master shapes without exposing raw supplier records or rates', async () => {
+    const hotelSupplier = await supplier('HOTEL', 'Safe Hotel Partner');
+    await supplier('TRANSPORT', 'Safe Cab Partner');
+    const activitySupplier = await supplier('ACTIVITY', 'Safe Activity Partner');
+    const property = await service.createProperty({ name: 'Safe Hotel', propertyType: 'HOTEL', location: 'Dal Lake', city: 'Srinagar', supplierId: hotelSupplier.id }, founder);
+    await service.createRoom({ propertyId: property.id, name: 'Deluxe' }, founder);
+    await service.createVehicle({ name: 'SUV', displayName: 'SUV', category: 'SUV', seatingCapacity: 6, passengerCapacity: 5 }, founder);
+    await service.createActivity({ name: 'Gondola', category: 'GONDOLA_CABLE_CAR', destinationId: 'gulmarg', supplierId: activitySupplier.id, description: 'Cable car' }, founder);
+
+    const [properties, rooms, vehicles, activities] = await Promise.all([
+      service.listProperties(salesExecutive),
+      service.listAllRooms(salesExecutive),
+      service.listVehicleCategories(salesExecutive),
+      service.listActivities(salesExecutive),
+    ]);
+    expect(properties[0]).toMatchObject({ id: property.id, name: 'Safe Hotel', status: 'ACTIVE' });
+    expect(properties[0].supplierId).toBeUndefined();
+    expect(rooms[0]).toMatchObject({ propertyId: property.id, active: true });
+    expect(vehicles[0]).toMatchObject({ displayName: 'SUV', active: true });
+    expect(activities[0]).toMatchObject({ name: 'Gondola', active: true });
+    expect(activities[0].supplierId).toBeUndefined();
+    await expect(service.listAllAccommodationRates(salesExecutive)).rejects.toMatchObject({ statusCode: 403 });
+    await expect(service.listTransportRates(salesExecutive)).rejects.toMatchObject({ statusCode: 403 });
+    await expect(service.listActivityRates(salesExecutive)).rejects.toMatchObject({ statusCode: 403 });
   });
 
   it('allows only Founder/Admin mutations and fails closed for inactive or unknown roles', async () => {

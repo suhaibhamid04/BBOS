@@ -120,7 +120,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const pendingTasksCount = tasks.filter(t => t.status !== 'COMPLETED').length;
-  const hotLeadsCount = leads.filter(l => l.priority === 'HIGH' || l.priority === 'URGENT').length;
+  const hotLeadsCount = leads.filter(l => l.priority === 'HOT').length;
   const navigation = getRoleNavigationVisibility(permissions);
   const canSeeApprovalInbox = currentUser.role !== 'Marketing';
 

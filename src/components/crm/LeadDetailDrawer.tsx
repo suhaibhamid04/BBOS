@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
-import { Lead, LeadStatus, SalesAiAnalysisResult } from '../../types';
+import { Lead, SalesAiAnalysisResult } from '../../types';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
+import { LeadStageControl } from './LeadStageControl';
+import { CreateLeadModal } from './CreateLeadModal';
 import {
   X,
   Flame,
@@ -33,8 +35,8 @@ interface LeadDetailDrawerProps {
 
 export const LeadDetailDrawer: React.FC<LeadDetailDrawerProps> = ({ leadId, onClose, onNavigate }) => {
   const { 
-    leads, updateLead, updateLeadStatus, addLeadNote, assignLead, runSalesAiAnalysis, 
-    createQuote, packages, customers, trips, itineraryDays, quotes, createCustomer 
+    leads, updateLead, addLeadNote, assignLead, runSalesAiAnalysis,
+    trips, quotes, createOrResumeLeadTrip,
   } = useData();
   const { currentUser } = useAuth();
 
@@ -45,20 +47,11 @@ export const LeadDetailDrawer: React.FC<LeadDetailDrawerProps> = ({ leadId, onCl
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiResult, setAiResult] = useState<SalesAiAnalysisResult | null>(null);
   const [copiedDraft, setCopiedDraft] = useState(false);
-  const [showNoTripModal, setShowNoTripModal] = useState(false);
+  const [isBuildingPackage, setIsBuildingPackage] = useState(false);
+  const [workflowError, setWorkflowError] = useState('');
+  const [isEditingLead, setIsEditingLead] = useState(false);
 
   if (!lead) return null;
-
-  const leadStatuses: LeadStatus[] = [
-    'NEW',
-    'CONTACTED',
-    'QUALIFIED',
-    'QUOTE_SENT',
-    'NEGOTIATION',
-    'BOOKED',
-    'LOST',
-    'NURTURE',
-  ];
 
   const handleRunAi = async () => {
     setIsAnalyzing(true);
@@ -88,152 +81,24 @@ export const LeadDetailDrawer: React.FC<LeadDetailDrawerProps> = ({ leadId, onCl
 
   const handleBuildTrip = async () => {
     if (!lead) return;
-    const existingTrip = trips.find(t => t.leadId === lead.id);
-    if (existingTrip) {
-      if (onNavigate) onNavigate('trips', existingTrip.id);
-      return;
-    }
-    if (onNavigate) onNavigate('trips-new', lead.id);
-  };
-
-  const handleCreateQuoteClick = async () => {
-    if (!lead) return;
-    const existingTrip = trips.find(t => t.leadId === lead.id);
-    if (!existingTrip) {
-      setShowNoTripModal(true);
-      return;
-    }
-
-    // Trip exists: load trip into Quote Builder
-    const existingQuote = quotes.find(q => q.tripId === existingTrip.id || q.leadId === lead.id);
-    if (existingQuote) {
-      if (onNavigate) onNavigate('quotes', existingQuote.id);
-      return;
-    }
-
-    // Create quote from existing trip
     try {
-      const days = itineraryDays.filter(d => d.tripId === existingTrip.id);
-      const itineraryItems = days.flatMap(d => d.items || []);
-      if (!Number.isFinite(existingTrip.totalSellingPrice) || existingTrip.totalSellingPrice <= 0 ||
-          itineraryItems.some(item => !Number.isFinite(item.sellingPrice) || item.sellingPrice <= 0)) {
-        throw new Error('This trip must be priced before a quote can be created.');
-      }
-
-      const hotels = itineraryItems.filter(i => i.type === 'HOTEL').map(h => ({
-        hotelName: h.title,
-        roomType: h.description || 'Standard Room',
-        mealPlan: 'MAP',
-        nights: 1,
-        rate: h.sellingPrice!
-      }));
-      const transports = itineraryItems.filter(i => i.type === 'TRANSPORT').map(t => ({
-        vehicleType: t.title,
-        route: t.description || 'Airport Transit & Sightseeing',
-        days: 1,
-        rate: t.sellingPrice!
-      }));
-      const activities = itineraryItems.filter(i => i.type === 'ACTIVITY').map(a => ({
-        name: a.title,
-        pax: existingTrip.adults || 2,
-        rate: a.sellingPrice!
-      }));
-
-      const totalAmt = existingTrip.totalSellingPrice;
-      const newQuote = await createQuote({
-        leadId: lead.id,
-        customerId: existingTrip.customerId,
-        customerName: lead.customerName,
-        customerPhone: lead.customerPhone,
-        customerEmail: lead.customerEmail,
-        destination: existingTrip.destination || lead.destination,
-        tripId: existingTrip.id,
-        travelerCount: existingTrip.travelerCount || 2,
-        adults: existingTrip.adults || 2,
-        children: existingTrip.children || 0,
-        durationDays: days.length || 5,
-        durationNights: Math.max(1, (days.length || 5) - 1),
-        totalAmount: totalAmt,
-        discountAmount: 0,
-        finalAmount: totalAmt,
-        status: 'DRAFT',
-        validUntil: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
-        hotels,
-        transports,
-        activities,
-        inclusions: [
-          `${days.length || 5} Days Handcrafted Tour across ${existingTrip.destination}`,
-          'Verified Hotel Stays & Houseboat Accommodation',
-          'Dedicated Chauffeur Driven Vehicle with All Tolls & Parking',
-          '24/7 Dedicated Local Concierge Support'
-        ],
-        exclusions: [
-          'Airfare to and from destination',
-          'Personal expenses, laundry, tips and room mini-bar',
-          'Detours or services outside agreed itinerary'
-        ],
-        termsAndConditions: '30% advance deposit to confirm booking. 70% balance payable 7 days prior to arrival.',
-      });
-
-      if (onNavigate) onNavigate('quotes', newQuote.id);
-    } catch (err) {
-      console.error('Failed to create quote from trip:', err);
+      setIsBuildingPackage(true);
+      setWorkflowError('');
+      const trip = await createOrResumeLeadTrip(lead.id);
+      if (onNavigate) onNavigate('trips', trip.id);
+    } catch (error: any) {
+      setWorkflowError(error.message || 'Unable to open the Lead package.');
+    } finally {
+      setIsBuildingPackage(false);
     }
   };
 
-  const handleCreateQuoteFromScratch = async () => {
-    if (!lead) return;
-    setShowNoTripModal(false);
-
-    try {
-      let targetCustomerId = lead.customerId;
-      const existingCust = customers.find(c => c.id === lead.customerId || c.name.toLowerCase() === lead.customerName.toLowerCase());
-      if (existingCust) {
-        targetCustomerId = existingCust.id;
-      } else {
-        const newCust = await createCustomer({
-          name: lead.customerName,
-          phone: lead.customerPhone || '+91 99060 00000',
-          email: lead.customerEmail || 'guest@bookingbridge.com',
-          city: lead.destination || 'Srinagar',
-          segment: 'B2C'
-        });
-        targetCustomerId = newCust.id;
-      }
-
-      const totalAmt = lead.budget || 85000;
-      const newQuote = await createQuote({
-        leadId: lead.id,
-        customerId: targetCustomerId,
-        customerName: lead.customerName,
-        customerPhone: lead.customerPhone,
-        customerEmail: lead.customerEmail,
-        destination: lead.destination || 'Kashmir',
-        travelerCount: lead.travelerCount || 2,
-        adults: lead.travelerCount || 2,
-        children: 0,
-        durationDays: 5,
-        durationNights: 4,
-        totalAmount: totalAmt,
-        discountAmount: 0,
-        finalAmount: totalAmt,
-        status: 'DRAFT',
-        validUntil: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
-        inclusions: [
-          `5 Days Signature Tour of ${lead.destination}`,
-          'Premium Stays with Daily Breakfast',
-          'Dedicated Chauffeur Driven Vehicle',
-          '24/7 Local Concierge Support'
-        ],
-        exclusions: ['Airfare', 'Personal expenses', 'Tips and extra meals'],
-        termsAndConditions: '30% advance deposit to confirm. Balance payable 7 days prior to arrival.',
-      });
-
-      if (onNavigate) onNavigate('quotes', newQuote.id);
-    } catch (err) {
-      console.error('Failed to create quote from scratch:', err);
-    }
-  };
+  const linkedTrips = trips.filter(trip => trip.leadId === lead.id);
+  const linkedQuotes = quotes.filter(quote => quote.leadId === lead.id);
+  const eligibleAssignees = PRESET_USERS.filter(user =>
+    user.active && ['Sales Executive', 'Sales Manager'].includes(user.role) && user.salesTeamId &&
+    (currentUser.role === 'Founder' || currentUser.role === 'Admin' || user.salesTeamId === currentUser.salesTeamId)
+  );
 
   return (
     <>
@@ -257,13 +122,11 @@ export const LeadDetailDrawer: React.FC<LeadDetailDrawerProps> = ({ leadId, onCl
                 )}
               </div>
               <p className="text-xs text-slate-400">
-                {lead.destination} • {lead.tripType} • ₹{lead.budget.toLocaleString('en-IN')}
+                {lead.destination} • {lead.tripType || 'Travel enquiry'} • {lead.budget === undefined ? 'Budget TBD' : `₹${lead.budget.toLocaleString('en-IN')}`}
               </p>
             </div>
           </div>
-          <button id="close-lead-drawer-btn" onClick={onClose} className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800">
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2"><button data-testid="edit-lead" onClick={() => setIsEditingLead(true)} className="rounded-lg border border-slate-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-slate-800">Edit Lead</button><button id="close-lead-drawer-btn" onClick={onClose} className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"><X className="w-5 h-5" /></button></div>
         </div>
 
         {/* Lead Score & AI Action Bar */}
@@ -272,10 +135,10 @@ export const LeadDetailDrawer: React.FC<LeadDetailDrawerProps> = ({ leadId, onCl
             <div className="flex items-center space-x-1.5">
               <span className="text-xs font-semibold text-slate-600">Lead Score:</span>
               <span className={`text-xs font-black px-2 py-0.5 rounded-full ${
-                lead.leadScore >= 80 ? 'bg-emerald-100 text-emerald-800' :
-                lead.leadScore >= 60 ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-700'
+                (lead.leadScore || 0) >= 80 ? 'bg-emerald-100 text-emerald-800' :
+                (lead.leadScore || 0) >= 60 ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-700'
               }`}>
-                {lead.leadScore}/100
+                {lead.leadScore ?? '—'}{lead.leadScore === undefined ? '' : '/100'}
               </span>
             </div>
             <span className="text-slate-300">•</span>
@@ -347,25 +210,8 @@ export const LeadDetailDrawer: React.FC<LeadDetailDrawerProps> = ({ leadId, onCl
         <div className="flex-1 overflow-y-auto p-5 text-xs space-y-5">
           {activeTab === 'OVERVIEW' && (
             <div className="space-y-4">
-              {/* Status Selector */}
               <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
-                <label className="block font-semibold text-slate-700">Pipeline Stage</label>
-                <div className="flex flex-wrap gap-1.5">
-                  {leadStatuses.map((st) => (
-                    <button
-                      key={st}
-                      id={`status-badge-${st}`}
-                      onClick={() => updateLeadStatus(lead.id, st)}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-colors ${
-                        lead.status === st
-                          ? 'bg-slate-900 text-white shadow-xs'
-                          : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
-                      }`}
-                    >
-                      {st}
-                    </button>
-                  ))}
-                </div>
+                <LeadStageControl lead={lead} updateLead={updateLead} />
               </div>
 
               {/* Contact Information */}
@@ -396,13 +242,19 @@ export const LeadDetailDrawer: React.FC<LeadDetailDrawerProps> = ({ leadId, onCl
                   <div className="p-3 bg-white border border-slate-200 rounded-xl space-y-1">
                     <span className="text-[10px] text-slate-400">Destination & Type</span>
                     <p className="font-bold text-slate-900">{lead.destination}</p>
-                    <p className="text-slate-600 text-[11px]">{lead.tripType}</p>
+                    <p className="text-slate-600 text-[11px]">{lead.tripType || 'Not specified'}</p>
                   </div>
                   <div className="p-3 bg-white border border-slate-200 rounded-xl space-y-1">
                     <span className="text-[10px] text-slate-400">Travel Dates & Pax</span>
-                    <p className="font-bold text-slate-900">{lead.travelStartDate} to {lead.travelEndDate}</p>
-                    <p className="text-slate-600 text-[11px]">{lead.travelerCount} Travelers</p>
+                    <p className="font-bold text-slate-900">{lead.travelStartDate || 'Dates TBD'}{lead.travelEndDate ? ` to ${lead.travelEndDate}` : ''}</p>
+                    <p data-testid="lead-detail-child-ages" className="text-slate-600 text-[11px]">{lead.adults ?? '—'} adults · {lead.children || 0} children{(lead.childAges || []).length ? ` (ages ${(lead.childAges || []).join(', ')})` : ''}</p>
                   </div>
+                </div>
+                <div data-testid="lead-detail-preferences" className="rounded-xl border border-slate-200 bg-white p-3 text-[11px] text-slate-700">
+                  <p><strong>Source:</strong> {lead.sourcePlatform}{lead.sourceReference ? ` · ${lead.sourceReference}` : ''}</p>
+                  <p><strong>Preferences:</strong> {[lead.hotelPreference, lead.mealPlanPreference, lead.vehiclePreference].filter(Boolean).join(' · ') || 'Not specified'}</p>
+                  <p><strong>Requirements:</strong> {lead.specialRequirements || 'None recorded'}</p>
+                  <p><strong>Tags:</strong> {(lead.tags || []).join(', ') || 'None'}</p>
                 </div>
               </div>
 
@@ -412,14 +264,15 @@ export const LeadDetailDrawer: React.FC<LeadDetailDrawerProps> = ({ leadId, onCl
                 <select
                   id="drawer-assignee-select"
                   value={lead.assignedEmployeeId}
+                  disabled={currentUser.role === 'Sales Executive'}
                   onChange={(e) => {
-                    const u = PRESET_USERS.find(user => user.id === e.target.value);
-                    if (u) assignLead(lead.id, u.id, u.name);
+                    const u = eligibleAssignees.find(user => user.employeeId === e.target.value);
+                    if (u) assignLead(lead.id, u.employeeId, u.name);
                   }}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white font-medium"
                 >
-                  {PRESET_USERS.map((u) => (
-                    <option key={u.id} value={u.id}>{u.name} ({u.role})</option>
+                  {eligibleAssignees.map((u) => (
+                    <option key={u.employeeId} value={u.employeeId}>{u.name} ({u.role})</option>
                   ))}
                 </select>
               </div>
@@ -560,20 +413,32 @@ export const LeadDetailDrawer: React.FC<LeadDetailDrawerProps> = ({ leadId, onCl
           {/* QUOTES History Tab */}
           {activeTab === 'QUOTES' && (
             <div className="space-y-4">
+              {workflowError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">{workflowError}</div>}
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2">
+                <p className="font-bold text-slate-900">Lead → Build Package → Calculate Cost → Create Quote</p>
+                {linkedTrips.length > 0 ? linkedTrips.map(trip => <div data-testid="lead-linked-trip" key={trip.id} className="flex items-center justify-between gap-2 border-t border-slate-200 pt-2">
+                  <div><strong>{trip.title}</strong><p className="text-[11px] text-slate-500">{trip.status} · Costing {trip.costingStatus || 'PENDING'}</p></div>
+                  <button onClick={() => { if (onNavigate) onNavigate('trips', trip.id) }} className="font-bold text-[#7056EE]">Open →</button>
+                </div>) : <p className="text-slate-500">No package has been built for this Lead.</p>}
+                {linkedTrips.some(trip => trip.packageReview?.required) && <div data-testid="lead-package-review-warning" className="rounded-lg border border-amber-300 bg-amber-50 p-2 text-amber-900"><p className="font-bold">Package review required</p><p>Lead travel details changed. Open the package, apply the latest details, then recalculate before creating or sharing a Quote.</p></div>}
+                {linkedTrips.some(trip => trip.costingStatus !== 'CALCULATED') && <p className="font-semibold text-amber-800">Recalculate package cost before creating a quote.</p>}
+              </div>
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-bold text-slate-900">Quotes for this Lead</h3>
                 <button
-                  onClick={handleCreateQuoteClick}
+                  data-testid="lead-build-package"
+                  onClick={handleBuildTrip}
+                  disabled={isBuildingPackage}
                   className="px-3 py-1.5 bg-[#7056EE] text-white text-xs font-bold rounded-lg hover:bg-[#5b42d6] transition-colors flex items-center gap-1.5 shadow-2xs"
                 >
-                  <Plus className="w-3.5 h-3.5" /> New Quote
+                  <Plus className="w-3.5 h-3.5" /> {linkedTrips.length ? 'Resume Package' : 'Build Package'}
                 </button>
               </div>
 
-              {quotes.filter(q => q.leadId === lead.id).length > 0 ? (
+              {linkedQuotes.length > 0 ? (
                 <div className="grid grid-cols-1 gap-4">
-                  {quotes.filter(q => q.leadId === lead.id).map(q => (
-                    <div key={q.id} className="p-4 bg-white rounded-xl border border-slate-200 shadow-2xs space-y-3">
+                  {linkedQuotes.map(q => (
+                    <div data-testid="lead-linked-quote" key={q.id} className="p-4 bg-white rounded-xl border border-slate-200 shadow-2xs space-y-3">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <span className="font-bold text-slate-900 text-sm">{q.destination} Tour</span>
@@ -610,53 +475,15 @@ export const LeadDetailDrawer: React.FC<LeadDetailDrawerProps> = ({ leadId, onCl
                 <div className="p-8 text-center bg-white rounded-xl border border-slate-200">
                   <FileText className="w-8 h-8 text-slate-300 mx-auto mb-2" />
                   <p className="text-sm font-bold text-slate-700">No quotes generated yet.</p>
-                  <p className="text-xs text-slate-400 mt-1">Click "New Quote" to create one.</p>
+                  <p className="text-xs text-slate-400 mt-1">Build and cost the package before creating a customer Quote.</p>
                 </div>
               )}
             </div>
           )}
         </div>
 
-        {/* NO TRIP FOUND PROMPT MODAL */}
-        {showNoTripModal && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-            <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-sm overflow-hidden animate-in fade-in zoom-in duration-150">
-              <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <FileText className="w-4 h-4 text-[#7056EE]" /> Create Quote
-                </h3>
-                <button onClick={() => setShowNoTripModal(false)} className="text-slate-400 hover:text-slate-700">
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <div className="p-5 space-y-4 text-xs">
-                <p className="text-slate-600 leading-relaxed">
-                  No itinerary trip has been built for this lead yet. You can build a customized itinerary trip first, or create a preliminary quote from scratch.
-                </p>
-
-                <div className="space-y-2 pt-2">
-                  <button
-                    onClick={() => {
-                      setShowNoTripModal(false);
-                      handleBuildTrip();
-                    }}
-                    className="w-full py-2.5 px-4 bg-[#7056EE] text-white rounded-xl font-bold hover:bg-[#5b42d6] transition-colors flex items-center justify-center gap-2 shadow-sm"
-                  >
-                    <Plane className="w-4 h-4" /> Build Trip First (Recommended)
-                  </button>
-                  <button
-                    onClick={handleCreateQuoteFromScratch}
-                    className="w-full py-2.5 px-4 bg-slate-100 text-slate-700 rounded-xl font-bold hover:bg-slate-200 transition-colors flex items-center justify-center gap-2"
-                  >
-                    <FileText className="w-4 h-4 text-slate-500" /> Quick Quote from Scratch
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
+      <CreateLeadModal isOpen={isEditingLead} onClose={() => setIsEditingLead(false)} onNavigate={onNavigate} lead={lead} />
     </>
   );
 };

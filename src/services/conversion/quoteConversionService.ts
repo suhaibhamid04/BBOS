@@ -170,7 +170,7 @@ export class QuoteConversionService {
     // - create modern service records
     // - create restricted financial snapshot
     // - update quote to ACCEPTED
-    // - update lead to BOOKED if applicable
+    // - update lead to CONVERTED if applicable
     // - update trip to BOOKED if applicable
     // - commit atomically
     const txnResult = await this.storageProvider.runTransaction(async (txn) => {
@@ -481,10 +481,10 @@ export class QuoteConversionService {
         updatedAt: now,
       });
 
-      // Step J: Update lead to BOOKED if applicable
+      // Step J: Update the Sales Lead to its canonical converted stage.
       if (freshQuote.leadId) {
         txn.update('leads', freshQuote.leadId, {
-          status: 'BOOKED',
+          status: 'CONVERTED',
           convertedBookingId: booking.id,
           updatedAt: now,
         });

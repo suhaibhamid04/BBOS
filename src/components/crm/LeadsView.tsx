@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
-import { Lead, LeadStatus, DestinationRegion, Priority } from '../../types';
+import { Lead, LeadStatus, DestinationRegion, LeadPriority, LEAD_STAGES } from '../../types';
 import {
   Flame,
   Plus,
@@ -26,7 +26,7 @@ interface LeadsViewProps {
 }
 
 export const LeadsView: React.FC<LeadsViewProps> = ({ onNavigate }) => {
-  const { leads, updateLeadStatus } = useData();
+  const { leads, dataLoadErrors } = useData();
   const { currentUser, permissions } = useAuth();
 
   const [viewMode, setViewMode] = useState<'TABLE' | 'KANBAN'>('TABLE');
@@ -36,22 +36,13 @@ export const LeadsView: React.FC<LeadsViewProps> = ({ onNavigate }) => {
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 
-  const statuses: LeadStatus[] = [
-    'NEW',
-    'CONTACTED',
-    'QUALIFIED',
-    'QUOTE_SENT',
-    'NEGOTIATION',
-    'BOOKED',
-    'LOST',
-    'NURTURE',
-  ];
+  const statuses: LeadStatus[] = [...LEAD_STAGES];
 
   // RBAC lead scope filter: If user is Sales Executive and leadAccessScope is ASSIGNED_ONLY
   const scopedLeads = useMemo(() => {
     let result = leads;
     if (permissions.leadAccessScope === 'ASSIGNED_ONLY') {
-      result = result.filter(l => l.assignedEmployeeId === currentUser.id);
+      result = result.filter(l => l.assignedEmployeeId === currentUser.employeeId);
     }
     return result;
   }, [leads, permissions, currentUser]);
@@ -77,30 +68,32 @@ export const LeadsView: React.FC<LeadsViewProps> = ({ onNavigate }) => {
         return 'bg-blue-100 text-blue-800 border-blue-200';
       case 'CONTACTED':
         return 'bg-indigo-100 text-indigo-800 border-indigo-200';
-      case 'QUALIFIED':
+      case 'IN_PROGRESS':
         return 'bg-amber-100 text-amber-900 border-amber-200';
-      case 'QUOTE_SENT':
+      case 'QUOTE_SHARED':
         return 'bg-purple-100 text-purple-800 border-purple-200';
       case 'NEGOTIATION':
         return 'bg-orange-100 text-orange-900 border-orange-200';
-      case 'BOOKED':
+      case 'CONVERTED':
         return 'bg-emerald-100 text-emerald-800 border-emerald-200';
-      case 'LOST':
+      case 'DROPPED':
         return 'bg-rose-100 text-rose-800 border-rose-200';
-      case 'NURTURE':
+      case 'ON_HOLD':
         return 'bg-slate-100 text-slate-700 border-slate-200';
+      case 'CANCELLED':
+        return 'bg-slate-200 text-slate-700 border-slate-300';
     }
   };
 
-  const getPriorityColor = (priority: Priority) => {
+  const getPriorityColor = (priority: LeadPriority) => {
     switch (priority) {
-      case 'URGENT':
+      case 'HOT':
         return 'bg-rose-500 text-white';
-      case 'HIGH':
+      case 'WARM':
         return 'bg-[#F0A608] text-slate-950 font-bold';
-      case 'MEDIUM':
+      case 'NORMAL':
         return 'bg-amber-100 text-amber-900';
-      case 'LOW':
+      case 'COLD':
         return 'bg-slate-100 text-slate-600';
     }
   };
@@ -202,6 +195,11 @@ export const LeadsView: React.FC<LeadsViewProps> = ({ onNavigate }) => {
       </div>
 
       {/* View Content: Table or Kanban */}
+      {dataLoadErrors.leads && (
+        <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+          <span className="font-bold">Lead records could not be loaded.</span> {dataLoadErrors.leads}
+        </div>
+      )}
       {viewMode === 'TABLE' ? (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
           <div className="overflow-x-auto">
@@ -252,13 +250,13 @@ export const LeadsView: React.FC<LeadsViewProps> = ({ onNavigate }) => {
                       <td className="py-3 px-4">
                         <span className="font-semibold text-slate-900">{lead.destination}</span>
                         <div className="text-[11px] text-slate-500 mt-0.5">
-                          {lead.tripType} ({lead.travelStartDate.substring(5)})
+                          {lead.tripType || 'Travel enquiry'} ({lead.travelStartDate ? lead.travelStartDate.substring(5) : 'Dates TBD'})
                         </div>
                       </td>
 
                       <td className="py-3 px-4">
-                        <div className="font-bold text-slate-900">₹{lead.budget.toLocaleString('en-IN')}</div>
-                        <div className="text-[11px] text-slate-500">{lead.travelerCount} Travelers</div>
+                        <div className="font-bold text-slate-900">{lead.budget === undefined ? 'Budget TBD' : `₹${lead.budget.toLocaleString('en-IN')}`}</div>
+                        <div className="text-[11px] text-slate-500">{lead.travelerCount ?? 'Pax TBD'}{lead.travelerCount !== undefined ? ' Travelers' : ''}</div>
                       </td>
 
                       <td className="py-3 px-4">
@@ -270,10 +268,10 @@ export const LeadsView: React.FC<LeadsViewProps> = ({ onNavigate }) => {
                       <td className="py-3 px-4">
                         <div className="flex items-center space-x-1.5">
                           <span className={`text-xs font-black px-2 py-0.5 rounded-full ${
-                            lead.leadScore >= 80 ? 'bg-emerald-100 text-emerald-800' :
-                            lead.leadScore >= 60 ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700'
+                            (lead.leadScore || 0) >= 80 ? 'bg-emerald-100 text-emerald-800' :
+                            (lead.leadScore || 0) >= 60 ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700'
                           }`}>
-                            {lead.leadScore}
+                            {lead.leadScore ?? '—'}
                           </span>
                           <span className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded ${getPriorityColor(lead.priority)}`}>
                             {lead.priority}
@@ -317,7 +315,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({ onNavigate }) => {
           <div className="flex space-x-4 min-w-[1200px]">
             {statuses.map((status) => {
               const columnLeads = filteredLeads.filter((l) => l.status === status);
-              const columnValue = columnLeads.reduce((sum, l) => sum + l.budget, 0);
+              const columnValue = columnLeads.reduce((sum, l) => sum + (l.budget || 0), 0);
 
               return (
                 <div
@@ -354,12 +352,12 @@ export const LeadsView: React.FC<LeadsViewProps> = ({ onNavigate }) => {
 
                         <div className="text-[11px] text-slate-600 space-y-0.5">
                           <p className="font-semibold text-[#7056EE]">{lead.destination} • {lead.tripType}</p>
-                          <p>₹{lead.budget.toLocaleString('en-IN')} • {lead.travelerCount} Pax</p>
+                          <p>{lead.budget === undefined ? 'Budget TBD' : `₹${lead.budget.toLocaleString('en-IN')}`} • {lead.travelerCount ?? 'Pax TBD'}{lead.travelerCount !== undefined ? ' Pax' : ''}</p>
                         </div>
 
                         <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[10px]">
                           <span className="font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
-                            Score: {lead.leadScore}
+                            Score: {lead.leadScore ?? '—'}
                           </span>
                           <span className="text-slate-400">{lead.assignedEmployeeName.split(' ')[0]}</span>
                         </div>
@@ -377,6 +375,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({ onNavigate }) => {
       <CreateLeadModal
         isOpen={isCreateModalOpen}
         onClose={() => setIsCreateModalOpen(false)}
+        onNavigate={onNavigate}
       />
 
       <LeadDetailDrawer

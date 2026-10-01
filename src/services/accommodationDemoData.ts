@@ -595,4 +595,5 @@ export const DEMO_RATE_PERIODS: RatePeriod[] = [
   // --- KAREEM RESIDENCY SEASONAL RATES ---
   makeRate('rp-accom-sgr-kareemresidency-sep', 'accom-sgr-kareemresidency', 'rc-accom-sgr-kareemresidency', 3500, 1200, 800, '2026-09-01', '2026-09-30', 'September Rate'),
   makeRate('rp-accom-sgr-kareemresidency-oct', 'accom-sgr-kareemresidency', 'rc-accom-sgr-kareemresidency', 4000, 1400, 900, '2026-10-01', null, 'October Onwards Rate'),
+  { ...makeRate('rp-accom-sgr-kareemresidency-cp', 'accom-sgr-kareemresidency', 'rc-accom-sgr-kareemresidency', 3600, 1400, 900, '2026-10-01', null, 'CP October Onwards Rate'), mealPlan: 'CP' },
 ];

@@ -135,7 +135,7 @@ describe('Stage B Reservations financial boundary', () => {
 });
 
 describe('Stage B demo and navigation behavior', () => {
-  it('provides a Reservations demo persona and safe navigation without Operations access', () => {
+  it('provides a Reservations demo persona and an assigned-Booking workspace without Operations access', () => {
     const demoUser = PRESET_USERS.find((user) => user.role === 'Reservations');
     expect(demoUser?.id).toBe('emp-res-01');
 
@@ -145,7 +145,8 @@ describe('Stage B demo and navigation behavior', () => {
     expect(navigation.transport).toBe(true);
     expect(navigation.activities).toBe(true);
     expect(navigation.operations).toBe(false);
-    expect(navigation.bookings).toBe(false);
+    expect(navigation.bookings).toBe(true);
+    expect(navigation.tripsAndBookings).toBe(true);
     expect(navigation.crm).toBe(false);
     expect(navigation.sales).toBe(false);
   });
@@ -161,6 +162,16 @@ describe('Stage B demo and navigation behavior', () => {
     );
     expect(demoNext).toHaveBeenCalledTimes(1);
     expect(demoRequest.user?.role).toBe('Reservations');
+
+    const unknownRequest = { headers: { 'x-demo-user-id': 'missing-demo-employee' } } as unknown as Request;
+    const unknownResult = buildResponse();
+    await createAuthenticate({ demoMode: true, nodeEnv: 'development' })(
+      unknownRequest,
+      unknownResult.response,
+      mock(() => undefined) as unknown as NextFunction,
+    );
+    expect(unknownResult.statusCode).toBe(403);
+    expect(unknownResult.body).toMatchObject({ code: 'DEMO_EMPLOYEE_NOT_FOUND' });
 
     const disabledRequest = { headers: { 'x-demo-user-id': 'emp-res-01' } } as unknown as Request;
     const disabledResult = buildResponse();

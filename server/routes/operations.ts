@@ -10,9 +10,13 @@ import {
   LiveOperationsService,
   type LiveOperationsActor,
 } from '../services/liveOperationsService.js';
+import { APP_CONFIG } from '../../src/config.js';
+import { demoOperationsStorage } from '../services/demoBookingWorkflow.js';
 
 export const operationsRouter = Router();
-const controlRoomService = new OperationsControlRoomService();
+const controlRoomService = new OperationsControlRoomService(
+  APP_CONFIG.DEMO_MODE ? demoOperationsStorage : undefined,
+);
 const liveOperationsService = new LiveOperationsService();
 
 function actorFromRequest(req: Request): OperationsActor {

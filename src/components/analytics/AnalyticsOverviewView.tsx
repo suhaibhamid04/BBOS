@@ -7,7 +7,7 @@ export const AnalyticsOverviewView: React.FC = () => {
 
   const totalRevenue = bookings.reduce((sum, b) => sum + (b.totalAmount || 0), 0);
   const totalInquiries = leads.length;
-  const bookedLeads = leads.filter((l) => l.status === 'BOOKED').length;
+  const bookedLeads = leads.filter((l) => l.status === 'CONVERTED').length;
   const conversionRate = totalInquiries > 0 ? Math.round((bookedLeads / totalInquiries) * 100) : 38;
 
   // Monthly breakdown mock

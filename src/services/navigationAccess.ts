@@ -18,8 +18,9 @@ export function getRoleNavigationVisibility(permissions: RolePermissions) {
     // redesigned; only the new, intentionally fail-closed role is excluded.
     crm: permissions.role !== 'Reservations',
     sales: permissions.role !== 'Reservations',
-    tripsAndBookings: permissions.canManageTrips || permissions.canManageBookings,
-    bookings: permissions.canManageBookings,
+    tripsAndBookings:
+      permissions.canManageTrips || permissions.canManageBookings || permissions.canManageReservations,
+    bookings: permissions.canManageBookings || permissions.canManageReservations,
     accommodation,
     transport,
     activities,

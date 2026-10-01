@@ -27,31 +27,40 @@ const QUOTE_ROOT_FIELDS = [
   'exclusions', 'termsAndConditions', 'salesEmployeeId', 'salesEmployeeName',
   'salesTeamId', 'createdByEmployeeId', 'updatedByEmployeeId', 'version', 'isDemo',
   'convertedBookingId', 'requiresLowMarginApproval',
+  'sharedAt', 'sharedByEmployeeId', 'shareChannel',
 ] as const;
 
 const HOTEL_FIELDS = [
-  'id', 'hotelId', 'hotelName', 'propertyId', 'roomCategoryId', 'ratePeriodId',
+  'id', 'sourceTripItemId', 'hotelId', 'hotelName', 'propertyId', 'roomCategoryId', 'ratePeriodId',
   'negotiatedRateId', 'roomType', 'mealPlan', 'checkInDate', 'checkOutDate', 'nights',
   'roomsCount', 'rooms', 'adultsCount', 'childrenCount', 'rate', 'quotedRate',
   'supplierCost', 'isFoc', 'focReason', 'guestNames', 'specialRequests',
 ] as const;
 
 const TRANSPORT_FIELDS = [
-  'id', 'transportId', 'vehicleCategoryId', 'transportRouteId', 'ratePeriodId',
+  'id', 'sourceTripItemId', 'transportId', 'vehicleCategoryId', 'transportRouteId', 'ratePeriodId',
   'vehicleType', 'route', 'serviceDate', 'days', 'passengerCount', 'pickupLocation',
   'dropoffLocation', 'rate', 'quotedRate', 'supplierCost', 'isFoc', 'focReason',
   'specialRequests',
 ] as const;
 
 const ACTIVITY_FIELDS = [
-  'id', 'activityId', 'activityMasterId', 'activityRatePeriodId', 'name',
+  'id', 'sourceTripItemId', 'activityId', 'activityMasterId', 'activityRatePeriodId', 'name',
   'activityName', 'destinationId', 'destinationName', 'serviceDate', 'date', 'pax',
   'rate', 'quotedRate', 'supplierCost', 'isFoc', 'focReason', 'specialRequests',
 ] as const;
 
 const VERSION_FIELDS = [
   'version', 'updatedAt', 'updatedBy', 'totalAmount', 'discountAmount', 'finalAmount',
-  'status', 'notes', 'inclusions', 'exclusions', 'termsAndConditions',
+  'totalSupplierCost', 'grossProfit', 'grossMargin', 'status', 'notes', 'inclusions',
+  'exclusions', 'termsAndConditions', 'hotels', 'transports', 'activities',
+  'backupAccommodations',
+] as const;
+
+const BACKUP_ACCOMMODATION_FIELDS = [
+  'id', 'sourceTripItemId', 'propertyId', 'propertyName', 'roomCategoryId',
+  'roomCategoryName', 'ratePeriodId', 'mealPlan', 'checkInDate', 'checkOutDate',
+  'nights', 'roomsCount', 'adultsCount', 'childrenCount',
 ] as const;
 
 /** Explicit internal Quote DTO. Callers must authorize the resource first. */
@@ -69,8 +78,19 @@ export function buildQuoteDto(
   if (Array.isArray(quote.hotels)) dto.hotels = quote.hotels.map((item: unknown) => pick(asRecord(item), HOTEL_FIELDS));
   if (Array.isArray(quote.transports)) dto.transports = quote.transports.map((item: unknown) => pick(asRecord(item), TRANSPORT_FIELDS));
   if (Array.isArray(quote.activities)) dto.activities = quote.activities.map((item: unknown) => pick(asRecord(item), ACTIVITY_FIELDS));
+  if (Array.isArray(quote.backupAccommodations)) {
+    dto.backupAccommodations = quote.backupAccommodations.map((item: unknown) => pick(asRecord(item), BACKUP_ACCOMMODATION_FIELDS));
+  }
   if (Array.isArray(quote.versionHistory)) {
-    dto.versionHistory = quote.versionHistory.map((item: unknown) => pick(asRecord(item), VERSION_FIELDS));
+    dto.versionHistory = quote.versionHistory.map((item: unknown) => {
+      const version = asRecord(item);
+      const projected = pick(version, VERSION_FIELDS);
+      if (Array.isArray(version.hotels)) projected.hotels = version.hotels.map(value => pick(asRecord(value), HOTEL_FIELDS));
+      if (Array.isArray(version.transports)) projected.transports = version.transports.map(value => pick(asRecord(value), TRANSPORT_FIELDS));
+      if (Array.isArray(version.activities)) projected.activities = version.activities.map(value => pick(asRecord(value), ACTIVITY_FIELDS));
+      if (Array.isArray(version.backupAccommodations)) projected.backupAccommodations = version.backupAccommodations.map(value => pick(asRecord(value), BACKUP_ACCOMMODATION_FIELDS));
+      return projected;
+    });
   }
   if (quote.supplierCostSource) {
     dto.supplierCostSource = pick(asRecord(quote.supplierCostSource), ['type', 'sourceId', 'asOf']);
@@ -95,7 +115,7 @@ const CONFIRMATION_PROGRESS_FIELDS = [
 ] as const;
 
 const SERVICE_FIELDS = [
-  'id', 'bookingId', 'tripId', 'customerId', 'propertyId', 'propertyName',
+  'id', 'bookingId', 'tripId', 'customerId', 'sourceQuoteServiceId', 'propertyId', 'propertyName',
   'roomCategoryId', 'roomCategoryName', 'mealPlan', 'checkInDate', 'checkOutDate',
   'nightsCount', 'roomsCount', 'adultsCount', 'childrenCount', 'guestNames',
   'specialRequests', 'supplierId', 'vehicleCategoryId', 'vehicleCategoryName', 'routeId',

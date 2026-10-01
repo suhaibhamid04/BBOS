@@ -26,13 +26,29 @@ import {
   VoucherError,
 } from '../services/voucherService.js';
 import { sanitizeFinancialData } from '../middleware/financialGuard.js';
+import { APP_CONFIG } from '../../src/config.js';
+import {
+  demoBookingQueryProvider,
+  demoConfirmationStorageProvider,
+  demoLifecycleStorageProvider,
+  demoPaymentStorageProvider,
+  demoReservationsAssignmentStorage,
+} from '../services/demoBookingWorkflow.js';
+import {
+  ReservationsAssignmentError,
+  ReservationsAssignmentService,
+  type ReservationsAssignmentActor,
+} from '../services/reservationsAssignmentService.js';
 
 export const bookingsRouter = Router();
 const quoteConversionService = new QuoteConversionService();
-const paymentService = new PaymentService();
-const bookingQueryService = new BookingQueryService();
-const bookingLifecycleService = new BookingLifecycleService();
-const serviceConfirmationService = new ServiceConfirmationService();
+const paymentService = new PaymentService(APP_CONFIG.DEMO_MODE ? demoPaymentStorageProvider : undefined);
+const bookingQueryService = new BookingQueryService(APP_CONFIG.DEMO_MODE ? demoBookingQueryProvider : undefined);
+const bookingLifecycleService = new BookingLifecycleService(APP_CONFIG.DEMO_MODE ? demoLifecycleStorageProvider : undefined);
+const serviceConfirmationService = new ServiceConfirmationService(APP_CONFIG.DEMO_MODE ? demoConfirmationStorageProvider : undefined);
+const reservationsAssignmentService = new ReservationsAssignmentService(
+  APP_CONFIG.DEMO_MODE ? demoReservationsAssignmentStorage : undefined,
+);
 const voucherService = new VoucherService();
 
 /**
@@ -98,6 +114,28 @@ function handleBookingQueryError(error: any, res: Response, context: string) {
   return res.status(500).json({
     error: error.message || `Internal Server Error in ${context}`,
   });
+}
+
+function assignmentActorFromRequest(req: Request): ReservationsAssignmentActor {
+  const actor = req.user!;
+  return {
+    firebaseUid: actor.firebaseUid,
+    employeeId: actor.employeeId,
+    role: actor.role,
+    active: actor.active,
+    name: actor.name,
+    ...(actor.salesTeamId ? { salesTeamId: actor.salesTeamId } : {}),
+    ...(actor.managerEmployeeId ? { managerEmployeeId: actor.managerEmployeeId } : {}),
+    ...(actor.department ? { department: actor.department } : {}),
+  };
+}
+
+function handleReservationsAssignmentError(error: unknown, res: Response, context: string) {
+  if (error instanceof ReservationsAssignmentError) {
+    return res.status(error.statusCode).json({ error: error.message, code: error.code });
+  }
+  console.error(`API Error in ${context}:`, error);
+  return res.status(500).json({ error: 'Internal Server Error', code: 'RESERVATIONS_ASSIGNMENT_FAILED' });
 }
 
 /**
@@ -173,6 +211,21 @@ bookingsRouter.get(
   }
 );
 
+bookingsRouter.get(
+  '/reservations-assignees',
+  requireRole(['Founder', 'Admin']),
+  async (req: Request, res: Response) => {
+    try {
+      const employees = await reservationsAssignmentService.listEligibleEmployees(
+        assignmentActorFromRequest(req),
+      );
+      return res.status(200).json({ success: true, data: employees });
+    } catch (error) {
+      return handleReservationsAssignmentError(error, res, 'GET /bookings/reservations-assignees');
+    }
+  },
+);
+
 /**
  * GET /api/bookings/:bookingId
  * Retrieves detailed booking information including services and a sanitized payment summary.
@@ -202,6 +255,23 @@ bookingsRouter.get(
       return handleBookingQueryError(error, res, 'GET /bookings/:bookingId');
     }
   }
+);
+
+bookingsRouter.patch(
+  '/:bookingId/reservations-assignment',
+  requireRole(['Founder', 'Admin']),
+  async (req: Request, res: Response) => {
+    try {
+      const data = await reservationsAssignmentService.assign(
+        req.params.bookingId,
+        req.body,
+        assignmentActorFromRequest(req),
+      );
+      return res.status(200).json({ success: true, data });
+    } catch (error) {
+      return handleReservationsAssignmentError(error, res, 'PATCH /bookings/:bookingId/reservations-assignment');
+    }
+  },
 );
 
 // =========================================================================

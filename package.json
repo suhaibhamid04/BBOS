@@ -10,7 +10,10 @@
     "preview": "vite preview",
     "clean": "rm -rf dist dist/server.js",
     "lint": "tsc --noEmit",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:firebase": "firebase emulators:exec --config firebase.qa3.json --project bbos-qa3-local --only auth,firestore \"playwright test --config playwright.firebase.config.ts\"",
+    "test:auth-emulator": "firebase emulators:exec --config firebase.qa3.json --project bbos-qa3-local --only auth \"bun test tests/server/firebase-auth-emulator.integration.test.ts\"",
+    "migrate:leads:team": "bun scripts/backfillLeadSalesTeam.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -27,12 +30,14 @@
     "vite": "^6.2.3"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
     "@playwright/test": "^1.63.0",
     "@types/bun": "^1.4.2",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
+    "firebase-tools": "^15.32.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",

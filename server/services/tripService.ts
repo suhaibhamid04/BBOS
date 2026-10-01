@@ -16,6 +16,13 @@ export interface TripMutationActor extends AuthorizationPrincipal {
   isDemo?: boolean;
 }
 
+export interface LeadTripResult {
+  trip: Trip;
+  days: ItineraryDay[];
+  customer?: UnknownRecord;
+  resumed: boolean;
+}
+
 export class TripDomainError extends Error {
   constructor(
     readonly statusCode: number,
@@ -39,7 +46,7 @@ const SERVER_CONTROLLED_FIELDS = new Set([
   'profit', 'margin', 'assignedSalesEmployeeId', 'salesTeamId',
   'assignedReservationsEmployeeId', 'assignedOperationsEmployeeId',
   'createdByEmployeeId', 'updatedByEmployeeId', 'createdAt', 'updatedAt',
-  'isDemo', 'schemaVersion', 'costingStatus',
+  'isDemo', 'schemaVersion', 'costingStatus', 'packageReview',
 ]);
 const ITINERARY_DAY_FIELDS = new Set(['date', 'title', 'description', 'location', 'notes']);
 const ITINERARY_ITEM_FIELDS = new Set([
@@ -58,6 +65,16 @@ const NESTED_PROTECTED_ITINERARY_FIELDS = new Set([
 
 function isRecord(value: unknown): value is UnknownRecord {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function withoutUndefined<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((item) => withoutUndefined(item)) as T;
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, item]) => item !== undefined)
+      .map(([key, item]) => [key, withoutUndefined(item)]),
+  ) as T;
 }
 
 function sanitizeInput(rawInput: unknown): UnknownRecord {
@@ -119,6 +136,13 @@ function dateIsWithin(date: string, validFrom: unknown, validTo: unknown): boole
   return Boolean(from) && date >= from && (!to || date <= to);
 }
 
+function stayIsWithin(checkInDate: string, nights: number, validFrom: unknown, validTo: unknown): boolean {
+  if (!dateIsWithin(checkInDate, validFrom, validTo)) return false;
+  const finalNight = new Date(`${checkInDate}T00:00:00Z`);
+  finalNight.setUTCDate(finalNight.getUTCDate() + nights - 1);
+  return dateIsWithin(finalNight.toISOString().slice(0, 10), validFrom, validTo);
+}
+
 async function resolveInventoryItem(tx: ConversionTransaction, input: UnknownRecord): Promise<UnknownRecord> {
   if (!['HOTEL', 'TRANSPORT', 'ACTIVITY'].includes(String(input.type))) return input;
   const metadata = input.metadata;
@@ -141,7 +165,7 @@ async function resolveInventoryItem(tx: ConversionTransaction, input: UnknownRec
     ]);
     if (!property || !room || !rate) throw new TripDomainError(422, 'INVENTORY_REFERENCE_NOT_FOUND', 'Selected accommodation inventory or rate no longer exists.');
     if (property.status !== 'ACTIVE' || !room.active || rate.status !== 'ACTIVE') throw new TripDomainError(409, 'INVENTORY_INACTIVE', 'Only active accommodation inventory may be newly selected.');
-    if (room.propertyId !== propertyId || rate.propertyId !== propertyId || rate.roomCategoryId !== roomCategoryId || rate.mealPlan !== metadata.mealPlan || !dateIsWithin(checkInDate, rate.validFrom, rate.validTo)) {
+    if (room.propertyId !== propertyId || rate.propertyId !== propertyId || rate.roomCategoryId !== roomCategoryId || rate.mealPlan !== metadata.mealPlan || !stayIsWithin(checkInDate, nights, rate.validFrom, rate.validTo)) {
       throw new TripDomainError(422, 'INVENTORY_RATE_MISMATCH', 'The selected accommodation rate does not match the property, room, meal plan, or service date.');
     }
     const supplier = property.supplierId ? await tx.get('suppliers', property.supplierId) : null;
@@ -380,6 +404,161 @@ function auditEvent(
 export class TripService {
   constructor(private readonly storage: ConversionStorageProvider = new FirestoreConversionStorageProvider()) {}
 
+  async createOrResumeLeadTrip(leadIdValue: string, actor: TripMutationActor): Promise<LeadTripResult> {
+    if (!MUTATION_ROLES.has(actor.role)) {
+      throw new TripDomainError(403, 'ROLE_DENIED', 'This role cannot build Trips from Leads.');
+    }
+    const leadId = nonEmptyString(leadIdValue, 'leadId');
+
+    return this.storage.runTransaction(async tx => {
+      const lead = await tx.get('leads', leadId) as UnknownRecord | null;
+      if (!lead) throw new TripDomainError(404, 'LEAD_NOT_FOUND', 'Lead not found.');
+
+      const attribution = await this.resolveLeadAttribution(tx, lead, actor);
+      const existingTrips = await tx.findByField('trips', 'leadId', leadId, 25) as Trip[];
+      const resumable = existingTrips
+        .filter(trip => ['DRAFT', 'ITINERARY_READY', 'QUOTE_READY'].includes(trip.status))
+        .sort((left, right) => String(right.updatedAt || right.createdAt || '').localeCompare(String(left.updatedAt || left.createdAt || '')))[0];
+
+      if (resumable) {
+        try {
+          assertAuthorizedResource(actor, 'TRIP', 'UPDATE_COMMERCIAL', tripResourceContext(resumable));
+        } catch (error) {
+          translateAuthorizationError(error);
+        }
+        const days = await tx.findByField('itinerary_days', 'tripId', resumable.id, 60) as ItineraryDay[];
+        const customer = await tx.get('customers', resumable.customerId) as UnknownRecord | null;
+        return {
+          trip: resumable,
+          days: days.sort((left, right) => left.dayNumber - right.dayNumber),
+          ...(customer ? { customer } : {}),
+          resumed: true,
+        };
+      }
+
+      const customerId = nonEmptyString(lead.customerId, 'Lead customerId');
+      let customer = await tx.get('customers', customerId) as UnknownRecord | null;
+      const now = new Date().toISOString();
+      if (!customer) {
+        customer = {
+          id: customerId,
+          name: nonEmptyString(lead.customerName, 'Lead customerName'),
+          phone: typeof lead.customerPhone === 'string' ? lead.customerPhone.trim() : '',
+          email: typeof lead.customerEmail === 'string' ? lead.customerEmail.trim() : '',
+          city: '',
+          customerType: 'B2C',
+          preferences: [],
+          notes: typeof lead.notes === 'string' ? lead.notes : '',
+          totalBookings: 0,
+          lifetimeValue: 0,
+          createdAt: now,
+          updatedAt: now,
+          ...(actor.isDemo ? { isDemo: true } : {}),
+        };
+        tx.set('customers', customerId, customer);
+      }
+
+      const destination = nonEmptyString(lead.destination, 'Lead destination');
+      const tripType = typeof lead.tripType === 'string' && lead.tripType.trim() ? lead.tripType.trim() : 'Custom Private Tour';
+      if (!lead.travelStartDate || !lead.travelEndDate) {
+        throw new TripDomainError(422, 'LEAD_TRAVEL_DATES_REQUIRED', 'Add the Lead travel start date and number of nights before building the package.');
+      }
+      if (lead.adults === undefined && lead.travelerCount === undefined) {
+        throw new TripDomainError(422, 'LEAD_PAX_REQUIRED', 'Add the Lead adult and child details before building the package.');
+      }
+      const hasStructuredChildAges = Array.isArray(lead.childAges);
+      const childAges = hasStructuredChildAges
+        ? lead.childAges.map((age: unknown) => nonNegativeInteger(age, 'Lead child age'))
+        : [];
+      if (childAges.some(age => age > 17)) {
+        throw new TripDomainError(422, 'INVALID_LEAD_TRAVELERS', 'Lead child ages must be between 0 and 17.');
+      }
+      const storedChildren = lead.children === undefined ? childAges.length : nonNegativeInteger(lead.children, 'Lead children');
+      if (hasStructuredChildAges && childAges.length !== storedChildren) {
+        throw new TripDomainError(422, 'INVALID_LEAD_TRAVELERS', 'Lead must contain one age for every child.');
+      }
+      const storedAdults = lead.adults === undefined
+        ? nonNegativeInteger(lead.travelerCount, 'Lead travelerCount') - storedChildren
+        : nonNegativeInteger(lead.adults, 'Lead adults');
+      const travelerCount = storedAdults + storedChildren;
+      if (lead.travelerCount !== undefined && nonNegativeInteger(lead.travelerCount, 'Lead travelerCount') !== travelerCount) {
+        throw new TripDomainError(422, 'INVALID_LEAD_TRAVELERS', 'Lead travelerCount must equal adults plus children.');
+      }
+      if (storedAdults < 1 || storedAdults + storedChildren !== travelerCount) {
+        throw new TripDomainError(422, 'INVALID_LEAD_TRAVELERS', 'Lead traveler details must include at least one adult and match travelerCount.');
+      }
+      const startDate = validateDate(lead.travelStartDate, 'Lead travelStartDate');
+      const endDate = validateDate(lead.travelEndDate, 'Lead travelEndDate');
+      if (endDate < startDate) {
+        throw new TripDomainError(422, 'INVALID_LEAD_DATES', 'Lead travel end date cannot be before its start date.');
+      }
+      const budget = lead.budget === undefined ? undefined : finiteNonNegative(lead.budget, 'Lead budget');
+      const tripId = `trip-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const financials = calculateFinancials(budget || 0, 0);
+      const trip: Trip = {
+        id: tripId,
+        customerId,
+        leadId,
+        title: `${destination} ${tripType} for ${customer.name}`,
+        destination,
+        startDate,
+        endDate,
+        travelerCount,
+        adults: storedAdults,
+        children: storedChildren,
+        childAges,
+        ...(lead.focCount !== undefined ? { focCount: nonNegativeInteger(lead.focCount, 'Lead FOC count') } : {}),
+        tripType,
+        currency: 'INR',
+        ...(budget !== undefined ? { budget } : {}),
+        ...(typeof lead.hotelPreference === 'string' && lead.hotelPreference.trim() ? { hotelPreference: lead.hotelPreference.trim() } : {}),
+        ...(typeof lead.mealPlanPreference === 'string' && lead.mealPlanPreference.trim() ? { mealPlanPreference: lead.mealPlanPreference.trim() } : {}),
+        ...(typeof (lead.vehiclePreference || lead.transportPreference) === 'string' && (lead.vehiclePreference || lead.transportPreference).trim() ? { vehiclePreference: (lead.vehiclePreference || lead.transportPreference).trim() } : {}),
+        ...(typeof lead.specialRequirements === 'string' && lead.specialRequirements.trim() ? { specialRequirements: lead.specialRequirements.trim() } : {}),
+        ...(typeof lead.notes === 'string' && lead.notes.trim() ? { leadNotes: lead.notes.trim() } : {}),
+        ...financials,
+        status: 'DRAFT',
+        costingStatus: 'PENDING',
+        assignedSalesEmployeeId: attribution.ownerEmployeeId,
+        salesTeamId: attribution.salesTeamId,
+        createdByEmployeeId: actor.employeeId,
+        updatedByEmployeeId: actor.employeeId,
+        createdAt: now,
+        updatedAt: now,
+        ...(actor.isDemo ? { isDemo: true } : {}),
+      };
+
+      try {
+        assertAuthorizedResource(actor, 'TRIP', 'UPDATE_COMMERCIAL', tripResourceContext(trip));
+      } catch (error) {
+        translateAuthorizationError(error);
+      }
+
+      const durationDays = Math.round(
+        (new Date(`${endDate}T00:00:00Z`).getTime() - new Date(`${startDate}T00:00:00Z`).getTime()) / 86_400_000,
+      ) + 1;
+      if (durationDays < 1 || durationDays > 30) {
+        throw new TripDomainError(422, 'INVALID_LEAD_DATES', 'Lead travel dates must span between 1 and 30 days.');
+      }
+      const days: ItineraryDay[] = Array.from({ length: durationDays }, (_, index) => ({
+        id: `day-${tripId}-${index + 1}`,
+        tripId,
+        dayNumber: index + 1,
+        date: nextItineraryDate(trip as UnknownRecord, index + 1),
+        title: `Day ${index + 1} - Itinerary`,
+        description: '',
+        location: destination,
+        items: [],
+      }));
+
+      tx.set('trips', tripId, trip);
+      for (const day of days) tx.set('itinerary_days', day.id, day);
+      const audit = auditEvent('TRIP_CREATED_FROM_LEAD', 'TRIP', tripId, actor, null, trip as UnknownRecord, now);
+      tx.set('audit_logs', audit.id, audit);
+      return { trip, days, customer, resumed: false };
+    });
+  }
+
   async createTrip(rawInput: unknown, actor: TripMutationActor): Promise<Trip> {
     if (!MUTATION_ROLES.has(actor.role)) {
       throw new TripDomainError(403, 'ROLE_DENIED', 'This role cannot create Trips.');
@@ -482,6 +661,75 @@ export class TripService {
     });
   }
 
+  async reconcileLeadChanges(tripId: string, actor: TripMutationActor): Promise<Trip> {
+    nonEmptyString(tripId, 'tripId');
+    if (!MUTATION_ROLES.has(actor.role)) {
+      throw new TripDomainError(403, 'ROLE_DENIED', 'This role cannot reconcile commercial Trip data.');
+    }
+
+    return this.storage.runTransaction(async tx => {
+      const stored = await tx.get('trips', tripId) as UnknownRecord | null;
+      if (!stored) throw new TripDomainError(404, 'TRIP_NOT_FOUND', 'Trip not found.');
+      try {
+        assertAuthorizedResource(actor, 'TRIP', 'UPDATE_COMMERCIAL', tripResourceContext(stored));
+      } catch (error) {
+        translateAuthorizationError(error);
+      }
+      if (!stored.packageReview?.required) {
+        throw new TripDomainError(409, 'PACKAGE_REVIEW_NOT_REQUIRED', 'This package does not have pending Lead changes.');
+      }
+      const leadId = nonEmptyString(stored.leadId, 'Trip leadId');
+      const lead = await tx.get('leads', leadId) as UnknownRecord | null;
+      if (!lead) throw new TripDomainError(404, 'LEAD_NOT_FOUND', 'The linked Lead no longer exists.');
+
+      const startDate = validateDate(lead.travelStartDate, 'Lead travelStartDate');
+      const endDate = validateDate(lead.travelEndDate, 'Lead travelEndDate');
+      if (endDate < startDate) throw new TripDomainError(422, 'INVALID_LEAD_DATES', 'Lead travel dates are invalid.');
+      const childAges = Array.isArray(lead.childAges)
+        ? lead.childAges.map((age: unknown) => nonNegativeInteger(age, 'Lead child age'))
+        : [];
+      if (childAges.some(age => age > 17)) throw new TripDomainError(422, 'INVALID_LEAD_TRAVELERS', 'Lead child ages must be between 0 and 17.');
+      const children = lead.children === undefined ? childAges.length : nonNegativeInteger(lead.children, 'Lead children');
+      const adults = nonNegativeInteger(lead.adults, 'Lead adults');
+      if (adults < 1 || children !== childAges.length) {
+        throw new TripDomainError(422, 'INVALID_LEAD_TRAVELERS', 'Lead traveler details are incomplete.');
+      }
+
+      const now = new Date().toISOString();
+      const updated = {
+        ...stored,
+        id: tripId,
+        destination: nonEmptyString(lead.destination, 'Lead destination'),
+        startDate,
+        endDate,
+        adults,
+        children,
+        childAges,
+        travelerCount: adults + children,
+        focCount: lead.focCount === undefined ? 0 : nonNegativeInteger(lead.focCount, 'Lead FOC count'),
+        hotelPreference: typeof lead.hotelPreference === 'string' ? lead.hotelPreference.trim() : '',
+        mealPlanPreference: typeof lead.mealPlanPreference === 'string' ? lead.mealPlanPreference.trim() : '',
+        vehiclePreference: typeof (lead.vehiclePreference || lead.transportPreference) === 'string'
+          ? String(lead.vehiclePreference || lead.transportPreference).trim()
+          : '',
+        specialRequirements: typeof lead.specialRequirements === 'string' ? lead.specialRequirements.trim() : '',
+        costingStatus: 'PENDING',
+        packageReview: {
+          ...stored.packageReview,
+          required: false,
+          resolvedAt: now,
+          resolvedByEmployeeId: actor.employeeId,
+        },
+        updatedAt: now,
+        updatedByEmployeeId: actor.employeeId,
+      } as Trip;
+      const audit = auditEvent('PACKAGE_LEAD_CHANGES_APPLIED', 'TRIP', tripId, actor, stored, updated as UnknownRecord, now);
+      tx.update('trips', tripId, updated);
+      tx.set('audit_logs', audit.id, audit);
+      return updated;
+    });
+  }
+
   async createItineraryDay(tripId: string, rawInput: unknown, actor: TripMutationActor): Promise<{ day: ItineraryDay; trip: Trip }> {
     nonEmptyString(tripId, 'tripId');
     const input = sanitizeItineraryDayInput(rawInput, 'CREATE');
@@ -556,12 +804,12 @@ export class TripService {
       const trip = await this.loadAuthorizedCommercialTrip(tx, storedDay.tripId, actor);
       const now = new Date().toISOString();
       const resolvedInput = await resolveInventoryItem(tx, input);
-      const item: ItineraryItem = {
+      const item = withoutUndefined({
         ...resolvedInput,
         id: `item-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         dayId,
         tripId: storedDay.tripId,
-      } as ItineraryItem;
+      }) as ItineraryItem;
       const day: ItineraryDay = { ...storedDay, items: [...(storedDay.items || []), item] };
       const updatedTrip = this.markCostingPending(trip, actor, now);
       tx.update('itinerary_days', dayId, day);
@@ -582,7 +830,7 @@ export class TripService {
       if (!existing) throw new TripDomainError(404, 'ITINERARY_ITEM_NOT_FOUND', 'Itinerary item not found.');
       const trip = await this.loadAuthorizedCommercialTrip(tx, storedDay.tripId, actor);
       const resolvedInput = await resolveInventoryItem(tx, input);
-      const item = { ...resolvedInput, id: existing.id, dayId, tripId: storedDay.tripId } as ItineraryItem;
+      const item = withoutUndefined({ ...resolvedInput, id: existing.id, dayId, tripId: storedDay.tripId }) as ItineraryItem;
       const day = { ...storedDay, items: (storedDay.items || []).map(candidate => candidate.id === itemId ? item : candidate) } as ItineraryDay;
       const now = new Date().toISOString(); const updatedTrip = this.markCostingPending(trip, actor, now);
       tx.update('itinerary_days', dayId, day); tx.update('trips', trip.id, updatedTrip);
@@ -696,6 +944,14 @@ export class TripService {
       throw new TripDomainError(400, 'TRIP_LINK_MISMATCH', 'Trip customerId does not match the authoritative Lead.');
     }
 
+    return this.resolveLeadAttribution(tx, lead, actor);
+  }
+
+  private async resolveLeadAttribution(
+    tx: ConversionTransaction,
+    lead: UnknownRecord,
+    actor: TripMutationActor,
+  ): Promise<{ ownerEmployeeId: string; salesTeamId: string }> {
     const ownerEmployeeId = typeof lead.assignedEmployeeId === 'string' ? lead.assignedEmployeeId.trim() : '';
     if (!ownerEmployeeId) {
       throw new TripDomainError(403, 'LINKED_LEAD_ACCESS_DENIED', 'The linked Lead has no stable Sales employee assignment.');

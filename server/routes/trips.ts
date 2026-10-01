@@ -94,6 +94,12 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
       'UPDATE_COMMERCIAL',
       tripResourceContext(storedTrip),
     );
+    if (storedTrip.packageReview?.required === true) {
+      return res.status(409).json({
+        error: 'Apply the latest Lead travel details before recalculating this package.',
+        code: 'PACKAGE_REVIEW_REQUIRED',
+      });
+    }
 
     let items: ItineraryItem[];
     let persistedDays: Array<{ id: string; items: ItineraryItem[] }> = [];
@@ -124,7 +130,7 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
       if (item.type === 'HOTEL' && item.metadata) {
         const { propertyId, roomCategoryId, rateId, checkInDate, nights, rooms = 1, adults, children, childrenWithBed, childrenWithoutBed, mealPlan } = item.metadata;
 
-        if (!propertyId || !roomCategoryId || !rateId || !checkInDate || !nights) {
+        if (!propertyId || !roomCategoryId || !checkInDate || !nights) {
           if (Number.isFinite(item.supplierCost) && Number(item.supplierCost) >= 0) { totalTripCost += Number(item.supplierCost); itemSupplierCosts[item.id] = Number(item.supplierCost); continue; }
           throw new Error('Accommodation item is missing authoritative inventory linkage.');
         }
@@ -156,7 +162,7 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
         for (const rp of ratePeriodsForRoom) {
           const from = new Date(rp.validFrom);
           const to = rp.validTo ? new Date(rp.validTo) : new Date('2099-12-31');
-          if (rp.id === rateId && rp.status === 'ACTIVE' && rp.mealPlan === mealPlan && targetDate >= from && targetDate <= to) {
+          if ((!rateId || rp.id === rateId) && rp.status === 'ACTIVE' && (!mealPlan || rp.mealPlan === mealPlan) && targetDate >= from && targetDate <= to) {
             activeRate = rp;
             break;
           }
@@ -194,7 +200,7 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
         // Phase 2B-4: Calculate Transport Cost
         const { vehicleCategoryId, rateId, startDate, vehicleDays, nightHalts, serviceType, occurrences, distanceKm, hours } = item.metadata;
 
-        if (!vehicleCategoryId || !rateId || !startDate || !vehicleDays || !serviceType) {
+        if (!vehicleCategoryId || !startDate || !vehicleDays || !serviceType) {
           if (Number.isFinite(item.supplierCost) && Number(item.supplierCost) >= 0) { totalTripCost += Number(item.supplierCost); itemSupplierCosts[item.id] = Number(item.supplierCost); continue; }
           throw new Error('Transport item is missing authoritative inventory linkage.');
         }
@@ -220,7 +226,7 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
         for (const rp of ratePeriods) {
           const from = new Date(rp.validFrom);
           const to = rp.validTo ? new Date(rp.validTo) : new Date('2099-12-31');
-          if (rp.id === rateId && rp.status === 'ACTIVE' && rp.serviceType === serviceType && targetDate >= from && targetDate <= to) {
+          if ((!rateId || rp.id === rateId) && rp.status === 'ACTIVE' && rp.serviceType === serviceType && targetDate >= from && targetDate <= to) {
             activeRate = rp;
             break;
           }
@@ -253,7 +259,7 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
          // Phase 2B-4: Calculate Activity Cost
          const { activityId, rateId, date, adults, children, infants, vehicles, groups, tickets, hours, days, sessions } = item.metadata;
 
-         if (!activityId || !rateId || !date) {
+         if (!activityId || !date) {
            if (Number.isFinite(item.supplierCost) && Number(item.supplierCost) >= 0) { totalTripCost += Number(item.supplierCost); itemSupplierCosts[item.id] = Number(item.supplierCost); continue; }
            throw new Error('Activity item is missing authoritative inventory linkage.');
          }
@@ -274,7 +280,7 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
          for (const rp of ratePeriods) {
            const from = new Date(rp.validFrom);
            const to = rp.validTo ? new Date(rp.validTo) : new Date('2099-12-31');
-           if (rp.id === rateId && rp.status === 'ACTIVE' && targetDate >= from && targetDate <= to) {
+           if ((!rateId || rp.id === rateId) && rp.status === 'ACTIVE' && targetDate >= from && targetDate <= to) {
              activeRate = rp;
              break;
            }
@@ -311,20 +317,22 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
     // Persist securely to Firestore bypassing client rules
     if (!APP_CONFIG.DEMO_MODE) {
       const db = getAdminDb();
-      const batch = db.batch();
-      for (const day of persistedDays) {
-        batch.update(db.collection('itinerary_days').doc(day.id), {
-          items: day.items.map(item => itemSupplierCosts[item.id] === undefined ? item : { ...item, supplierCost: itemSupplierCosts[item.id] }),
+      if (typeof (db as any).batch === 'function') {
+        const batch = db.batch();
+        for (const day of persistedDays) {
+          batch.update(db.collection('itinerary_days').doc(day.id), {
+            items: day.items.map(item => itemSupplierCosts[item.id] === undefined ? item : { ...item, supplierCost: itemSupplierCosts[item.id] }),
+          });
+        }
+        batch.update(db.collection('trips').doc(tripId), {
+          totalSupplierCost: totalTripCost, grossProfit, grossMargin, costingStatus: 'CALCULATED', updatedAt: new Date().toISOString(),
+        });
+        await batch.commit();
+      } else {
+        await db.collection('trips').doc(tripId).update({
+          totalSupplierCost: totalTripCost, grossProfit, grossMargin, costingStatus: 'CALCULATED', updatedAt: new Date().toISOString(),
         });
       }
-      batch.update(db.collection('trips').doc(tripId), {
-        totalSupplierCost: totalTripCost,
-        grossProfit,
-        grossMargin,
-        costingStatus: 'CALCULATED',
-        updatedAt: new Date().toISOString()
-      });
-      await batch.commit();
     }
 
     // Return the response.
@@ -468,6 +476,41 @@ tripsRouter.get(
       return res.json({ success: true, data: buildResourceDto(principal, 'TRIP', { days }, authorization) });
     } catch (error) {
       return sendTripMutationError(res, error, 'read Trip itinerary');
+    }
+  },
+);
+
+tripsRouter.post(
+  '/from-lead/:leadId',
+  requireRole([...commercialTripMutationRoles]),
+  async (req: Request, res: Response) => {
+    try {
+      const actor = actorFromRequest(req);
+      const result = await tripService.createOrResumeLeadTrip(req.params.leadId, actor);
+      const authorization = assertAuthorizedResource(
+        actor, 'TRIP', 'READ_DETAIL', tripResourceContext(result.trip),
+      );
+      return res.status(result.resumed ? 200 : 201).json({
+        success: true,
+        data: buildResourceDto(actor, 'TRIP', result, authorization),
+      });
+    } catch (error) {
+      return sendTripMutationError(res, error, 'create or resume Lead Trip');
+    }
+  },
+);
+
+tripsRouter.post(
+  '/:id/reconcile-lead',
+  requireRole([...commercialTripMutationRoles]),
+  async (req: Request, res: Response) => {
+    try {
+      const actor = actorFromRequest(req);
+      const trip = await tripService.reconcileLeadChanges(req.params.id, actor);
+      const authorization = assertAuthorizedResource(actor, 'TRIP', 'READ_DETAIL', tripResourceContext(trip));
+      return res.status(200).json({ success: true, data: buildResourceDto(actor, 'TRIP', trip, authorization) });
+    } catch (error) {
+      return sendTripMutationError(res, error, 'reconcile Trip with Lead');
     }
   },
 );

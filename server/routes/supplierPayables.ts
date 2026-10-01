@@ -5,9 +5,11 @@ import {
   SupplierPayableService,
   type SupplierPaymentActor,
 } from '../services/supplierPayableService.js';
+import { APP_CONFIG } from '../../src/config.js';
+import { demoSupplierPayableStorage } from '../services/demoBookingWorkflow.js';
 
 export const supplierPayablesRouter = Router();
-const service = new SupplierPayableService();
+const service = new SupplierPayableService(APP_CONFIG.DEMO_MODE ? demoSupplierPayableStorage : undefined);
 const readRoles = ['Founder', 'Admin', 'Accounts', 'Reservations', 'Operations'] as const;
 const paymentRoles = ['Founder', 'Admin', 'Accounts'] as const;
 

@@ -8,8 +8,8 @@ export const MyWorkspaceView: React.FC<{ onNavigate: (section: string, id?: stri
   const { leads, tasks, quotes, bookings } = useData();
 
   // Filter for assigned data
-  const myLeads = leads.filter(l => l.assignedEmployeeId === currentUser.id);
-  const myHotLeads = myLeads.filter(l => l.priority === 'HIGH' || l.priority === 'URGENT');
+  const myLeads = leads.filter(l => l.assignedEmployeeId === currentUser.employeeId);
+  const myHotLeads = myLeads.filter(l => l.priority === 'HOT');
   const myNewLeads = myLeads.filter(l => l.status === 'NEW');
   const myFollowUps = myLeads.filter(l => l.status === 'CONTACTED' || l.status === 'NEGOTIATION');
   const myQuotes = quotes.filter(q => myLeads.some(l => l.id === q.leadId) && (q.status === 'SENT' || q.status === 'DRAFT'));

@@ -93,19 +93,45 @@ accommodationRouter.patch('/suppliers/:id', requireRole([...manageRoles]), async
 
 accommodationRouter.post('/calculate-rate', requireRole([...readRoles]), async (req: Request, res: Response) => {
   try {
-    const { propertyId, roomCategoryId, checkInDate, nights, mealPlan, adults, children, childrenWithBed, childrenWithoutBed } = req.body;
+    const { propertyId, roomCategoryId, checkInDate, nights, mealPlan, adults, children, childrenWithBed, childrenWithoutBed, rateId } = req.body;
     if (!propertyId || !roomCategoryId || !checkInDate || !mealPlan) return res.status(400).json({ error: 'Required accommodation calculation fields are missing.' });
     const data = await inventoryManagementService.accommodationCalculationData(propertyId, roomCategoryId);
     if (!data.property || !data.room || data.room.propertyId !== propertyId) return res.status(404).json({ error: 'Property or room category not found.' });
     if (data.property.status !== 'ACTIVE' || !data.room.active) return res.status(409).json({ error: 'The selected property or room category is inactive.' });
     const activeRates = data.rates.filter((rate) => rate.status === 'ACTIVE');
-    const stay = calculateStayTotal(data.room, activeRates, propertyId, checkInDate, nights, adults, children, childrenWithBed, childrenWithoutBed, mealPlan);
+    const finalNight = new Date(`${checkInDate}T00:00:00Z`);
+    finalNight.setUTCDate(finalNight.getUTCDate() + Math.max(1, Number(nights) || 1) - 1);
+    const finalNightDate = finalNight.toISOString().slice(0, 10);
+    const validRates = activeRates.filter((rate) =>
+      rate.propertyId === propertyId && rate.roomCategoryId === roomCategoryId && rate.mealPlan === mealPlan &&
+      checkInDate >= rate.validFrom.slice(0, 10) && (!rate.validTo || finalNightDate <= rate.validTo.slice(0, 10))
+    );
+    const selectedRate = rateId ? validRates.find((rate) => rate.id === rateId) : undefined;
+    if (rateId && !selectedRate) {
+      return res.status(422).json({
+        error: 'The selected contracted rate does not match the property, room, meal plan, or service date.',
+        code: 'INVENTORY_RATE_MISMATCH',
+      });
+    }
+    const stay = calculateStayTotal(data.room, selectedRate ? [selectedRate] : activeRates, propertyId, checkInDate, nights, adults, children, childrenWithBed, childrenWithoutBed, mealPlan);
     const applied = stay.ratePeriodId ? activeRates.find((rate) => rate.id === stay.ratePeriodId) || null : null;
     const supplier = await inventoryManagementService.supplierSnapshot(data.property.supplierId);
     const full = buildRoleGatedResult(stay, applied, null, data.property.name, data.room.name, 'Admin');
+    const rateOptions = validRates.map((rate) => {
+      const optionStay = calculateStayTotal(data.room!, [rate], propertyId, checkInDate, nights, adults, children, childrenWithBed, childrenWithoutBed, mealPlan);
+      return {
+        id: rate.id,
+        label: `${rate.contractType} · ${rate.validFrom.slice(0, 10)} to ${rate.validTo ? rate.validTo.slice(0, 10) : 'open ended'}`,
+        validFrom: rate.validFrom.slice(0, 10),
+        validTo: rate.validTo ? rate.validTo.slice(0, 10) : null,
+        mealPlan: rate.mealPlan,
+        totalSupplierCost: optionStay.totalAmount,
+      };
+    });
     return res.json({ success: true, data: sanitizeFinancialData({
       ...full,
       rateId: applied?.id,
+      rateOptions,
       supplierId: data.property.supplierId,
       supplierName: supplier?.name,
     }, req.user!.role) });

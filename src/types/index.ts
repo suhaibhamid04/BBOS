@@ -1,4 +1,6 @@
 import { BookingComponentStatus, VoucherStatus } from './booking';
+import type { QuoteShareChannel } from './customerPackage';
+export * from './lead';
 
 export const USER_ROLES = [
   'Founder',
@@ -193,66 +195,7 @@ export type TripType =
   | 'Pilgrimage'
   | 'Custom Private Tour';
 
-export type LeadStatus =
-  | 'NEW'
-  | 'CONTACTED'
-  | 'QUALIFIED'
-  | 'QUOTE_SENT'
-  | 'NEGOTIATION'
-  | 'BOOKED'
-  | 'LOST'
-  | 'NURTURE';
-
 export type Priority = 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
-
-export interface Lead {
-  id: string;
-  customerId: string;
-  companyId?: string;
-  customerName: string;
-  customerPhone: string;
-  customerEmail?: string;
-  source: string;
-  sourcePlatform: 'Meta Ads' | 'Google Ads' | 'Instagram Direct' | 'WhatsApp Inbound' | 'Website Form' | 'Referral' | 'Direct Call' | string;
-  campaignId?: string;
-  adId?: string;
-  contentId?: string;
-  destination: DestinationRegion;
-  travelStartDate: string;
-  travelEndDate: string;
-  travelerCount: number;
-  tripType: TripType;
-  budget: number;
-  hotelPreference?: string;
-  transportPreference?: string;
-  status: LeadStatus;
-  leadScore: number;
-  bookingProbability?: number;
-  assignedEmployeeId: string;
-  assignedEmployeeName: string;
-  assignedManagerId?: string;
-  priority: Priority;
-  lastContactAt: string;
-  nextFollowUpAt: string;
-  notes: string;
-  createdAt: string;
-  updatedAt: string;
-  isDemo?: boolean;
-  scoreReasoning?: string;
-  keyInterests?: string[];
-}
-
-export interface LeadEvent {
-  id: string;
-  leadId: string;
-  actorType: 'HUMAN' | 'AI' | 'SYSTEM';
-  actorId: string;
-  actorName: string;
-  eventType: 'STATUS_CHANGE' | 'NOTE_ADDED' | 'FOLLOWUP_SCHEDULED' | 'AI_ANALYSIS' | 'QUOTE_CREATED' | 'ASSIGNMENT';
-  description: string;
-  timestamp: string;
-  metadata?: Record<string, any>;
-}
 
 export type MessageSenderType = 'CUSTOMER' | 'EMPLOYEE' | 'AI' | 'SYSTEM';
 
@@ -350,12 +293,20 @@ export interface QuoteVersion {
   inclusions?: string[];
   exclusions?: string[];
   termsAndConditions?: string;
+  hotels?: QuoteHotelItem[];
+  transports?: QuoteTransportItem[];
+  activities?: QuoteActivityItem[];
+  backupAccommodations?: QuoteBackupAccommodation[];
+  totalSupplierCost?: number;
+  grossProfit?: number;
+  grossMargin?: number;
 }
 
 export type QuoteStatus = 'DRAFT' | 'PENDING_APPROVAL' | 'SENT' | 'VIEWED' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED';
 
 export interface QuoteHotelItem {
   id?: string;
+  sourceTripItemId?: string;
   hotelId?: string;
   hotelName: string;
   propertyId?: string;
@@ -382,6 +333,7 @@ export interface QuoteHotelItem {
 
 export interface QuoteTransportItem {
   id?: string;
+  sourceTripItemId?: string;
   transportId?: string;
   vehicleCategoryId?: string;
   transportRouteId?: string;
@@ -393,7 +345,7 @@ export interface QuoteTransportItem {
   passengerCount?: number;
   pickupLocation?: string;
   dropoffLocation?: string;
-  rate: number;
+  rate?: number;
   quotedRate?: number;
   supplierCost?: number;
   isFoc?: boolean;
@@ -403,6 +355,7 @@ export interface QuoteTransportItem {
 
 export interface QuoteActivityItem {
   id?: string;
+  sourceTripItemId?: string;
   activityId?: string;
   activityMasterId?: string;
   activityRatePeriodId?: string;
@@ -413,12 +366,29 @@ export interface QuoteActivityItem {
   serviceDate?: string;
   date?: string;
   pax: number;
-  rate: number;
+  rate?: number;
   quotedRate?: number;
   supplierCost?: number;
   isFoc?: boolean;
   focReason?: string;
   specialRequests?: string;
+}
+
+export interface QuoteBackupAccommodation {
+  id: string;
+  sourceTripItemId: string;
+  propertyId: string;
+  propertyName: string;
+  roomCategoryId: string;
+  roomCategoryName: string;
+  ratePeriodId: string;
+  mealPlan: string;
+  checkInDate: string;
+  checkOutDate?: string;
+  nights: number;
+  roomsCount: number;
+  adultsCount: number;
+  childrenCount: number;
 }
 
 export * from './quoteValidation';
@@ -436,6 +406,7 @@ export interface Quote {
   hotels?: QuoteHotelItem[];
   transports?: QuoteTransportItem[];
   activities?: QuoteActivityItem[];
+  backupAccommodations?: QuoteBackupAccommodation[];
   travelerCount: number;
   adults?: number;
   children?: number;
@@ -466,6 +437,10 @@ export interface Quote {
   /** Server-controlled employee attribution. */
   createdByEmployeeId?: string;
   updatedByEmployeeId?: string;
+  /** Server-authored lightweight package-share metadata. */
+  sharedAt?: string;
+  sharedByEmployeeId?: string;
+  shareChannel?: QuoteShareChannel;
   /** Server-issued provenance for the authoritative supplier-cost aggregate. */
   supplierCostSource?: {
     type: 'TRIP';
@@ -506,6 +481,16 @@ export type TripStatus =
  */
 export type TripCostingStatus = 'PENDING' | 'CALCULATED';
 
+export interface TripPackageReview {
+  required: boolean;
+  reason: 'LEAD_COMMERCIAL_DETAILS_CHANGED';
+  changes: Array<{ field: string; before: unknown; after: unknown }>;
+  markedAt: string;
+  markedByEmployeeId: string;
+  resolvedAt?: string;
+  resolvedByEmployeeId?: string;
+}
+
 export interface Trip {
   id: string;
   customerId: string;
@@ -517,15 +502,23 @@ export interface Trip {
   travelerCount: number;
   adults: number;
   children: number;
+  childAges?: number[];
+  focCount?: number;
   tripType: TripType | string;
   status: TripStatus;
   currency: string;
   totalSupplierCost: number;
   costingStatus?: TripCostingStatus;
+  packageReview?: TripPackageReview;
   totalSellingPrice: number;
   grossProfit: number;
   grossMargin: number;
   budget?: number;
+  hotelPreference?: string;
+  mealPlanPreference?: string;
+  vehiclePreference?: string;
+  specialRequirements?: string;
+  leadNotes?: string;
   assignedSalesEmployeeId?: string;
   /** Immutable sales-team snapshot used for TEAM-scoped authorization. */
   salesTeamId?: string;
@@ -1016,3 +1009,4 @@ export {
 // Re-export transport and activity types
 export * from './transport';
 export * from './activity';
+export * from './customerPackage';

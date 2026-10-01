@@ -84,6 +84,15 @@ function harness(trips: Record<string, unknown>[] = []) {
   storage.rawSet('leads', 'lead-team-b', {
     id: 'lead-team-b', customerId: 'customer-1', assignedEmployeeId: 'exec-3',
   });
+  storage.rawSet('leads', 'lead-own-complete', {
+    id: 'lead-own-complete', customerId: 'customer-1', customerName: 'Customer One',
+    customerPhone: '+919999999999', customerEmail: 'customer@example.com',
+    assignedEmployeeId: 'exec-1', destination: 'Kashmir', tripType: 'LEISURE',
+    travelStartDate: '2026-10-01', travelEndDate: '2026-10-03', travelerCount: 3,
+    adults: 2, children: 1, childAges: [7], budget: 1200,
+    hotelPreference: 'Lake-facing 4-star', mealPlanPreference: 'MAP', vehiclePreference: 'Private SUV',
+    specialRequirements: 'Wheelchair assistance', notes: 'Family celebration.',
+  });
   return { storage, service: new TripService(storage) };
 }
 
@@ -99,6 +108,38 @@ async function expectTripError(promise: Promise<unknown>, code: string, statusCo
 }
 
 describe('Stage D2A server-authoritative Trip mutations', () => {
+  test('Lead workflow derives a real Trip and resumes it without creating duplicates', async () => {
+    const { storage, service } = harness();
+    const created = await service.createOrResumeLeadTrip('lead-own-complete', executive);
+    const resumed = await service.createOrResumeLeadTrip('lead-own-complete', executive);
+
+    expect(created.resumed).toBe(false);
+    expect(created.trip).toMatchObject({
+      leadId: 'lead-own-complete', customerId: 'customer-1',
+      assignedSalesEmployeeId: 'exec-1', salesTeamId: 'team-a',
+      destination: 'Kashmir', travelerCount: 3, adults: 2, children: 1, childAges: [7],
+      hotelPreference: 'Lake-facing 4-star', mealPlanPreference: 'MAP', vehiclePreference: 'Private SUV',
+      specialRequirements: 'Wheelchair assistance', leadNotes: 'Family celebration.',
+      costingStatus: 'PENDING', status: 'DRAFT',
+    });
+    expect(created.days).toHaveLength(3);
+    expect(resumed.resumed).toBe(true);
+    expect(resumed.trip.id).toBe(created.trip.id);
+    expect(storage.getAllAuditLogs().filter(log => log.action === 'TRIP_CREATED_FROM_LEAD')).toHaveLength(1);
+  });
+
+  test('Lead workflow enforces canonical OWN scope before creating any Trip', async () => {
+    const { storage, service } = harness();
+    storage.rawUpdate('leads', 'lead-own-complete', { assignedEmployeeId: 'exec-2' });
+
+    await expectTripError(
+      service.createOrResumeLeadTrip('lead-own-complete', executive),
+      'LINKED_LEAD_ACCESS_DENIED',
+      403,
+    );
+    expect(storage.getAllAuditLogs()).toHaveLength(0);
+  });
+
   test('Sales Executive creates an OWN Trip with server-owned scope and financials', async () => {
     const { service } = harness();
     const trip = await service.createTrip(tripInput(), executive);

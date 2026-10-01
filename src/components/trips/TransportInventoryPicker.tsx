@@ -19,7 +19,7 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
   onConfirm,
   onCancel
 }) => {
-  const { vehicleCategories, transportRoutes, destinations } = useData();
+  const { vehicleCategories, transportRoutes, destinations, dataLoadErrors, isLoading } = useData();
   const { currentUser } = useAuth();
   
   const [serviceType, setServiceType] = useState<TransportServiceType>((initialMetadata?.serviceType as TransportServiceType) || 'MULTI_DAY_JOURNEY');
@@ -133,6 +133,20 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
     });
   };
 
+  if (isLoading && vehicleCategories.length === 0) {
+    return <div data-testid="transport-inventory-picker" className="bg-white border border-slate-200 rounded-xl p-6 text-sm text-slate-600">Loading transport inventory…</div>;
+  }
+
+  if (dataLoadErrors.transport) {
+    return (
+      <div data-testid="transport-inventory-picker" className="bg-white border border-rose-200 rounded-xl p-6">
+        <p className="text-sm font-bold text-rose-800">Transport inventory could not be loaded</p>
+        <p className="text-xs text-rose-700 mt-1">{dataLoadErrors.transport}</p>
+        <button onClick={onCancel} className="mt-4 text-xs font-bold text-slate-600">Cancel</button>
+      </div>
+    );
+  }
+
   if (activeVehicles.length === 0) {
     return (
       <div data-testid="transport-inventory-picker" className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full overflow-hidden">
@@ -145,7 +159,7 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
           <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
             <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
             <div>
-              <p className="text-sm font-bold text-amber-800">No Active Vehicles Found</p>
+              <p className="text-sm font-bold text-amber-800">No transport inventory configured</p>
               <p className="text-xs text-amber-700 mt-1">Add active vehicle categories in the Inventory section before adding transport to a trip.</p>
             </div>
           </div>

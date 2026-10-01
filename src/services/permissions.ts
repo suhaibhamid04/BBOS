@@ -272,6 +272,19 @@ export const PRESET_USERS: UserProfile[] = [
     lastLogin: new Date().toISOString()
   },
   {
+    id: 'emp-res-02',
+    employeeId: 'emp-res-02',
+    firebaseUid: 'demo:emp-res-02',
+    name: 'Meher Khan',
+    email: 'meher.reservations@bookingbridge.com',
+    phone: '+91 94190 00010',
+    role: 'Reservations',
+    department: 'Reservations & Supplier Relations',
+    active: true,
+    createdAt: '2025-03-05T00:00:00Z',
+    lastLogin: new Date().toISOString()
+  },
+  {
     id: 'emp-mkt-01',
     employeeId: 'emp-mkt-01',
     firebaseUid: 'demo:emp-mkt-01',

@@ -43,8 +43,8 @@ export const CommandCenterDashboard: React.FC<DashboardProps> = ({ onNavigate })
   // Metrics computation
   const totalRevenue = bookings.reduce((sum, b) => sum + (b.totalAmount || 0), 0);
   const newLeads = leads.filter(l => l.status === 'NEW');
-  const negotiationLeads = leads.filter(l => l.status === 'NEGOTIATION' || l.status === 'QUOTE_SENT');
-  const bookedLeads = leads.filter(l => l.status === 'BOOKED');
+  const negotiationLeads = leads.filter(l => l.status === 'NEGOTIATION' || l.status === 'QUOTE_SHARED');
+  const bookedLeads = leads.filter(l => l.status === 'CONVERTED');
   const conversionRate = leads.length > 0 ? ((bookedLeads.length / leads.length) * 100).toFixed(1) : '18.4';
   const activeQuotes = quotes.filter(q => q.status === 'SENT' || q.status === 'DRAFT');
 
@@ -118,7 +118,7 @@ export const CommandCenterDashboard: React.FC<DashboardProps> = ({ onNavigate })
                 <span>New ({newLeads.length || 42})</span>
               </div>
 
-              {leads.filter(l => l.status === 'NEW' || l.status === 'QUALIFIED').slice(0, 2).map((lead) => (
+              {leads.filter(l => l.status === 'NEW' || l.status === 'IN_PROGRESS').slice(0, 2).map((lead) => (
                 <div
                   key={lead.id}
                   onClick={() => onNavigate('leads', lead.id)}
@@ -154,7 +154,7 @@ export const CommandCenterDashboard: React.FC<DashboardProps> = ({ onNavigate })
                 <span>Negotiation ({negotiationLeads.length || 12})</span>
               </div>
 
-              {leads.filter(l => l.status === 'QUOTE_SENT' || l.status === 'NEGOTIATION').slice(0, 2).map((lead) => (
+              {leads.filter(l => l.status === 'QUOTE_SHARED' || l.status === 'NEGOTIATION').slice(0, 2).map((lead) => (
                 <div
                   key={lead.id}
                   onClick={() => onNavigate('leads', lead.id)}
@@ -174,7 +174,7 @@ export const CommandCenterDashboard: React.FC<DashboardProps> = ({ onNavigate })
                 </div>
               ))}
 
-              {leads.filter(l => l.status === 'QUOTE_SENT' || l.status === 'NEGOTIATION').length === 0 && (
+              {leads.filter(l => l.status === 'QUOTE_SHARED' || l.status === 'NEGOTIATION').length === 0 && (
                 <div className="p-3 bg-white border border-[#7056EE]/30 rounded-xl shadow-sm space-y-2 relative">
                   <div className="absolute top-2 right-2 w-2 h-2 bg-[#7056EE] rounded-full animate-pulse"></div>
                   <div className="flex justify-between items-start">

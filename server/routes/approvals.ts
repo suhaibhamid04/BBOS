@@ -2,13 +2,25 @@ import { Router, type Request, type Response } from 'express';
 import { requireRole } from '../middleware/auth.js';
 import {
   ApprovalInboxError,
+  InMemoryApprovalInboxStorage,
   ApprovalInboxService,
   type ApprovalInboxActor,
 } from '../services/approvalInboxService.js';
 import { LiveOperationsError } from '../services/liveOperationsService.js';
+import { APP_CONFIG } from '../../src/config.js';
 
 export const approvalsRouter = Router();
-const approvalInboxService = new ApprovalInboxService();
+const approvalInboxService = new ApprovalInboxService(
+  APP_CONFIG.DEMO_MODE
+    ? new InMemoryApprovalInboxStorage({
+        bookings: [],
+        emergencySpends: [],
+        supplierRateDiscrepancies: [],
+        operationalChanges: [],
+        quotes: [],
+      })
+    : undefined,
+);
 
 const INBOX_ROLES = [
   'Founder', 'Admin', 'Accounts', 'Sales Manager', 'Sales Executive', 'Reservations', 'Operations',

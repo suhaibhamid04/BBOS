@@ -24,6 +24,7 @@ const SUPPORTED_ACTIONS: Record<AuthorizationResource, readonly AuthorizationAct
     'RECORD_PAYMENT',
     'VERIFY_PAYMENT',
     'VOID_PAYMENT',
+    'ASSIGN_RESERVATIONS',
     'ASSIGN_OPERATIONS',
     'MANAGE_OPERATIONAL_ISSUE',
     'REQUEST_OPERATIONAL_SPEND',
@@ -219,6 +220,10 @@ function workflowDecision(
   }
 
   if (action === 'CONVERT_TO_BOOKING') return requireState(CONVERTIBLE_QUOTE_STATES);
+
+  if (resource === 'BOOKING' && action === 'ASSIGN_RESERVATIONS') {
+    return requireState(['PENDING_PAYMENT', 'CONFIRMED']);
+  }
 
   if (principal.role === 'Reservations' && (resource === 'TRIP' || resource === 'BOOKING')) {
     if (action === 'UPDATE_RESERVATIONS') return requireState(['CONFIRMED', 'IN_OPERATIONS']);

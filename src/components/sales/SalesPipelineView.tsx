@@ -9,13 +9,13 @@ export const SalesPipelineView: React.FC = () => {
   const stages: LeadStatus[] = [
     'NEW',
     'CONTACTED',
-    'QUALIFIED',
-    'QUOTE_SENT',
+    'IN_PROGRESS',
+    'QUOTE_SHARED',
     'NEGOTIATION',
-    'BOOKED',
+    'CONVERTED',
   ];
 
-  const totalPipelineValue = leads.reduce((acc, l) => acc + l.budget, 0);
+  const totalPipelineValue = leads.reduce((acc, l) => acc + (l.budget || 0), 0);
 
   return (
     <div id="sales-pipeline-view" className="space-y-6">
@@ -39,7 +39,7 @@ export const SalesPipelineView: React.FC = () => {
         <div className="flex space-x-4 min-w-[1100px]">
           {stages.map((stage, idx) => {
             const stageLeads = leads.filter((l) => l.status === stage);
-            const stageValue = stageLeads.reduce((sum, l) => sum + l.budget, 0);
+            const stageValue = stageLeads.reduce((sum, l) => sum + (l.budget || 0), 0);
             const nextStage = stages[idx + 1];
 
             return (
@@ -76,7 +76,7 @@ export const SalesPipelineView: React.FC = () => {
 
                       <div className="text-[11px] text-slate-600 space-y-0.5">
                         <p className="font-semibold text-[#7056EE]">{lead.destination} • {lead.tripType}</p>
-                        <p className="font-bold text-slate-900">₹{lead.budget.toLocaleString('en-IN')}</p>
+                        <p className="font-bold text-slate-900">{lead.budget === undefined ? 'Budget TBD' : `₹${lead.budget.toLocaleString('en-IN')}`}</p>
                       </div>
 
                       {nextStage && (

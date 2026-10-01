@@ -3,9 +3,14 @@ import { BookingDetailResponse } from '../../types/bookingApi';
 import { useAuth } from '../../context/AuthContext';
 import {
   FileText, MapPin, Calendar, CreditCard, ChevronRight, Activity, Car, Bed,
-  CheckCircle, XCircle, Truck, AlertTriangle, Zap, ChevronDown, ChevronUp, Loader2
+  CheckCircle, XCircle, Truck, AlertTriangle, Zap, ChevronDown, ChevronUp, Loader2, UserCheck
 } from 'lucide-react';
 import { bookingMutationHeaders, bookingReadHeaders } from '../../services/auth/authenticatedApi';
+import {
+  assignReservationsEmployee,
+  listReservationsAssignees,
+  type ReservationsAssignee,
+} from '../../services/booking/reservationsAssignmentApi';
 
 interface BookingDetailPanelProps {
   bookingId: string;
@@ -34,6 +39,7 @@ const COMPONENT_BADGE: Record<string, string> = {
 
 export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingId, onClose }) => {
   const { currentUser, permissions } = useAuth();
+  const isAdmin = currentUser.role === 'Admin' || currentUser.role === 'Founder';
   const [data, setData] = useState<BookingDetailResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,6 +48,8 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
   const [expanded, setExpanded] = useState<ServiceExpansion>({});
   const [cancelModalOpen, setCancelModalOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
+  const [reservationsAssignees, setReservationsAssignees] = useState<ReservationsAssignee[]>([]);
+  const [selectedReservationsEmployeeId, setSelectedReservationsEmployeeId] = useState('');
 
   // Per-service form state (keyed by service id)
   const [serviceForms, setServiceForms] = useState<Record<string, Record<string, string>>>({});
@@ -61,11 +69,22 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
     } finally {
       setLoading(false);
     }
-  }, [bookingId, currentUser.id]);
+  }, [bookingId, currentUser.employeeId]);
 
   useEffect(() => {
     if (bookingId) fetchDetail();
   }, [bookingId, fetchDetail]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    void listReservationsAssignees(currentUser.employeeId)
+      .then(setReservationsAssignees)
+      .catch(error => setActionError(error instanceof Error ? error.message : 'Unable to load Reservations employees.'));
+  }, [isAdmin, currentUser.employeeId]);
+
+  useEffect(() => {
+    setSelectedReservationsEmployeeId(data?.booking.assignedReservationsEmployeeId || '');
+  }, [data?.booking.assignedReservationsEmployeeId]);
 
   const apiPost = async (path: string, body?: any) => {
     const res = await fetch(`/api/bookings/${bookingId}${path}`, {
@@ -123,6 +142,28 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
     setActionError(null);
     try {
       await apiPost('/vouchers/generate');
+      await fetchDetail();
+    } catch (err: any) {
+      setActionError(err.message);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleReservationsAssignment = async () => {
+    if (!data || !selectedReservationsEmployeeId) return;
+    setActionLoading('reservations-assignment');
+    setActionError(null);
+    try {
+      await assignReservationsEmployee(
+        bookingId,
+        {
+          employeeId: selectedReservationsEmployeeId,
+          expectedUpdatedAt: data.booking.updatedAt,
+          reason: 'Assigned through Booking detail',
+        },
+        currentUser.employeeId,
+      );
       await fetchDetail();
     } catch (err: any) {
       setActionError(err.message);
@@ -189,7 +230,6 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
 
   const canManageOps = permissions.canManageOperations;
   const canManageSupplierConfirmations = permissions.canManageReservations;
-  const isAdmin = currentUser.role === 'Admin' || currentUser.role === 'Founder';
 
   if (loading) return (
     <div className="h-full flex items-center justify-center bg-slate-50/50 p-8 rounded-r-2xl border-l border-slate-200">
@@ -212,7 +252,7 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
   const allConfirmed = booking.confirmationProgress?.allConfirmed;
 
   return (
-    <div className="h-full bg-white border-l border-slate-200 flex flex-col w-full rounded-r-2xl shadow-[-10px_0_30px_rgba(0,0,0,0.02)] relative z-10 overflow-hidden">
+    <div data-testid="booking-detail" className="h-full bg-white border-l border-slate-200 flex flex-col w-full rounded-r-2xl shadow-[-10px_0_30px_rgba(0,0,0,0.02)] relative z-10 overflow-hidden">
       {/* Header */}
       <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
         <div>
@@ -294,6 +334,61 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
         </div>
       )}
 
+      <div className={`mx-5 mt-3 px-4 py-3 border rounded-xl ${
+        booking.assignedReservationsEmployeeId
+          ? 'bg-emerald-50 border-emerald-200'
+          : 'bg-amber-50 border-amber-200'
+      }`} data-testid="reservations-assignment-panel">
+        <div className="flex items-center gap-2 text-[10px] uppercase font-bold tracking-wider text-slate-500">
+          <UserCheck className="w-3.5 h-3.5" /> Reservations handoff
+        </div>
+        {isAdmin ? (
+          <div className="mt-2 flex items-center gap-2">
+            <select
+              aria-label="Reservations employee"
+              data-testid="reservations-assignee-select"
+              value={selectedReservationsEmployeeId}
+              onChange={event => setSelectedReservationsEmployeeId(event.target.value)}
+              disabled={!['PENDING_PAYMENT', 'CONFIRMED'].includes(booking.status) || !!actionLoading}
+              className="min-w-0 flex-1 px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm"
+            >
+              <option value="">Select an active Reservations employee</option>
+              {reservationsAssignees.map(employee => (
+                <option key={employee.employeeId} value={employee.employeeId}>
+                  {employee.name} ({employee.employeeId})
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              data-testid="assign-reservations-button"
+              onClick={handleReservationsAssignment}
+              disabled={
+                !selectedReservationsEmployeeId ||
+                !['PENDING_PAYMENT', 'CONFIRMED'].includes(booking.status) ||
+                !!actionLoading ||
+                selectedReservationsEmployeeId === booking.assignedReservationsEmployeeId
+              }
+              className="px-4 py-2 bg-[#7056EE] hover:bg-[#5f46d6] disabled:opacity-50 text-white rounded-lg text-xs font-bold"
+            >
+              {actionLoading === 'reservations-assignment' ? 'Saving…' : booking.assignedReservationsEmployeeId ? 'Reassign' : 'Assign'}
+            </button>
+          </div>
+        ) : (
+          <div className="mt-1 text-sm font-semibold text-slate-700">
+            {booking.assignedReservationsEmployeeId === currentUser.employeeId
+              ? `Assigned to you (${currentUser.employeeId})`
+              : booking.assignedReservationsEmployeeId || 'Reservations assignment required'}
+          </div>
+        )}
+        {isAdmin && !booking.assignedReservationsEmployeeId && (
+          <div className="mt-2 text-xs font-semibold text-amber-800">RESERVATIONS_ASSIGNMENT_REQUIRED</div>
+        )}
+        {isAdmin && !['PENDING_PAYMENT', 'CONFIRMED'].includes(booking.status) && (
+          <div className="mt-2 text-xs text-slate-500">Assignment is locked in this Booking lifecycle state.</div>
+        )}
+      </div>
+
       <div className="flex-1 overflow-y-auto p-5 space-y-6">
         {/* Customer & Trip */}
         <div className="grid grid-cols-2 gap-4">
@@ -349,7 +444,7 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
           <h3 className="text-sm font-bold text-slate-900 mb-3">Fulfilment Services</h3>
           <div className="space-y-3">
             {accommodations.map(acc => (
-              <div key={acc.id} className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+              <div key={acc.id} data-testid={`booking-accommodation-${acc.id}`} className="bg-white border border-slate-200 rounded-xl overflow-hidden">
                 <div className="p-4 flex gap-4 items-start">
                   <div className="bg-orange-100 p-2 rounded-lg text-orange-600"><Bed className="w-4 h-4" /></div>
                   <div className="flex-1">
@@ -399,6 +494,7 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
                       <div>
                         <label className="text-[10px] font-bold text-slate-500 uppercase">Confirmation Reference</label>
                         <input
+                          data-testid={`accommodation-confirmation-reference-${acc.id}`}
                           className="mt-1 w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm"
                           placeholder="e.g. HRS-123456"
                           value={serviceForms[acc.id]?.supplierConfirmationCode || ''}
@@ -523,7 +619,7 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
             ))}
 
             {transports.map(trans => (
-              <div key={trans.id} className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+              <div key={trans.id} data-testid={`booking-transport-${trans.id}`} className="bg-white border border-slate-200 rounded-xl overflow-hidden">
                 <div className="p-4 flex gap-4 items-start">
                   <div className="bg-blue-100 p-2 rounded-lg text-blue-600"><Car className="w-4 h-4" /></div>
                   <div className="flex-1">
@@ -603,7 +699,7 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
             ))}
 
             {activities.map(act => (
-              <div key={act.id} className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+              <div key={act.id} data-testid={`booking-activity-${act.id}`} className="bg-white border border-slate-200 rounded-xl overflow-hidden">
                 <div className="p-4 flex gap-4 items-start">
                   <div className="bg-rose-100 p-2 rounded-lg text-rose-600"><Activity className="w-4 h-4" /></div>
                   <div className="flex-1">

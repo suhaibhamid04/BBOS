@@ -57,6 +57,23 @@ function sendQuoteError(res: Response, error: unknown, operation: string) {
   return res.status(500).json({ error: `Failed to ${operation}` });
 }
 
+quotesRouter.get(
+  '/trips/:tripId/backup-accommodations',
+  requireRole(['Founder', 'Admin', 'Sales Manager', 'Sales Executive']),
+  async (req: Request, res: Response) => {
+    try {
+      const data = await quoteService.getBackupAccommodationOptions(
+        req.params.tripId,
+        req.query.sourceTripItemId,
+        actorFromRequest(req),
+      );
+      return res.status(200).json({ success: true, data });
+    } catch (error) {
+      return sendQuoteError(res, error, 'load Quote backup accommodation options');
+    }
+  },
+);
+
 quotesRouter.post(
   '/',
   requireRole(['Founder', 'Admin', 'Sales Manager', 'Sales Executive']),
@@ -87,6 +104,40 @@ quotesRouter.patch(
       return res.status(200).json({ success: true, data: buildQuoteDto(quote, authorization) });
     } catch (error) {
       return sendQuoteError(res, error, 'update Quote');
+    }
+  },
+);
+
+quotesRouter.get(
+  '/:id/customer-package',
+  requireRole(['Founder', 'Admin', 'Sales Manager', 'Sales Executive']),
+  async (req: Request, res: Response) => {
+    try {
+      const customerPackage = await quoteService.getCustomerPackage(req.params.id, actorFromRequest(req));
+      return res.status(200).json({ success: true, data: customerPackage });
+    } catch (error) {
+      return sendQuoteError(res, error, 'generate customer package');
+    }
+  },
+);
+
+quotesRouter.post(
+  '/:id/share',
+  requireRole(['Founder', 'Admin', 'Sales Manager', 'Sales Executive']),
+  async (req: Request, res: Response) => {
+    try {
+      const actor = actorFromRequest(req);
+      const result = await quoteService.shareQuote(req.params.id, req.body, actor);
+      const authorization = assertAuthorizedResource(actor, 'QUOTE', 'READ_DETAIL', quoteResourceContext(result.quote));
+      return res.status(200).json({
+        success: true,
+        data: {
+          quote: buildQuoteDto(result.quote, authorization),
+          customerPackage: result.customerPackage,
+        },
+      });
+    } catch (error) {
+      return sendQuoteError(res, error, 'share customer package');
     }
   },
 );

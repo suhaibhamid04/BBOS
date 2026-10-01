@@ -39,6 +39,20 @@ function harness(trips = [trip('trip-own')], days = [day('day-own')]) {
   return { storage, service: new TripService(storage) };
 }
 
+function seedInventory(storage: InMemoryConversionStorageProvider) {
+  storage.rawSet('suppliers', 'supplier-1', { id: 'supplier-1', name: 'Valley Supplier', active: true });
+  storage.rawSet('accommodation_properties', 'property-1', { id: 'property-1', name: 'Valley Hotel', supplierId: 'supplier-1', status: 'ACTIVE' });
+  storage.rawSet('room_categories', 'room-1', { id: 'room-1', propertyId: 'property-1', name: 'Premier Room', active: true });
+  storage.rawSet('rate_periods', 'rate-1', { id: 'rate-1', propertyId: 'property-1', roomCategoryId: 'room-1', mealPlan: 'MAP', validFrom: '2026-10-01', validTo: '2026-10-31', status: 'ACTIVE' });
+  storage.rawSet('accommodation_properties', 'property-2', { id: 'property-2', name: 'Lake Hotel', supplierId: 'supplier-1', status: 'ACTIVE' });
+  storage.rawSet('room_categories', 'room-2', { id: 'room-2', propertyId: 'property-2', name: 'Lake Suite', active: true });
+  storage.rawSet('rate_periods', 'rate-2', { id: 'rate-2', propertyId: 'property-2', roomCategoryId: 'room-2', mealPlan: 'CP', validFrom: '2026-10-01', validTo: '2026-10-31', status: 'ACTIVE' });
+  storage.rawSet('vehicle_categories', 'vehicle-1', { id: 'vehicle-1', name: 'Innova', displayName: 'Innova', active: true });
+  storage.rawSet('transport_rate_periods', 'transport-rate-1', { id: 'transport-rate-1', vehicleCategoryId: 'vehicle-1', supplierId: 'supplier-1', serviceType: 'MULTI_DAY_JOURNEY', pricingUnit: 'PER_DAY', validFrom: '2026-10-01', validTo: '2026-10-31', status: 'ACTIVE' });
+  storage.rawSet('activity_masters', 'activity-1', { id: 'activity-1', name: 'Shikara Ride', duration: '1 Hour', active: true });
+  storage.rawSet('activity_rate_periods', 'activity-rate-1', { id: 'activity-rate-1', activityId: 'activity-1', supplierId: 'supplier-1', pricingModel: 'PER_PERSON', validFrom: '2026-10-01', validTo: '2026-10-31', status: 'ACTIVE' });
+}
+
 async function expectError(promise: Promise<unknown>, code: string, status = 403) {
   try {
     await promise;
@@ -107,6 +121,58 @@ describe('Stage D2B server-authoritative Trip itinerary and deletion mutations',
     expect(storage.rawGet('itinerary_days', 'day-other')).toEqual(otherDay);
   });
 
+  test('inventory-backed items persist stable authoritative IDs, snapshots, and remain editable', async () => {
+    const { storage, service } = harness(); seedInventory(storage);
+    const created = await service.addItineraryItem('day-own', {
+      type: 'HOTEL', title: 'Client label', description: 'Client description', inventoryId: 'forged',
+      metadata: { inventoryType: 'ACCOMMODATION', propertyId: 'property-1', roomCategoryId: 'room-1', rateId: 'rate-1', mealPlan: 'MAP', checkInDate: '2026-10-02', nights: 2, rooms: 1, adults: 2, children: 0, childrenWithBed: 0, childrenWithoutBed: 0 },
+    }, executive);
+    expect(created.item.inventoryId).toBe('property-1');
+    expect(created.item.metadata?.rateId).toBe('rate-1');
+    expect(created.item.metadata?.supplierId).toBe('supplier-1');
+    expect(created.item.title).toBe('Valley Hotel — Premier Room — MAP');
+
+    const updated = await service.updateItineraryItem('day-own', created.item.id, {
+      type: 'HOTEL', title: 'Ignored', description: 'Ignored',
+      metadata: { inventoryType: 'ACCOMMODATION', propertyId: 'property-2', roomCategoryId: 'room-2', rateId: 'rate-2', mealPlan: 'CP', checkInDate: '2026-10-03', nights: 3, rooms: 2, adults: 2, children: 0, childrenWithBed: 0, childrenWithoutBed: 0 },
+    }, executive);
+    expect(updated.item.id).toBe(created.item.id);
+    expect(updated.item.inventoryId).toBe('property-2');
+    expect(updated.item.metadata?.propertyName).toBe('Lake Hotel');
+    expect(updated.item.metadata?.roomCategoryName).toBe('Lake Suite');
+    expect(updated.item.metadata?.mealPlan).toBe('CP');
+    expect(updated.item.metadata?.rateId).toBe('rate-2');
+    expect(updated.item.metadata?.nights).toBe(3);
+    expect(updated.item.metadata?.rooms).toBe(2);
+    expect(updated.trip.costingStatus).toBe('PENDING');
+    expect(updated.day.items).toHaveLength(1);
+  });
+
+  test('hotel rate must cover every night and a failed replacement preserves the original item', async () => {
+    const { storage, service } = harness(); seedInventory(storage);
+    storage.rawSet('rate_periods', 'short-rate', { id: 'short-rate', propertyId: 'property-2', roomCategoryId: 'room-2', mealPlan: 'CP', validFrom: '2026-10-01', validTo: '2026-10-03', status: 'ACTIVE' });
+    const created = await service.addItineraryItem('day-own', {
+      type: 'HOTEL', title: 'Original', description: 'Original',
+      metadata: { inventoryType: 'ACCOMMODATION', propertyId: 'property-1', roomCategoryId: 'room-1', rateId: 'rate-1', mealPlan: 'MAP', checkInDate: '2026-10-02', nights: 2, rooms: 1, adults: 2, children: 0, childrenWithBed: 0, childrenWithoutBed: 0 },
+    }, executive);
+    const before = storage.rawGet('itinerary_days', 'day-own');
+    await expectError(service.updateItineraryItem('day-own', created.item.id, {
+      type: 'HOTEL', title: 'Replacement', description: 'Replacement',
+      metadata: { inventoryType: 'ACCOMMODATION', propertyId: 'property-2', roomCategoryId: 'room-2', rateId: 'short-rate', mealPlan: 'CP', checkInDate: '2026-10-03', nights: 2, rooms: 1, adults: 2, children: 0, childrenWithBed: 0, childrenWithoutBed: 0 },
+    }, executive), 'INVENTORY_RATE_MISMATCH', 422);
+    expect(storage.rawGet('itinerary_days', 'day-own')).toEqual(before);
+  });
+
+  test('inventory-backed item rejects a mismatched rate without partial writes', async () => {
+    const originalDay = day('day-own'); const { storage, service } = harness([trip('trip-own')], [originalDay]); seedInventory(storage);
+    await expectError(service.addItineraryItem('day-own', {
+      type: 'TRANSPORT', title: 'Innova', description: 'Day vehicle',
+      metadata: { inventoryType: 'TRANSPORT', vehicleCategoryId: 'vehicle-1', rateId: 'activity-rate-1', serviceType: 'MULTI_DAY_JOURNEY', startDate: '2026-10-02', vehicleDays: 1 },
+    }, executive), 'INVENTORY_REFERENCE_NOT_FOUND', 422);
+    expect(storage.rawGet('itinerary_days', 'day-own')).toEqual(originalDay);
+    expect(storage.rawGet('trips', 'trip-own')?.costingStatus).toBe('CALCULATED');
+  });
+
   test('Trip deletion is resource-scoped and atomically removes its itinerary only when workflow permits', async () => {
     const ownDay = day('day-own');
     const { storage, service } = harness([trip('trip-own'), trip('trip-other', { assignedSalesEmployeeId: 'exec-2' })], [ownDay, day('day-other', 'trip-other')]);
@@ -138,14 +204,12 @@ describe('Stage D2B server-authoritative Trip itinerary and deletion mutations',
     const pending = trip('trip-own', { costingStatus: 'PENDING', totalSupplierCost: 0 });
     const { storage } = harness([pending], []);
     const quotes = new QuoteService(storage);
-    const quote = await quotes.createQuote({
+    await expectError(quotes.createQuote({
       leadId: 'lead-1', customerId: 'customer-1', customerName: 'Customer One', destination: 'Kashmir',
       tripId: 'trip-own', travelerCount: 2, totalAmount: 1_000, discountAmount: 0,
       validUntil: '2026-10-31', hotels: [], transports: [], activities: [],
-    }, executive);
-    expect(quote.totalSupplierCost).toBeUndefined();
-    expect(quote.grossProfit).toBeUndefined();
-    await expectError(quotes.updateQuote(quote.id, { status: 'SENT' }, executive), 'QUOTE_FINANCIALS_INCOMPLETE', 422);
+    }, executive), 'TRIP_COSTING_INCOMPLETE', 422);
+    expect(storage.getAllAuditLogs()).toHaveLength(0);
   });
 
   test('Firestore rules prohibit direct browser itinerary and Trip deletion writes', async () => {

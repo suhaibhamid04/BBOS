@@ -617,8 +617,8 @@ describe('BBOS Phase 2B-5 Stage 4 — Quote-to-Booking Conversion Engine', () =>
     expect(storage.rawGet('quotes', quote.id).status).toBe('ACCEPTED');
   });
 
-  // 21. Lead changes to BOOKED only after successful conversion
-  it('21. Lead changes to BOOKED only after successful conversion', async () => {
+  // 21. Lead changes to CONVERTED only after successful conversion
+  it('21. Lead changes to CONVERTED only after successful conversion', async () => {
     const quote = createBaseQuote();
     storage.rawSet('quotes', quote.id, quote);
     storage.rawSet('leads', quote.leadId, { id: quote.leadId, status: 'QUOTE_SENT' });
@@ -627,7 +627,7 @@ describe('BBOS Phase 2B-5 Stage 4 — Quote-to-Booking Conversion Engine', () =>
       currentDate: '2026-09-15',
     });
 
-    expect(storage.rawGet('leads', quote.leadId).status).toBe('BOOKED');
+    expect(storage.rawGet('leads', quote.leadId).status).toBe('CONVERTED');
   });
 
   // 22. Legacy collections are untouched

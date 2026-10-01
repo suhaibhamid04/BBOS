@@ -13,7 +13,7 @@ interface HotelInventoryPickerProps {
   childrenWithBed: number;
   childrenWithoutBed: number;
   initialMetadata?: AccommodationItineraryMetadata;
-  onConfirm: (metadata: AccommodationItineraryMetadata) => void;
+  onConfirm: (metadata: AccommodationItineraryMetadata) => void | Promise<void>;
   onCancel: () => void;
 }
 
@@ -28,13 +28,14 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
   onConfirm,
   onCancel
 }) => {
-  const { accommodationProperties, roomCategories } = useData();
+  const { accommodationProperties, roomCategories, dataLoadErrors, isLoading } = useData();
   const { currentUser } = useAuth();
   
   const [destinationFilter, setDestinationFilter] = useState<string>('');
   const [selectedPropertyId, setSelectedPropertyId] = useState<string>(initialMetadata?.propertyId || '');
   const [selectedRoomId, setSelectedRoomId] = useState<string>(initialMetadata?.roomCategoryId || '');
   const [selectedMealPlan, setSelectedMealPlan] = useState<MealPlanType>(initialMetadata?.mealPlan || 'MAP');
+  const [selectedRateId, setSelectedRateId] = useState<string>(initialMetadata?.rateId || '');
   const [roomCount, setRoomCount] = useState(initialMetadata?.rooms || 1);
   
   const [isCalculating, setIsCalculating] = useState(false);
@@ -92,7 +93,8 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
           children: childrenCount,
           childrenWithBed,
           childrenWithoutBed,
-          mealPlan: selectedMealPlan
+          mealPlan: selectedMealPlan,
+          ...(selectedRateId ? { rateId: selectedRateId } : {}),
         })
       });
 
@@ -103,12 +105,13 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
       }
       
       setCalculatedRate(data.data);
+      if (data.data?.rateId && data.data.rateId !== selectedRateId) setSelectedRateId(data.data.rateId);
     } catch (err: any) {
       setError(err.message);
     } finally {
       setIsCalculating(false);
     }
-  }, [selectedPropertyId, selectedRoomId, selectedMealPlan, checkInDate, nights, adults, childrenCount, childrenWithBed, childrenWithoutBed, currentUser.employeeId]);
+  }, [selectedPropertyId, selectedRoomId, selectedMealPlan, selectedRateId, checkInDate, nights, adults, childrenCount, childrenWithBed, childrenWithoutBed, currentUser.employeeId]);
 
   useEffect(() => {
     if (selectedPropertyId && selectedRoomId) {
@@ -116,33 +119,52 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
     }
   }, [calculateRate]);
 
-  const handleSelect = () => {
+  const handleSelect = async () => {
     if (!calculatedRate?.available || !calculatedRate.rateId || !selectedPropertyId || !selectedRoomId) return;
     const checkOut = new Date(`${checkInDate}T00:00:00Z`);
     checkOut.setUTCDate(checkOut.getUTCDate() + nights);
     
-    onConfirm({
-      inventoryType: 'ACCOMMODATION',
-      propertyId: selectedPropertyId,
-      propertyName: calculatedRate.propertyName || 'Unknown Property',
-      roomCategoryId: selectedRoomId,
-      roomCategoryName: calculatedRate.roomCategoryName || 'Unknown Room',
-      rateId: calculatedRate.rateId,
-      supplierId: calculatedRate.supplierId,
-      supplierName: calculatedRate.supplierName,
-      mealPlan: selectedMealPlan,
-      checkInDate,
-      checkOutDate: checkOut.toISOString().slice(0, 10),
-      nights,
-      rooms: roomCount,
-      adults,
-      children: childrenCount,
-      childrenWithBed,
-      childrenWithoutBed,
-      needsConfirmation: !!calculatedRate.needsConfirmation,
-      taxDescription: calculatedRate.taxDescription || 'Taxes Extra'
-    });
+    try {
+      setError(null);
+      await onConfirm({
+        inventoryType: 'ACCOMMODATION',
+        propertyId: selectedPropertyId,
+        propertyName: calculatedRate.propertyName || 'Unknown Property',
+        roomCategoryId: selectedRoomId,
+        roomCategoryName: calculatedRate.roomCategoryName || 'Unknown Room',
+        rateId: calculatedRate.rateId,
+        supplierId: calculatedRate.supplierId,
+        supplierName: calculatedRate.supplierName,
+        mealPlan: selectedMealPlan,
+        checkInDate,
+        checkOutDate: checkOut.toISOString().slice(0, 10),
+        nights,
+        rooms: roomCount,
+        adults,
+        children: childrenCount,
+        childrenWithBed,
+        childrenWithoutBed,
+        needsConfirmation: !!calculatedRate.needsConfirmation,
+        taxDescription: calculatedRate.taxDescription || 'Taxes Extra'
+      });
+    } catch (selectionError) {
+      setError(selectionError instanceof Error ? selectionError.message : 'The hotel change could not be saved.');
+    }
   };
+
+  if (isLoading && accommodationProperties.length === 0) {
+    return <div data-testid="hotel-inventory-picker" className="bg-white border border-slate-200 rounded-xl p-6 text-sm text-slate-600">Loading accommodation inventory…</div>;
+  }
+
+  if (dataLoadErrors.accommodation) {
+    return (
+      <div data-testid="hotel-inventory-picker" className="bg-white border border-rose-200 rounded-xl p-6 shadow-sm max-w-2xl mx-auto">
+        <p className="text-sm font-bold text-rose-800">Accommodation inventory could not be loaded</p>
+        <p className="text-xs text-rose-700 mt-1">{dataLoadErrors.accommodation}</p>
+        <button onClick={onCancel} className="mt-4 text-xs font-bold text-slate-600">Cancel</button>
+      </div>
+    );
+  }
 
   if (activeProperties.length === 0) {
     return (
@@ -157,7 +179,7 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
         <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
           <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
           <div>
-            <p className="text-sm font-bold text-amber-800">No Active Properties Found</p>
+            <p className="text-sm font-bold text-amber-800">No accommodation inventory configured</p>
             <p className="text-xs text-amber-700 mt-1">Add active accommodation properties in the Inventory section before selecting hotels for a trip.</p>
           </div>
         </div>
@@ -199,7 +221,7 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
             <select
               data-testid="trip-hotel-property"
               value={selectedPropertyId}
-              onChange={(e) => setSelectedPropertyId(e.target.value)}
+              onChange={(e) => { setSelectedPropertyId(e.target.value); setSelectedRoomId(''); setSelectedRateId(''); }}
               className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-[#7056EE]"
             >
               <option value="" disabled>Select Property</option>
@@ -216,7 +238,7 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
             <select
               data-testid="trip-hotel-room"
               value={selectedRoomId}
-              onChange={(e) => setSelectedRoomId(e.target.value)}
+              onChange={(e) => { setSelectedRoomId(e.target.value); setSelectedRateId(''); }}
               className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-[#7056EE]"
               disabled={availableRooms.length === 0}
             >
@@ -230,7 +252,7 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
             <select
               data-testid="trip-hotel-meal-plan"
               value={selectedMealPlan}
-              onChange={(e) => setSelectedMealPlan(e.target.value as MealPlanType)}
+              onChange={(e) => { setSelectedMealPlan(e.target.value as MealPlanType); setSelectedRateId(''); }}
               className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-[#7056EE]"
             >
               <option value="EP">EP (Room Only)</option>
@@ -240,6 +262,25 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
             </select>
           </div>
         </div>
+
+        {(calculatedRate?.rateOptions?.length || 0) > 0 && (
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Contracted rate</label>
+            <select
+              data-testid="trip-hotel-rate"
+              value={selectedRateId}
+              onChange={(event) => setSelectedRateId(event.target.value)}
+              className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-[#7056EE]"
+            >
+              {calculatedRate.rateOptions.map((option: any) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}{option.totalSupplierCost === undefined ? '' : ` · ₹${option.totalSupplierCost.toLocaleString('en-IN')}`}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-[10px] text-slate-500">Contracted supplier cost is validated and recalculated by the server; package selling price is set separately in the Quote.</p>
+          </div>
+        )}
 
         <div>
           <label className="block text-xs font-semibold text-slate-700 mb-1">Rooms</label>
@@ -302,7 +343,7 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
                       : 'bg-emerald-50 border-emerald-200'
                   }`}>
                     <div className="flex justify-between items-center">
-                      <span className="text-xs font-semibold text-slate-600">Total ({nights} night{nights !== 1 ? 's' : ''})</span>
+                      <span className="text-xs font-semibold text-slate-600">Contracted Cost ({nights} night{nights !== 1 ? 's' : ''})</span>
                       <span className={`text-base font-black ${
                         calculatedRate.needsConfirmation ? 'text-amber-800' : 'text-emerald-800'
                       }`}>
@@ -323,7 +364,7 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({
                     onClick={handleSelect}
                     className="w-full mt-4 py-2.5 bg-[#7056EE] hover:bg-[#5e43dc] text-white font-bold rounded-lg transition-colors text-sm shadow-sm"
                   >
-                    Confirm & Add to Trip
+                    {initialMetadata ? 'Save Hotel Changes' : 'Confirm & Add to Trip'}
                   </button>
                 </>
               )}

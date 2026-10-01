@@ -15,9 +15,11 @@ try {
   // If FIREBASE_MOCK_MODE or similar is set, we could mock entirely.
   // We attempt standard initialization which auto-discovers GOOGLE_APPLICATION_CREDENTIALS
   if (!getApps().length) {
-    initializeApp({
-        credential: applicationDefault()
-    });
+    const emulatorMode = !!process.env.FIRESTORE_EMULATOR_HOST || !!process.env.FIREBASE_AUTH_EMULATOR_HOST;
+    const projectId = process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT;
+    initializeApp(emulatorMode
+      ? { projectId: projectId || 'bbos-qa3-local' }
+      : { credential: applicationDefault(), ...(projectId ? { projectId } : {}) });
   }
   db = getFirestore();
   auth = getAuth();

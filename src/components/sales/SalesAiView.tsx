@@ -13,13 +13,13 @@ export const SalesAiView: React.FC = () => {
   const [timeframe, setTimeframe] = useState<'WEEK' | 'MONTH' | 'QUARTER'>('MONTH');
 
   // Simulated AI metrics for the dashboard
-  const activeLeads = leads.filter(l => l.status !== 'LOST' && l.status !== 'BOOKED');
-  const hotLeads = activeLeads.filter(l => l.leadScore > 80);
-  const totalPipeline = activeLeads.reduce((sum, l) => sum + l.budget, 0);
-  const weightedPipeline = activeLeads.reduce((sum, l) => sum + (l.budget * ((l.bookingProbability || 50) / 100)), 0);
+  const activeLeads = leads.filter(l => !['DROPPED', 'CANCELLED', 'CONVERTED'].includes(l.status));
+  const hotLeads = activeLeads.filter(l => l.priority === 'HOT' || (l.leadScore || 0) > 80);
+  const totalPipeline = activeLeads.reduce((sum, l) => sum + (l.budget || 0), 0);
+  const weightedPipeline = activeLeads.reduce((sum, l) => sum + ((l.budget || 0) * ((l.bookingProbability || 50) / 100)), 0);
   
   const lowMarginQuotes = quotes.filter(q => q.status === 'SENT' && (q.discountAmount / q.totalAmount) > 0.1);
-  const overdueFollowUps = activeLeads.filter(l => new Date(l.nextFollowUpAt) < new Date());
+  const overdueFollowUps = activeLeads.filter(l => l.nextFollowUpAt && new Date(l.nextFollowUpAt) < new Date());
 
   const renderManagerView = () => (
     <div className="space-y-6">
@@ -135,7 +135,7 @@ export const SalesAiView: React.FC = () => {
             <span className="text-sm font-bold text-emerald-200 uppercase tracking-wider">High Value Ops</span>
             <Star className="w-5 h-5 text-emerald-300" />
           </div>
-          <div className="text-3xl font-black">{hotLeads.filter(l => l.budget > 100000).length}</div>
+          <div className="text-3xl font-black">{hotLeads.filter(l => (l.budget || 0) > 100000).length}</div>
           <p className="text-xs text-emerald-200 mt-2">Budget &gt; 1L &amp; Score &gt; 80</p>
         </div>
       </div>

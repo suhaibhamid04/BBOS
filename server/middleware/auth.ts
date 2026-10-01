@@ -82,6 +82,10 @@ const PRESET_MOCK_USERS: Record<string, AuthenticatedUser> = {
     id: 'emp-res-01', uid: 'emp-res-01', firebaseUid: 'emp-res-01', employeeId: 'emp-res-01',
     name: 'Zoya Qadri', email: 'zoya.reservations@bookingbridge.com', role: 'Reservations', active: true, isDemo: true,
   },
+  'emp-res-02': {
+    id: 'emp-res-02', uid: 'emp-res-02', firebaseUid: 'emp-res-02', employeeId: 'emp-res-02',
+    name: 'Meher Khan', email: 'meher.reservations@bookingbridge.com', role: 'Reservations', active: true, isDemo: true,
+  },
   'emp-mkt-01': {
     id: 'emp-mkt-01', uid: 'emp-mkt-01', firebaseUid: 'emp-mkt-01', employeeId: 'emp-mkt-01',
     name: 'Irfan Dar', email: 'irfan.mkt@bookingbridge.com', role: 'Marketing', active: true, isDemo: true,
@@ -172,8 +176,15 @@ export function createAuthenticate(overrides: Partial<AuthenticationDependencies
       }
     }
 
-    if (demoAllowed && demoUserId && PRESET_MOCK_USERS[demoUserId]) {
-      req.user = PRESET_MOCK_USERS[demoUserId];
+    if (demoAllowed && demoUserId) {
+      const demoUser = PRESET_MOCK_USERS[demoUserId];
+      if (!demoUser) {
+        return res.status(403).json({
+          error: 'Forbidden: Demo employee identity is unknown.',
+          code: 'DEMO_EMPLOYEE_NOT_FOUND',
+        });
+      }
+      req.user = demoUser;
       return next();
     }
 

@@ -70,12 +70,12 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // 3. Leads Collection (Scoped access)
+    // 3. Leads Collection
     match /leads/{leadId} {
-      allow read: if isSalesManager() || isAccounts() || 
-                  (isSalesExecutive() && (resource.data.assignedEmployeeId == request.auth.uid || resource.data.assignedEmployeeId == ''));
-      // DIRECT CLIENT MUTATION PROHIBITED FOR ALL ROLES (Server Admin SDK Only)
-      allow create, update, delete: if false;
+      // Lead scope uses stable BBOS employeeId/salesTeamId and is enforced by
+      // the authenticated Express API. Firebase UID is intentionally not used
+      // as the business owner identifier.
+      allow read, create, update, delete: if false;
     }
 
     // 4. Companies Collection
