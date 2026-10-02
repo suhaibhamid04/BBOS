@@ -1,6 +1,7 @@
 import { BookingComponentStatus, VoucherStatus } from './booking';
 import type { QuoteShareChannel } from './customerPackage';
 export * from './lead';
+export * from './leadDistribution';
 
 export const USER_ROLES = [
   'Founder',

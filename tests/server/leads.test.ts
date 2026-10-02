@@ -11,6 +11,7 @@ mock.module('../../server/firebaseAdmin.ts', () => {
       assignedEmployeeId: 'emp-1',
       salesTeamId: 'sales-team-1',
       createdAt: '2026-01-01',
+      updatedAt: '2026-01-01T00:00:00.000Z',
       protectedField: 'secret'
     }
   };
@@ -44,7 +45,15 @@ mock.module('../../server/firebaseAdmin.ts', () => {
     },
   };
   let auditLogs: any[] = [];
+  (globalThis as any).__leadAuditLogs = auditLogs;
   let customersData: Record<string, any> = {};
+  let tripsData: Record<string, any> = {
+    'trip-lead-1': {
+      id: 'trip-lead-1', leadId: 'lead-1', status: 'DRAFT', costingStatus: 'CALCULATED',
+      assignedSalesEmployeeId: 'emp-1', salesTeamId: 'sales-team-1', selectedServiceMarker: 'hotel-service-1',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    },
+  };
   const rejectUndefinedFirestoreValues = (value: unknown, path = 'data'): void => {
     if (value === undefined) throw new Error(`Firestore rejected undefined at ${path}`);
     if (Array.isArray(value)) {
@@ -55,21 +64,43 @@ mock.module('../../server/firebaseAdmin.ts', () => {
       Object.entries(value).forEach(([key, item]) => rejectUndefinedFirestoreValues(item, `${path}.${key}`));
     }
   };
+  const makeReference = (col: string, id: string): any => ({
+    id,
+    get: async () => ({ id, exists: Boolean((col === 'employees' ? employeesData : col === 'customers' ? customersData : col === 'trips' ? tripsData : leadsData)[id]), data: () => (col === 'employees' ? employeesData : col === 'customers' ? customersData : col === 'trips' ? tripsData : leadsData)[id] }),
+    update: async (updates: any) => {
+      const target = col === 'trips' ? tripsData : col === 'leads' ? leadsData : null;
+      if (target) target[id] = { ...target[id], ...updates };
+    },
+    set: async (data: any) => {
+      if (col === 'leads') leadsData[id] = data;
+      if (col === 'trips') tripsData[id] = data;
+      if (col === 'audit_logs') auditLogs.push(data);
+      if (col === 'customers') customersData[id] = data;
+    },
+  });
   const leadDocs = (field?: string, value?: unknown) => Object.entries(leadsData)
     .filter(([, data]: any) => !field || data[field] === value)
-    .map(([id, data]) => ({ id, exists: true, data: () => data }));
+    .map(([id, data]) => ({ id, exists: true, data: () => data, ref: makeReference('leads', id) }));
   const customerDocs = (field?: string, value?: unknown) => Object.entries(customersData)
     .filter(([, data]: any) => !field || data[field] === value)
-    .map(([id, data]) => ({ id, exists: true, data: () => data }));
+    .map(([id, data]) => ({ id, exists: true, data: () => data, ref: makeReference('customers', id) }));
+  const tripDocs = (field?: string, value?: unknown) => Object.entries(tripsData)
+    .filter(([, data]: any) => !field || data[field] === value)
+    .map(([id, data]) => ({ id, exists: true, data: () => data, ref: makeReference('trips', id) }));
   const leadQuery = (field?: string, value?: unknown) => ({
     orderBy: () => ({ limit: () => ({ get: async () => ({ docs: leadDocs(field, value) }) }) }),
     limit: () => ({ get: async () => ({ docs: leadDocs(field, value) }) }),
   });
   return {
     getAdminDb: () => ({
-      runTransaction: async (operation: (transaction: any) => Promise<void>) => {
+      runTransaction: async (operation: (transaction: any) => Promise<any>) => {
         const pending: Array<() => void> = [];
-        await operation({
+        const result = await operation({
+          get: async (reference: any) => reference.get(),
+          set: (reference: any, data: any) => {
+            rejectUndefinedFirestoreValues(data);
+            pending.push(() => reference.set(data));
+          },
           create: (reference: any, data: any) => {
             rejectUndefinedFirestoreValues(data);
             pending.push(() => reference.set(data));
@@ -80,46 +111,26 @@ mock.module('../../server/firebaseAdmin.ts', () => {
           },
         });
         pending.forEach((commit) => commit());
+        return result;
       },
       collection: (col: string) => ({
         orderBy: () => ({ limit: () => ({ get: async () => ({ docs: leadDocs() }) }) }),
         where: (field: string, _operator: string, value: unknown) => ({
           ...leadQuery(field, value),
+          get: async () => ({ docs: col === 'trips' ? tripDocs(field, value) : col === 'customers' ? customerDocs(field, value) : leadDocs(field, value) }),
           limit: (_count: number) => ({
             get: async () => ({
               docs: col === 'employees'
                 ? Object.entries(employeesData)
                   .filter(([, data]: any) => field === 'employeeId' && data.employeeId === value)
                   .map(([id, data]) => ({ id, exists: true, data: () => data }))
-                : col === 'customers' ? customerDocs(field, value) : leadDocs(field, value),
+                : col === 'customers' ? customerDocs(field, value) : col === 'trips' ? tripDocs(field, value) : leadDocs(field, value),
             }),
           }),
         }),
-        doc: (id: string) => ({
-          get: async () => ({
-            id,
-            exists: col === 'employees' ? !!employeesData[id] : col === 'customers' ? !!customersData[id] : !!leadsData[id],
-            data: () => col === 'employees' ? employeesData[id] : col === 'customers' ? customersData[id] : leadsData[id]
-          }),
-          update: async (updates: any) => {
-            if (col === 'leads') {
-              leadsData[id] = { ...leadsData[id], ...updates };
-            }
-          },
-          set: async (data: any) => {
-            if (col === 'leads') {
-              leadsData[id] = data;
-            }
-            if (col === 'audit_logs') {
-              auditLogs.push(data);
-            }
-            if (col === 'customers') {
-              customersData[id] = data;
-            }
-          }
-        })
+        doc: (id: string) => makeReference(col, id),
       })
-    })
+    }),
   };
 });
 
@@ -129,7 +140,20 @@ describe('POST /api/leads', () => {
   let jsonMock: any;
   let statusMock: any;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await getAdminDb().collection('leads').doc('lead-1').set({
+      id: 'lead-1', customerId: 'customer-1', customerName: 'Kashmir Family', customerPhone: '9876543210',
+      destination: 'Kashmir', travelStartDate: '2026-11-01', travelEndDate: '2026-11-06', nights: 5,
+      adults: 2, children: 1, childAges: [8], travelerCount: 3, sourceId: 'DIRECT_CALL', source: 'Direct Call',
+      sourcePlatform: 'Direct Call', createdSourceType: 'MANUAL', tags: [], notes: 'Initial note', priority: 'NORMAL',
+      status: 'NEW', assignedEmployeeId: 'emp-1', assignedEmployeeName: 'John', salesTeamId: 'sales-team-1',
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', protectedField: 'secret',
+    });
+    await getAdminDb().collection('trips').doc('trip-lead-1').set({
+      id: 'trip-lead-1', leadId: 'lead-1', status: 'DRAFT', costingStatus: 'CALCULATED',
+      assignedSalesEmployeeId: 'emp-1', salesTeamId: 'sales-team-1', selectedServiceMarker: 'hotel-service-1',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
     jsonMock = mock((data: any) => data);
     statusMock = mock((code: number) => ({ json: jsonMock }));
     req = {
@@ -409,7 +433,20 @@ describe('PATCH /api/leads/:id', () => {
   let jsonMock: any;
   let statusMock: any;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await getAdminDb().collection('leads').doc('lead-1').set({
+      id: 'lead-1', customerId: 'customer-1', customerName: 'Kashmir Family', customerPhone: '9876543210',
+      destination: 'Kashmir', travelStartDate: '2026-11-01', travelEndDate: '2026-11-06', nights: 5,
+      adults: 2, children: 1, childAges: [8], travelerCount: 3, sourceId: 'DIRECT_CALL', source: 'Direct Call',
+      sourcePlatform: 'Direct Call', createdSourceType: 'MANUAL', tags: [], notes: 'Initial note', priority: 'NORMAL',
+      status: 'NEW', assignedEmployeeId: 'emp-1', assignedEmployeeName: 'John', salesTeamId: 'sales-team-1',
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', protectedField: 'secret',
+    });
+    await getAdminDb().collection('trips').doc('trip-lead-1').set({
+      id: 'trip-lead-1', leadId: 'lead-1', status: 'DRAFT', costingStatus: 'CALCULATED',
+      assignedSalesEmployeeId: 'emp-1', salesTeamId: 'sales-team-1', selectedServiceMarker: 'hotel-service-1',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
     jsonMock = mock((data: any) => data);
     statusMock = mock((code: number) => ({ json: jsonMock }));
     req = {
@@ -422,8 +459,13 @@ describe('PATCH /api/leads/:id', () => {
 
   afterEach(() => { mock.restore(); });
 
+  const versioned = async (body: Record<string, unknown>) => {
+    const snapshot = await getAdminDb().collection('leads').doc('lead-1').get();
+    return { ...body, expectedUpdatedAt: snapshot.data()?.updatedAt };
+  };
+
   it('updates allowed fields and logs audit event', async () => {
-    req.body = { status: 'CONTACTED' };
+    req.body = await versioned({ status: 'CONTACTED' });
     const route = (leadsRouter as any).stack.find((r: any) => r.route && r.route.path === '/:id' && r.route.methods.patch);
     const handler = route.route.stack[1].handle;
     await handler(req as Request, res as Response, () => {});
@@ -436,7 +478,7 @@ describe('PATCH /api/leads/:id', () => {
 
   it('blocks IDOR for Sales Executive', async () => {
     req.user = { id: 'compatibility-id', employeeId: 'emp-2', role: 'Sales Executive' } as any; // Not assigned
-    req.body = { status: 'CONTACTED' };
+    req.body = await versioned({ status: 'CONTACTED' });
     const route = (leadsRouter as any).stack.find((r: any) => r.route && r.route.path === '/:id' && r.route.methods.patch);
     const handler = route.route.stack[1].handle;
     await handler(req as Request, res as Response, () => {});
@@ -445,7 +487,7 @@ describe('PATCH /api/leads/:id', () => {
   });
 
   it('strips protected fields', async () => {
-    req.body = { status: 'IN_PROGRESS', protectedField: 'hacked' };
+    req.body = await versioned({ status: 'IN_PROGRESS', protectedField: 'hacked' });
     const route = (leadsRouter as any).stack.find((r: any) => r.route && r.route.path === '/:id' && r.route.methods.patch);
     const handler = route.route.stack[1].handle;
     await handler(req as Request, res as Response, () => {});
@@ -456,28 +498,119 @@ describe('PATCH /api/leads/:id', () => {
 
   it('rejects non-canonical stages and requires a controlled drop reason', async () => {
     const route = (leadsRouter as any).stack.find((entry: any) => entry.route?.path === '/:id' && entry.route.methods.patch);
-    req.body = { status: 'QUALIFIED' };
+    req.body = await versioned({ status: 'QUALIFIED' });
     await route.route.stack[1].handle(req as Request, res as Response, () => {});
     expect(statusMock).toHaveBeenCalledWith(400);
     expect(jsonMock.mock.calls[0][0].code).toBe('INVALID_LEAD_STAGE');
 
     jsonMock.mockClear(); statusMock.mockClear();
-    req.body = { status: 'DROPPED' };
+    req.body = await versioned({ status: 'DROPPED' });
     await route.route.stack[1].handle(req as Request, res as Response, () => {});
     expect(statusMock).toHaveBeenCalledWith(400);
     expect(jsonMock.mock.calls[0][0].code).toBe('DROP_REASON_REQUIRED');
 
     jsonMock.mockClear(); statusMock.mockClear();
-    req.body = { status: 'DROPPED', dropReason: 'BUDGET_MISMATCH' };
+    req.body = await versioned({ status: 'DROPPED', dropReason: 'BUDGET_MISMATCH' });
     await route.route.stack[1].handle(req as Request, res as Response, () => {});
     expect(jsonMock.mock.calls[0][0].data).toMatchObject({ status: 'DROPPED', dropReason: 'BUDGET_MISMATCH' });
   });
 
   it('rejects client-forged ownership and team metadata', async () => {
-    req.body = { salesTeamId: 'forged-team', assignedEmployeeName: 'Forged Owner', updatedByEmployeeId: 'forged-actor' };
+    req.body = await versioned({ salesTeamId: 'forged-team', assignedEmployeeName: 'Forged Owner', updatedByEmployeeId: 'forged-actor' });
     const route = (leadsRouter as any).stack.find((entry: any) => entry.route?.path === '/:id' && entry.route.methods.patch);
     await route.route.stack[1].handle(req as Request, res as Response, () => {});
     expect(statusMock).toHaveBeenCalledWith(400);
     expect(jsonMock.mock.calls[0][0].code).toBe('PROTECTED_LEAD_FIELD');
+  });
+
+  it('enforces OWN, TEAM, ALL and denied role edit scopes', async () => {
+    const route = (leadsRouter as any).stack.find((entry: any) => entry.route?.path === '/:id' && entry.route.methods.patch);
+    const handler = route.route.stack[1].handle;
+
+    req.user = { employeeId: 'manager-1', role: 'Sales Manager', name: 'Manager', salesTeamId: 'sales-team-1' } as any;
+    req.body = await versioned({ priority: 'HOT' });
+    await handler(req as Request, res as Response, () => {});
+    expect(jsonMock.mock.calls[0][0].data.priority).toBe('HOT');
+
+    jsonMock.mockClear(); statusMock.mockClear();
+    req.user = { employeeId: 'manager-2', role: 'Sales Manager', name: 'Other Manager', salesTeamId: 'sales-team-2' } as any;
+    req.body = await versioned({ priority: 'WARM' });
+    await handler(req as Request, res as Response, () => {});
+    expect(statusMock).toHaveBeenCalledWith(403);
+
+    for (const role of ['Founder', 'Admin'] as const) {
+      jsonMock.mockClear(); statusMock.mockClear();
+      req.user = { employeeId: `${role.toLowerCase()}-1`, role, name: role } as any;
+      req.body = await versioned({ notes: `${role} edit` });
+      await handler(req as Request, res as Response, () => {});
+      expect(jsonMock.mock.calls[0][0].success).toBe(true);
+    }
+
+    jsonMock.mockClear(); statusMock.mockClear();
+    req.user = { employeeId: 'ops-1', role: 'Operations', name: 'Operations' } as any;
+    req.body = await versioned({ notes: 'forged operations edit' });
+    await handler(req as Request, res as Response, () => {});
+    expect(statusMock).toHaveBeenCalledWith(403);
+  });
+
+  it('marks a linked package stale for commercial edits without changing selected services', async () => {
+    req.body = await versioned({
+      adults: 4, children: 1, childAges: [8], travelerCount: 5,
+      travelStartDate: '2026-11-03', nights: 6,
+    });
+    const route = (leadsRouter as any).stack.find((entry: any) => entry.route?.path === '/:id' && entry.route.methods.patch);
+    await route.route.stack[1].handle(req as Request, res as Response, () => {});
+
+    const result = jsonMock.mock.calls[0][0];
+    expect(result).toMatchObject({ success: true });
+    expect(result.data).toMatchObject({ adults: 4, travelerCount: 5, travelStartDate: '2026-11-03', travelEndDate: '2026-11-09', nights: 6 });
+    expect(result.commercialChanges.map((change: any) => change.field)).toEqual(expect.arrayContaining(['travelStartDate', 'travelEndDate', 'nights', 'adults']));
+    const trip = (await getAdminDb().collection('trips').doc('trip-lead-1').get()).data();
+    expect(trip).toMatchObject({ costingStatus: 'PENDING', selectedServiceMarker: 'hotel-service-1', packageReview: { required: true, markedByEmployeeId: 'emp-1' } });
+  });
+
+  it('persists contact, note and priority edits without invalidating package costing', async () => {
+    req.body = await versioned({ customerPhone: '9999999999', notes: 'Contact correction only', priority: 'WARM' });
+    const route = (leadsRouter as any).stack.find((entry: any) => entry.route?.path === '/:id' && entry.route.methods.patch);
+    await route.route.stack[1].handle(req as Request, res as Response, () => {});
+    expect(jsonMock.mock.calls[0][0].data).toMatchObject({ customerPhone: '9999999999', notes: 'Contact correction only', priority: 'WARM' });
+    expect(jsonMock.mock.calls[0][0].commercialChanges).toEqual([]);
+    const trip = (await getAdminDb().collection('trips').doc('trip-lead-1').get()).data();
+    expect(trip.costingStatus).toBe('CALCULATED');
+    expect(trip.packageReview).toBeUndefined();
+  });
+
+  it('supports clearing optional fields without clearing commercial authority metadata', async () => {
+    await getAdminDb().collection('leads').doc('lead-1').update({ customerEmail: 'old@example.com', hotelPreference: 'Luxury' });
+    req.body = await versioned({ customerEmail: null, hotelPreference: null });
+    const route = (leadsRouter as any).stack.find((entry: any) => entry.route?.path === '/:id' && entry.route.methods.patch);
+    await route.route.stack[1].handle(req as Request, res as Response, () => {});
+    const updated = jsonMock.mock.calls[0][0].data;
+    expect(updated.customerEmail).toBeUndefined();
+    expect(updated.hotelPreference).toBeUndefined();
+    expect(updated.assignedEmployeeId).toBe('emp-1');
+    expect(updated.salesTeamId).toBe('sales-team-1');
+  });
+
+  it('returns a conflict for stale versions with zero Lead or Trip writes', async () => {
+    const beforeLead = (await getAdminDb().collection('leads').doc('lead-1').get()).data();
+    const beforeTrip = (await getAdminDb().collection('trips').doc('trip-lead-1').get()).data();
+    req.body = { expectedUpdatedAt: 'stale-version', adults: 9, children: 1, childAges: [8], travelerCount: 10 };
+    const route = (leadsRouter as any).stack.find((entry: any) => entry.route?.path === '/:id' && entry.route.methods.patch);
+    await route.route.stack[1].handle(req as Request, res as Response, () => {});
+    expect(statusMock).toHaveBeenCalledWith(409);
+    expect(jsonMock.mock.calls[0][0].code).toBe('LEAD_VERSION_CONFLICT');
+    expect((await getAdminDb().collection('leads').doc('lead-1').get()).data()).toEqual(beforeLead);
+    expect((await getAdminDb().collection('trips').doc('trip-lead-1').get()).data()).toEqual(beforeTrip);
+  });
+
+  it('audits meaningful edits and package invalidation with canonical employeeId', async () => {
+    req.user = { id: 'firebase-or-compat-id', employeeId: 'emp-1', role: 'Sales Executive', name: 'John' } as any;
+    req.body = await versioned({ destination: 'Jammu' });
+    const route = (leadsRouter as any).stack.find((entry: any) => entry.route?.path === '/:id' && entry.route.methods.patch);
+    await route.route.stack[1].handle(req as Request, res as Response, () => {});
+    const recent = (globalThis as any).__leadAuditLogs.slice(-2);
+    expect(recent.map((event: any) => event.action)).toEqual(expect.arrayContaining(['PACKAGE_REVIEW_REQUIRED', 'LEAD_UPDATED']));
+    expect(recent.every((event: any) => event.actorId === 'emp-1')).toBe(true);
   });
 });

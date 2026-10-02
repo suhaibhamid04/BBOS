@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { Lead, SalesAiAnalysisResult } from '../../types';
 import { useData } from '../../context/DataContext';
-import { useAuth } from '../../context/AuthContext';
 import { LeadStageControl } from './LeadStageControl';
 import { CreateLeadModal } from './CreateLeadModal';
+import { LeadAssignmentPanel } from './LeadAssignmentPanel';
 import {
   X,
   Flame,
@@ -25,7 +25,6 @@ import {
   Plus,
   Plane
 } from 'lucide-react';
-import { PRESET_USERS } from '../../services/permissions';
 
 interface LeadDetailDrawerProps {
   leadId: string | null;
@@ -35,10 +34,9 @@ interface LeadDetailDrawerProps {
 
 export const LeadDetailDrawer: React.FC<LeadDetailDrawerProps> = ({ leadId, onClose, onNavigate }) => {
   const { 
-    leads, updateLead, addLeadNote, assignLead, runSalesAiAnalysis,
+    leads, updateLead, addLeadNote, runSalesAiAnalysis,
     trips, quotes, createOrResumeLeadTrip,
   } = useData();
-  const { currentUser } = useAuth();
 
   const lead = leads.find((l) => l.id === leadId);
 
@@ -95,11 +93,6 @@ export const LeadDetailDrawer: React.FC<LeadDetailDrawerProps> = ({ leadId, onCl
 
   const linkedTrips = trips.filter(trip => trip.leadId === lead.id);
   const linkedQuotes = quotes.filter(quote => quote.leadId === lead.id);
-  const eligibleAssignees = PRESET_USERS.filter(user =>
-    user.active && ['Sales Executive', 'Sales Manager'].includes(user.role) && user.salesTeamId &&
-    (currentUser.role === 'Founder' || currentUser.role === 'Admin' || user.salesTeamId === currentUser.salesTeamId)
-  );
-
   return (
     <>
       <div id="lead-drawer-backdrop" onClick={onClose} className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 transition-opacity" />
@@ -258,24 +251,7 @@ export const LeadDetailDrawer: React.FC<LeadDetailDrawerProps> = ({ leadId, onCl
                 </div>
               </div>
 
-              {/* Assignment Selector */}
-              <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
-                <label className="block font-semibold text-slate-700">Assigned Team Member</label>
-                <select
-                  id="drawer-assignee-select"
-                  value={lead.assignedEmployeeId}
-                  disabled={currentUser.role === 'Sales Executive'}
-                  onChange={(e) => {
-                    const u = eligibleAssignees.find(user => user.employeeId === e.target.value);
-                    if (u) assignLead(lead.id, u.employeeId, u.name);
-                  }}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white font-medium"
-                >
-                  {eligibleAssignees.map((u) => (
-                    <option key={u.employeeId} value={u.employeeId}>{u.name} ({u.role})</option>
-                  ))}
-                </select>
-              </div>
+              <LeadAssignmentPanel lead={lead} />
 
               {/* AI Score Reasoning Card */}
               {lead.scoreReasoning && (

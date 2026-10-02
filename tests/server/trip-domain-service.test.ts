@@ -165,6 +165,39 @@ describe('Stage D2A server-authoritative Trip mutations', () => {
     expect(trip.updatedByEmployeeId).toBe('exec-1');
   });
 
+  test('reconciles stale Lead travel fields while preserving selected itinerary services', async () => {
+    const original = storedTrip({
+      leadId: 'lead-own-complete', costingStatus: 'PENDING',
+      packageReview: {
+        required: true, reason: 'LEAD_COMMERCIAL_DETAILS_CHANGED',
+        changes: [{ field: 'adults', before: 2, after: 4 }],
+        markedAt: '2026-09-02T00:00:00.000Z', markedByEmployeeId: 'exec-1',
+      },
+    });
+    const { storage, service } = harness([original]);
+    storage.rawUpdate('leads', 'lead-own-complete', {
+      travelStartDate: '2026-10-03', travelEndDate: '2026-10-08', adults: 4, children: 1, childAges: [7], travelerCount: 5,
+    });
+    const itinerary = { id: 'day-1', tripId: 'trip-1', dayNumber: 1, items: [{ id: 'hotel-1', type: 'HOTEL', title: 'Selected Hotel' }] };
+    storage.rawSet('itinerary_days', 'day-1', itinerary);
+
+    const updated = await service.reconcileLeadChanges('trip-1', executive);
+    expect(updated).toMatchObject({ startDate: '2026-10-03', endDate: '2026-10-08', adults: 4, children: 1, travelerCount: 5, costingStatus: 'PENDING', packageReview: { required: false, resolvedByEmployeeId: 'exec-1' } });
+    expect(storage.rawGet('itinerary_days', 'day-1')).toEqual(itinerary);
+    expect(storage.getAllAuditLogs().at(-1)).toMatchObject({ action: 'PACKAGE_LEAD_CHANGES_APPLIED', actorId: 'exec-1' });
+  });
+
+  test('reconciliation uses existing resource scope and unauthorized attempts cause zero writes', async () => {
+    const original = storedTrip({
+      leadId: 'lead-own-complete', assignedSalesEmployeeId: 'exec-2',
+      packageReview: { required: true, reason: 'LEAD_COMMERCIAL_DETAILS_CHANGED', changes: [], markedAt: '2026-09-02', markedByEmployeeId: 'exec-2' },
+    });
+    const { storage, service } = harness([original]);
+    await expectTripError(service.reconcileLeadChanges('trip-1', executive), 'RESOURCE_ACCESS_DENIED', 403);
+    expect(storage.rawGet('trips', 'trip-1')).toEqual(original);
+    expect(storage.getAllAuditLogs()).toHaveLength(0);
+  });
+
   test('Sales Executive cannot update another Executive Trip and causes zero Trip write', async () => {
     const original = storedTrip({ assignedSalesEmployeeId: 'exec-2' });
     const { storage, service } = harness([original]);

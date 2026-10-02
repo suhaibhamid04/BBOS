@@ -78,6 +78,22 @@ service cloud.firestore {
       allow read, create, update, delete: if false;
     }
 
+    match /lead_distribution_configs/{configId} {
+      // Distribution policy is readable and mutable only through the
+      // authenticated Founder/Admin API.
+      allow read, create, update, delete: if false;
+    }
+
+    match /lead_distribution_state/{stateId} {
+      // Round-robin position is server-authoritative transactional state.
+      allow read, create, update, delete: if false;
+    }
+
+    match /lead_assignment_history/{eventId} {
+      // Immutable history is projected through scoped Lead APIs.
+      allow read, create, update, delete: if false;
+    }
+
     // 4. Companies Collection
     match /companies/{companyId} {
       allow read: if isSalesExecutive() || isAccounts() || isAdmin();

@@ -7,6 +7,7 @@ import {
 import { AiSalesHeadTab } from './AiSalesHeadTab';
 import { LeadStageControl } from './LeadStageControl';
 import { CreateLeadModal } from './CreateLeadModal';
+import { LeadAssignmentPanel } from './LeadAssignmentPanel';
 
 interface Props {
   leadId: string;
@@ -324,11 +325,7 @@ export const LeadDetailView: React.FC<Props> = ({ leadId, onNavigate }) => {
                   <div className="p-5 space-y-4">
                     <LeadStageControl lead={lead} updateLead={updateLead} />
                     
-                    <div className="pt-2 border-t border-slate-100">
-                      <div className="text-xs font-medium text-slate-500 mb-1">Assigned To</div>
-                      <div className="text-sm font-medium text-slate-900">{lead.assignedEmployeeName}</div>
-                      <div className="text-xs text-slate-500">Team: {lead.salesTeamId || 'Not assigned'}</div>
-                    </div>
+                    <LeadAssignmentPanel lead={lead} />
                     
                     <div>
                       <div className="text-xs font-medium text-slate-500 mb-1">Source</div>

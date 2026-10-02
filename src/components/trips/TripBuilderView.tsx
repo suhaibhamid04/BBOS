@@ -57,6 +57,7 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
     deleteItineraryItem,
     loadTripItinerary,
     recalculateTripCost,
+    reconcileLeadTrip,
     createQuote
   } = useData();
   const { currentUser, availableUsers } = useAuth();
@@ -75,6 +76,7 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
   const [showCustomModal, setShowCustomModal] = useState(false);
   const [editingItem, setEditingItem] = useState<ItineraryItem | null>(null);
   const [isCalculatingCosts, setIsCalculatingCosts] = useState(false);
+  const [isApplyingLeadChanges, setIsApplyingLeadChanges] = useState(false);
   const [isCreatingQuote, setIsCreatingQuote] = useState(false);
 
   // Form state for New / Edit Trip
@@ -514,6 +516,19 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
     finally { setIsCalculatingCosts(false); }
   };
 
+  const handleApplyLeadChanges = async () => {
+    if (!activeTrip) return;
+    setIsApplyingLeadChanges(true);
+    try {
+      await reconcileLeadTrip(activeTrip.id);
+      notify('Latest Lead travel details applied. Existing services were preserved; recalculate costing now.');
+    } catch (error: any) {
+      notify(error.message || 'Unable to apply the latest Lead details.');
+    } finally {
+      setIsApplyingLeadChanges(false);
+    }
+  };
+
   // Add Custom / Sightseeing Item Handler
   const handleAddCustomItem = async () => {
     if (!activeDay || !customTitle) return;
@@ -680,7 +695,7 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
             <button
               data-testid="create-quote-from-trip"
               onClick={handleGenerateQuote}
-              disabled={isCreatingQuote || (activeTrip.costingStatus !== 'CALCULATED' && !quotes.some(quote => quote.tripId === activeTrip.id))}
+              disabled={isCreatingQuote || (activeTrip.costingStatus !== 'CALCULATED' && !quotes.some(quote => quote.tripId === activeTrip.id)) || (activeTrip.packageReview?.required && !quotes.some(quote => quote.tripId === activeTrip.id))}
               title={activeTrip.costingStatus !== 'CALCULATED' ? 'Recalculate Trip costing before creating a Quote.' : undefined}
               className="px-4 py-2 bg-[#7056EE] hover:bg-[#5e43dc] disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-2 shadow-sm"
             >
@@ -690,6 +705,13 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
         </div>
 
         {activeTrip.leadId && <div data-testid="commercial-workflow" className="rounded-xl border border-purple-100 bg-purple-50 px-4 py-2 text-xs font-semibold text-purple-900">Lead → Build Package → Calculate Cost → Create Quote → Send/Manage Quote</div>}
+
+        {activeTrip.packageReview?.required && <div data-testid="package-review-warning" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-xs text-amber-950">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div><p className="font-black">Package review required</p><p className="mt-1">Lead travel details changed. Existing hotel, cab, and activity selections are preserved. Apply the latest details, review services, and recalculate before creating or sharing a Quote.</p><p className="mt-2 text-[11px] text-amber-800">Changed: {activeTrip.packageReview.changes.map(change => change.field).join(', ')}</p></div>
+            <button data-testid="apply-latest-lead" type="button" disabled={isApplyingLeadChanges} onClick={() => void handleApplyLeadChanges()} className="rounded-lg bg-amber-900 px-3 py-2 font-bold text-white disabled:opacity-50">{isApplyingLeadChanges ? 'Applying…' : 'Apply latest Lead details'}</button>
+          </div>
+        </div>}
 
         {/* Real-time Costing Engine Header */}
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs shrink-0 flex flex-wrap items-center justify-between gap-4">
@@ -745,7 +767,7 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
               <span data-testid="trip-costing-status" className={`text-[10px] font-bold px-2 py-1 rounded ${activeTrip.costingStatus === 'CALCULATED' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-800'}`}>
                 {activeTrip.costingStatus || 'PENDING'}
               </span>
-              <button data-testid="calculate-trip-costs" type="button" disabled={isCalculatingCosts} onClick={() => void handleCalculateCosts()} className="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold disabled:opacity-50">
+              <button data-testid="calculate-trip-costs" type="button" disabled={isCalculatingCosts || activeTrip.packageReview?.required} onClick={() => void handleCalculateCosts()} className="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold disabled:opacity-50">
                 {isCalculatingCosts ? 'Calculating…' : 'Calculate costs'}
               </button>
             </div>

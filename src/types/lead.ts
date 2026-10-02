@@ -1,4 +1,5 @@
 import type { DestinationRegion, TripType } from './index';
+import type { LeadAssignmentReason, LeadAssignmentStatus } from './leadDistribution';
 
 export const LEAD_SOURCES = [
   { id: 'META_FACEBOOK_ADS', label: 'Meta/Facebook Ads', sourceType: 'META' },
@@ -74,9 +75,13 @@ export interface Lead {
 
   status: LeadStatus;
   priority: LeadPriority;
-  assignedEmployeeId: string;
-  assignedEmployeeName: string;
+  assignedEmployeeId?: string;
+  assignedEmployeeName?: string;
   salesTeamId?: string;
+  assignmentStatus?: LeadAssignmentStatus;
+  assignmentReason?: LeadAssignmentReason;
+  assignmentRuleId?: string;
+  assignedAt?: string;
   assignedManagerId?: string;
   notes: string;
   dropReason?: LeadDropReason;

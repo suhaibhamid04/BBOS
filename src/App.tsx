@@ -38,6 +38,7 @@ import { AccommodationInventoryView } from './components/inventory/Accommodation
 import { TransportInventoryView } from './components/inventory/TransportInventoryView';
 import { ActivityInventoryView } from './components/inventory/ActivityInventoryView';
 import { SupplierPayablesView } from './components/finance/SupplierPayablesView';
+import { LeadDistributionSettingsView } from './components/governance/LeadDistributionSettingsView';
 
 export function AppContent() {
   const [activeNav, setActiveNav] = useState<NavSectionKey>('dashboard');
@@ -95,6 +96,8 @@ export function AppContent() {
         return <AnalyticsOverviewView />;
       case 'employees':
         return <EmployeesView />;
+      case 'lead-distribution':
+        return <LeadDistributionSettingsView />;
       case 'roles-permissions':
         return <RolesPermissionsView />;
       case 'ai-permissions':

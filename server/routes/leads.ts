@@ -18,6 +18,11 @@ import {
 import { APP_CONFIG } from '../../src/config.js';
 import { DEMO_CUSTOMERS, DEMO_LEADS } from '../../src/services/demoData.js';
 import { PRESET_USERS } from '../../src/services/permissions.js';
+import { InMemoryConversionStorageProvider } from '../../src/services/conversion/conversionStorageProvider.js';
+import {
+  LeadDistributionError,
+  LeadDistributionService,
+} from '../services/leadDistributionService.js';
 
 export const leadsRouter = Router();
 
@@ -28,7 +33,6 @@ const legacyStages: Record<string, LeadStatus> = {
 };
 const legacyPriorities: Record<string, LeadPriority> = { URGENT: 'HOT', HIGH: 'HOT', MEDIUM: 'WARM', LOW: 'COLD' };
 
-interface ActiveSalesAssignee { employeeId: string; name: string; salesTeamId: string }
 type UnknownRecord = Record<string, any>;
 
 function cleanString(value: unknown): string | undefined {
@@ -95,6 +99,12 @@ function normalizeStoredLead(value: UnknownRecord): Lead {
 const demoLeads = new Map<string, Lead>(DEMO_LEADS.map(lead => [lead.id, normalizeStoredLead({ ...structuredClone(lead), isDemo: true })]));
 const demoCustomers = new Map(DEMO_CUSTOMERS.map(customer => [customer.id, structuredClone(customer)]));
 const demoAuditLogs = new Map<string, UnknownRecord>();
+const demoDistributionStorage = new InMemoryConversionStorageProvider({ leads: [...demoLeads.values()] });
+for (const customer of demoCustomers.values()) demoDistributionStorage.rawSet('customers', customer.id, customer);
+for (const employee of PRESET_USERS) demoDistributionStorage.rawSet('employees', employee.employeeId, employee);
+demoDistributionStorage.rawSet('sales_teams', 'sales-team-01', { id: 'sales-team-01', name: 'Kashmir Sales Team', active: true });
+const demoLeadDistribution = new LeadDistributionService(demoDistributionStorage);
+const productionLeadDistribution = new LeadDistributionService();
 
 class LeadRequestError extends Error {
   constructor(readonly statusCode: number, readonly code: string, message: string) { super(message); }
@@ -154,41 +164,28 @@ function parseChildAges(value: unknown): number[] {
 
 function sendError(res: Response, error: unknown, fallback: string) {
   if (error instanceof LeadRequestError) return res.status(error.statusCode).json({ error: error.message, code: error.code });
+  if (error instanceof LeadDistributionError) return res.status(error.statusCode).json({ error: error.message, code: error.code });
   console.error(`[LEADS] ${fallback}:`, error);
   return res.status(500).json({ error: fallback, code: 'LEAD_OPERATION_FAILED' });
 }
 
+function distributionService(req: Request) {
+  return isDemoRequest(req) ? demoLeadDistribution : productionLeadDistribution;
+}
+
+function distributionActor(req: Request) {
+  const actor = req.user!;
+  return {
+    employeeId: actor.employeeId,
+    role: actor.role,
+    name: cleanString(actor.name) || actor.employeeId,
+    active: true,
+    ...(actor.salesTeamId ? { salesTeamId: actor.salesTeamId } : {}),
+  };
+}
+
 function isDemoRequest(req: Request) {
   return APP_CONFIG.DEMO_MODE && req.user?.isDemo === true && process.env.NODE_ENV !== 'production';
-}
-
-function demoAssignee(employeeId: string): ActiveSalesAssignee | null {
-  const employee = PRESET_USERS.find(candidate => candidate.employeeId === employeeId);
-  if (!employee?.active || !employee.salesTeamId || !['Sales Executive', 'Sales Manager'].includes(employee.role)) return null;
-  return { employeeId: employee.employeeId, name: employee.name, salesTeamId: employee.salesTeamId };
-}
-
-async function resolveActiveSalesAssignee(db: ReturnType<typeof getAdminDb>, employeeId: string): Promise<ActiveSalesAssignee | null> {
-  const normalizedEmployeeId = cleanString(employeeId);
-  if (!normalizedEmployeeId) return null;
-  const employees = db.collection('employees');
-  const [canonicalSnapshot, legacyDocument] = await Promise.all([
-    employees.where('employeeId', '==', normalizedEmployeeId).limit(2).get(), employees.doc(normalizedEmployeeId).get(),
-  ]);
-  const candidates = new Map<string, FirebaseFirestore.DocumentSnapshot>();
-  for (const document of canonicalSnapshot.docs) candidates.set(document.id, document);
-  if (legacyDocument.exists) candidates.set(legacyDocument.id, legacyDocument);
-  if (candidates.size !== 1) return null;
-  const document = [...candidates.values()][0];
-  const data = document.data() || {};
-  const canonicalEmployeeId = cleanString(data.employeeId) || cleanString(data.id) || document.id;
-  const salesTeamId = cleanString(data.salesTeamId) || cleanString(data.teamId);
-  if (canonicalEmployeeId !== normalizedEmployeeId || data.active !== true || !['Sales Executive', 'Sales Manager'].includes(data.role) || !cleanString(data.name) || !salesTeamId) return null;
-  return { employeeId: canonicalEmployeeId, name: data.name.trim(), salesTeamId };
-}
-
-async function resolveAssignee(req: Request, employeeId: string): Promise<ActiveSalesAssignee | null> {
-  return isDemoRequest(req) ? demoAssignee(employeeId) : resolveActiveSalesAssignee(getAdminDb(), employeeId);
 }
 
 function canReadLead(req: Request, lead: Lead): boolean {
@@ -236,8 +233,14 @@ function buildEnquiryFields(body: UnknownRecord, existing?: Lead): UnknownRecord
     throw new LeadRequestError(400, 'INVALID_TRAVELER_COUNT', 'travelerCount must equal adults plus children.');
   }
 
-  const start = dateOnly(body.travelStartDate === undefined && existing ? existing.travelStartDate : body.travelStartDate, 'travelStartDate');
-  let end = dateOnly(body.travelEndDate === undefined && existing ? existing.travelEndDate : body.travelEndDate, 'travelEndDate');
+  const startWasSupplied = Object.prototype.hasOwnProperty.call(body, 'travelStartDate');
+  const nightsWereSupplied = Object.prototype.hasOwnProperty.call(body, 'nights');
+  const endWasSupplied = Object.prototype.hasOwnProperty.call(body, 'travelEndDate');
+  const start = dateOnly(startWasSupplied ? body.travelStartDate : existing?.travelStartDate, 'travelStartDate');
+  let end = dateOnly(
+    endWasSupplied ? body.travelEndDate : (startWasSupplied || nightsWereSupplied) ? undefined : existing?.travelEndDate,
+    'travelEndDate',
+  );
   let nights = body.nights === undefined && existing ? existing.nights : optionalNumber(body.nights, 'nights', true);
   if (nights !== undefined && nights < 1) throw new LeadRequestError(400, 'INVALID_NIGHTS', 'nights must be at least 1.');
   if (end && !start) throw new LeadRequestError(400, 'INVALID_TRAVEL_DATES', 'travelStartDate is required when travelEndDate is supplied.');
@@ -352,18 +355,8 @@ leadsRouter.post('/', requireRole(crmRoles), async (req, res) => {
     if (!(LEAD_PRIORITIES as readonly string[]).includes(priority)) throw new LeadRequestError(400, 'INVALID_LEAD_PRIORITY', 'priority is invalid.');
     let enquiry = buildEnquiryFields(body);
 
-    let assignee: ActiveSalesAssignee;
-    if (actor.role === 'Sales Executive') {
-      if (!actor.salesTeamId) throw new LeadRequestError(403, 'MISSING_TEAM_METADATA', 'Sales team metadata is required.');
-      assignee = { employeeId: actor.employeeId, name: actor.name, salesTeamId: actor.salesTeamId };
-    } else {
-      const requestedAssignee = cleanString(body.assignedEmployeeId) || (actor.role === 'Sales Manager' ? actor.employeeId : undefined);
-      if (!requestedAssignee) throw new LeadRequestError(422, 'ACTIVE_SALES_ASSIGNEE_REQUIRED', 'Founder/Admin must choose one active Sales employee.');
-      const resolved = await resolveAssignee(req, requestedAssignee);
-      if (!resolved) throw new LeadRequestError(422, 'ACTIVE_SALES_ASSIGNEE_REQUIRED', 'The assigned employee must be one active Sales employee.');
-      if (actor.role === 'Sales Manager' && resolved.salesTeamId !== actor.salesTeamId) throw new LeadRequestError(403, 'LEAD_TEAM_SCOPE_DENIED', 'Sales Managers may assign Leads only within their team.');
-      assignee = resolved;
-    }
+    const requestedAssigneeId = cleanString(body.assignedEmployeeId);
+    const useAutomaticDistribution = ['Founder', 'Admin'].includes(actor.role) && !requestedAssigneeId;
 
     const requestedCustomerId = cleanString(body.customerId);
     let existingCustomer: UnknownRecord | undefined;
@@ -390,43 +383,41 @@ leadsRouter.post('/', requireRole(crmRoles), async (req, res) => {
     const lead = Object.fromEntries(Object.entries({
       ...enquiry, id: attemptedLeadId, customerId,
       ...(cleanString(body.companyId) ? { companyId: cleanString(body.companyId) } : {}),
-      sourceId: source.id, source: source.label, sourcePlatform: source.label, createdSourceType: 'MANUAL',
+      sourceId: source.id, source: source.label, sourcePlatform: source.label,
+      createdSourceType: useAutomaticDistribution ? source.sourceType : 'MANUAL',
       ...(cleanString(body.sourceReference) ? { sourceReference: cleanString(body.sourceReference) } : {}),
       ...(cleanString(body.campaignId) ? { campaignId: cleanString(body.campaignId) } : {}),
       ...(cleanString(body.formId) ? { formId: cleanString(body.formId) } : {}),
       ...(cleanString(body.adId) ? { adId: cleanString(body.adId) } : {}),
       ...(cleanString(body.contentId) ? { contentId: cleanString(body.contentId) } : {}),
       status: 'NEW', priority,
-      assignedEmployeeId: assignee.employeeId, assignedEmployeeName: assignee.name, salesTeamId: assignee.salesTeamId,
       ...(requestId ? { creationRequestId: requestId } : {}),
       createdByEmployeeId: actor.employeeId, updatedByEmployeeId: actor.employeeId,
       createdAt: now, updatedAt: now, ...(isDemoRequest(req) ? { isDemo: true } : {}),
     }).filter(([, value]) => value !== undefined)) as unknown as Lead;
 
-    const createdAudit = audit('LEAD_CREATED', actor, lead.id, null, lead, 'Structured travel enquiry created.');
-    const linkedAudit = existingCustomer ? audit('LEAD_CUSTOMER_LINKED', actor, lead.id, null, { customerId }, 'Existing Customer linked to Lead.') : null;
+    const newCustomer = existingCustomer ? undefined : {
+      id: customerId, name: lead.customerName, phone: lead.customerPhone,
+      normalizedPhone: normalizeLeadPhone(lead.customerPhone),
+      ...(lead.whatsAppNumber ? { whatsApp: lead.whatsAppNumber } : {}),
+      email: lead.customerEmail || '', normalizedEmail: normalizeLeadEmail(lead.customerEmail),
+      city: lead.customerCity || '', customerType: lead.companyId ? 'B2B' : 'B2C',
+      preferences: lead.tags, notes: lead.notes, totalBookings: 0, lifetimeValue: 0,
+      createdAt: now, updatedAt: now, ...(isDemoRequest(req) ? { isDemo: true } : {}),
+    };
+    const result = await distributionService(req).createLead({
+      lead,
+      actor: distributionActor(req),
+      ...(requestedAssigneeId ? { requestedAssigneeId } : {}),
+      isExternalDelivery: useAutomaticDistribution,
+      ...(newCustomer ? { newCustomer } : {}),
+      linkedExistingCustomer: Boolean(existingCustomer),
+    });
     if (isDemoRequest(req)) {
-      if (!existingCustomer) demoCustomers.set(customerId, {
-        id: customerId, name: lead.customerName, phone: lead.customerPhone, whatsApp: lead.whatsAppNumber,
-        email: lead.customerEmail || '', city: lead.customerCity || '', customerType: lead.companyId ? 'B2B' : 'B2C',
-        preferences: lead.tags, notes: lead.notes, totalBookings: 0, lifetimeValue: 0, createdAt: now, updatedAt: now, isDemo: true,
-      });
-      demoLeads.set(lead.id, lead); demoAuditLogs.set(createdAudit.id, createdAudit); if (linkedAudit) demoAuditLogs.set(linkedAudit.id, linkedAudit);
-    } else {
-      const leadRef = db!.collection('leads').doc(lead.id);
-      await db!.runTransaction(async transaction => {
-        if (!existingCustomer) transaction.create(db!.collection('customers').doc(customerId), {
-          id: customerId, name: lead.customerName, phone: lead.customerPhone, normalizedPhone: normalizeLeadPhone(lead.customerPhone),
-          ...(lead.whatsAppNumber ? { whatsApp: lead.whatsAppNumber } : {}), email: lead.customerEmail || '', normalizedEmail: normalizeLeadEmail(lead.customerEmail),
-          city: lead.customerCity || '', customerType: lead.companyId ? 'B2B' : 'B2C', preferences: lead.tags, notes: lead.notes,
-          totalBookings: 0, lifetimeValue: 0, createdAt: now, updatedAt: now,
-        });
-        transaction.create(leadRef, lead);
-        transaction.create(db!.collection('audit_logs').doc(createdAudit.id), createdAudit);
-        if (linkedAudit) transaction.create(db!.collection('audit_logs').doc(linkedAudit.id), linkedAudit);
-      });
+      demoLeads.set(result.lead.id, result.lead);
+      if (newCustomer) demoCustomers.set(customerId, newCustomer as any);
     }
-    return res.status(201).json({ success: true, data: lead });
+    return res.status(result.idempotent ? 200 : 201).json({ success: true, data: result.lead, idempotent: result.idempotent });
   } catch (error: any) {
     if (attemptedLeadId && (error?.code === 6 || error?.code === 'already-exists' || error?.code === 'ALREADY_EXISTS')) {
       const snapshot = await getAdminDb().collection('leads').doc(attemptedLeadId).get();
@@ -434,6 +425,50 @@ leadsRouter.post('/', requireRole(crmRoles), async (req, res) => {
     }
     return sendError(res, error, 'Failed to create Lead.');
   }
+});
+
+leadsRouter.get('/distribution/overview', requireRole(['Founder', 'Admin']), async (req, res) => {
+  try {
+    const data = await distributionService(req).getOverview(distributionActor(req));
+    return res.json({ success: true, data, ...(isDemoRequest(req) ? { mode: 'DEMO' } : {}) });
+  } catch (error) { return sendError(res, error, 'Lead distribution settings could not be loaded.'); }
+});
+
+leadsRouter.patch('/distribution/config', requireRole(['Founder', 'Admin']), async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body as UnknownRecord : {};
+    const data = await distributionService(req).updateConfiguration(body, distributionActor(req));
+    return res.json({ success: true, data });
+  } catch (error) { return sendError(res, error, 'Lead distribution settings could not be updated.'); }
+});
+
+leadsRouter.get('/assignment-options', requireRole(['Founder', 'Admin', 'Sales Manager']), async (req, res) => {
+  try {
+    const data = await distributionService(req).assignmentOptions(distributionActor(req));
+    return res.json({ success: true, data });
+  } catch (error) { return sendError(res, error, 'Lead assignment options could not be loaded.'); }
+});
+
+leadsRouter.get('/:id/assignment-history', requireRole(crmRoles), async (req, res) => {
+  try {
+    const data = await distributionService(req).getHistory(req.params.id, distributionActor(req));
+    return res.json({ success: true, data });
+  } catch (error) { return sendError(res, error, 'Lead assignment history could not be loaded.'); }
+});
+
+leadsRouter.patch('/:id/assignment', requireRole(['Founder', 'Admin', 'Sales Manager']), async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body as UnknownRecord : {};
+    const result = await distributionService(req).reassignLead({
+      leadId: req.params.id,
+      targetEmployeeId: requiredString(body.targetEmployeeId, 'targetEmployeeId'),
+      expectedUpdatedAt: requiredString(body.expectedUpdatedAt, 'expectedUpdatedAt'),
+      ...(cleanString(body.note) ? { note: cleanString(body.note) } : {}),
+      actor: distributionActor(req),
+    });
+    if (isDemoRequest(req)) demoLeads.set(result.lead.id, result.lead);
+    return res.json({ success: true, data: result.lead, history: result.history });
+  } catch (error) { return sendError(res, error, 'Lead could not be reassigned.'); }
 });
 
 leadsRouter.patch('/:id', requireRole(crmRoles), async (req, res) => {
@@ -449,19 +484,14 @@ leadsRouter.patch('/:id', requireRole(crmRoles), async (req, res) => {
     if (!canReadLead(req, existing)) throw new LeadRequestError(403, 'LEAD_SCOPE_DENIED', 'This Lead is outside your Sales scope.');
     if (existing.updatedAt !== expectedUpdatedAt) throw new LeadRequestError(409, 'LEAD_VERSION_CONFLICT', 'This Lead changed after you opened it. Reload before saving.');
 
+    if ('assignedEmployeeId' in body || 'assignmentStatus' in body || 'assignmentReason' in body || 'assignedAt' in body) {
+      throw new LeadRequestError(400, 'USE_ASSIGNMENT_ENDPOINT', 'Lead assignment is server-controlled and must use the assignment endpoint.');
+    }
     const protectedFields = [
       'id', 'customerId', 'companyId', 'salesTeamId', 'assignedEmployeeName', 'createdByEmployeeId',
       'updatedByEmployeeId', 'createdAt', 'bookingId', 'quoteId', 'convertedBookingId', 'createdSourceType',
     ];
     if (protectedFields.some(field => field in body)) throw new LeadRequestError(400, 'PROTECTED_LEAD_FIELD', 'Ownership, team, audit, and timestamp fields are server-controlled.');
-    let assigneeFields: UnknownRecord = {};
-    if (body.assignedEmployeeId !== undefined && body.assignedEmployeeId !== existing.assignedEmployeeId) {
-      if (actor.role === 'Sales Executive') throw new LeadRequestError(403, 'LEAD_REASSIGNMENT_DENIED', 'Sales Executives cannot reassign Leads.');
-      const assignee = await resolveAssignee(req, requiredString(body.assignedEmployeeId, 'assignedEmployeeId'));
-      if (!assignee) throw new LeadRequestError(422, 'ACTIVE_SALES_ASSIGNEE_REQUIRED', 'The assigned employee must be one active Sales employee.');
-      if (actor.role === 'Sales Manager' && assignee.salesTeamId !== actor.salesTeamId) throw new LeadRequestError(403, 'LEAD_TEAM_SCOPE_DENIED', 'Sales Managers may reassign Leads only within their team.');
-      assigneeFields = { assignedEmployeeId: assignee.employeeId, assignedEmployeeName: assignee.name, salesTeamId: assignee.salesTeamId };
-    }
 
     const editableEnquiryFields = ['customerName', 'customerPhone', 'customerEmail', 'salutation', 'alternatePhone', 'whatsAppNumber', 'customerCity', 'destination', 'travelStartDate', 'travelEndDate', 'nights', 'adults', 'children', 'childAges', 'travelerCount', 'focCount', 'budget', 'tripType', 'hotelPreference', 'mealPlanPreference', 'vehiclePreference', 'transportPreference', 'specialRequirements', 'notes', 'tags'];
     const changesEnquiry = editableEnquiryFields.some(field => field in body);
@@ -487,7 +517,7 @@ leadsRouter.patch('/:id', requireRole(crmRoles), async (req, res) => {
 
     const now = new Date().toISOString();
     const updates = Object.fromEntries(Object.entries({
-      ...enquiryFields, ...sourceFields, ...assigneeFields,
+      ...enquiryFields, ...sourceFields,
       ...(body.status !== undefined ? { status: stage } : {}), ...(body.priority !== undefined ? { priority } : {}), ...dropFields,
       updatedAt: now, updatedByEmployeeId: actor.employeeId,
     }).filter(([, value]) => value !== undefined));
@@ -506,11 +536,13 @@ leadsRouter.patch('/:id', requireRole(crmRoles), async (req, res) => {
     const audits: UnknownRecord[] = [];
     if (stage !== existing.status) audits.push(audit(stage === 'DROPPED' ? 'LEAD_DROPPED' : 'LEAD_STAGE_CHANGED', actor, leadId, existing, updated, `Lead stage changed from ${existing.status} to ${stage}.`));
     if (priority !== existing.priority) audits.push(audit('LEAD_PRIORITY_CHANGED', actor, leadId, existing, updated, `Lead priority changed from ${existing.priority} to ${priority}.`));
-    if (changesEnquiry || Object.keys(sourceFields).length || Object.keys(assigneeFields).length) audits.push(audit('LEAD_UPDATED', actor, leadId, existing, updated, 'Structured Lead details updated.'));
+    if (changesEnquiry || Object.keys(sourceFields).length) audits.push(audit('LEAD_UPDATED', actor, leadId, existing, updated, 'Structured Lead details updated.'));
 
     const affectedTrips: UnknownRecord[] = [];
     if (isDemoRequest(req)) {
-      demoLeads.set(leadId, updated); for (const event of audits) demoAuditLogs.set(event.id, event);
+      demoLeads.set(leadId, updated);
+      demoDistributionStorage.rawSet('leads', leadId, updated);
+      for (const event of audits) demoAuditLogs.set(event.id, event);
     } else {
       await db!.runTransaction(async transaction => {
         const leadRef = db!.collection('leads').doc(leadId);

@@ -81,7 +81,7 @@ export const SalesPipelineView: React.FC = () => {
 
                       {nextStage && (
                         <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
-                          <span className="text-[10px] text-slate-400">{lead.assignedEmployeeName.split(' ')[0]}</span>
+                          <span className="text-[10px] text-slate-400">{lead.assignedEmployeeName?.split(' ')[0] || (lead.assignmentStatus === 'ASSIGNMENT_REQUIRED' ? 'Assignment required' : 'Unassigned')}</span>
                           <button
                             id={`advance-stage-${lead.id}`}
                             onClick={() => updateLeadStatus(lead.id, nextStage)}

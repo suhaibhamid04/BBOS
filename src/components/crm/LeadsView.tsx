@@ -98,6 +98,9 @@ export const LeadsView: React.FC<LeadsViewProps> = ({ onNavigate }) => {
     }
   };
 
+  const assignmentLabel = (lead: Lead) => lead.assignedEmployeeName?.trim()
+    || (lead.assignmentStatus === 'ASSIGNMENT_REQUIRED' ? 'Assignment required' : 'Unassigned');
+
   return (
     <div id="leads-view" className="space-y-5">
       {/* Header & Controls */}
@@ -282,9 +285,9 @@ export const LeadsView: React.FC<LeadsViewProps> = ({ onNavigate }) => {
                       <td className="py-3 px-4">
                         <div className="flex items-center space-x-1.5">
                           <div className="w-6 h-6 rounded-full bg-slate-200 text-slate-700 font-bold flex items-center justify-center text-[10px]">
-                            {lead.assignedEmployeeName.charAt(0)}
+                            {assignmentLabel(lead).charAt(0)}
                           </div>
-                          <span className="text-xs text-slate-700 truncate max-w-[120px]">{lead.assignedEmployeeName}</span>
+                          <span className="text-xs text-slate-700 truncate max-w-[120px]">{assignmentLabel(lead)}</span>
                         </div>
                       </td>
 
@@ -359,7 +362,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({ onNavigate }) => {
                           <span className="font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
                             Score: {lead.leadScore ?? '—'}
                           </span>
-                          <span className="text-slate-400">{lead.assignedEmployeeName.split(' ')[0]}</span>
+                          <span className="text-slate-400">{assignmentLabel(lead).split(' ')[0]}</span>
                         </div>
                       </div>
                     ))}

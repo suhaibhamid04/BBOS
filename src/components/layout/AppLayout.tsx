@@ -39,6 +39,7 @@ const SECTION_TITLES: Record<NavSectionKey, string> = {
   'operations-dashboard': 'Operations Control Room',
   vouchers: 'Vouchers',
   employees: 'Settings → Team & Access',
+  'lead-distribution': 'Settings → Lead Distribution',
   'roles-permissions': 'Role-Based Access Control Matrix',
   'ai-permissions': 'AI Access & Permissions',
   'integrations': 'App Integrations',

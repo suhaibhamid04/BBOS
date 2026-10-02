@@ -13,11 +13,11 @@ import {
   type LeadPriority,
   type LeadSourceId,
   type TripType,
-  type UserProfile,
 } from '../../types';
 import { PRESET_USERS } from '../../services/permissions';
 import { APP_CONFIG } from '../../config';
 import { authenticatedReadHeaders } from '../../services/auth/authenticatedApi';
+import { getLeadAssignmentOptions } from '../../services/leads/leadDistributionApi';
 
 interface CreateLeadModalProps {
   isOpen: boolean;
@@ -40,7 +40,7 @@ function requestId() {
 export const CreateLeadModal: React.FC<CreateLeadModalProps> = ({ isOpen, onClose, onNavigate, lead: editingLead }) => {
   const { createLead, updateLead, createOrResumeLeadTrip } = useData();
   const { currentUser } = useAuth();
-  const [assigneeOptions, setAssigneeOptions] = useState<UserProfile[]>([]);
+  const [assigneeOptions, setAssigneeOptions] = useState<Array<{ employeeId: string; name: string; role: string }>>([]);
   const [assignedEmployeeId, setAssignedEmployeeId] = useState(currentUser.employeeId);
   const [isSaving, setIsSaving] = useState(false);
   const savingRef = useRef(false);
@@ -108,30 +108,26 @@ export const CreateLeadModal: React.FC<CreateLeadModalProps> = ({ isOpen, onClos
     setCreationRequestId(requestId());
     if (editingLead) {
       setAssigneeOptions([]);
-      setAssignedEmployeeId(editingLead.assignedEmployeeId);
+      setAssignedEmployeeId(editingLead.assignedEmployeeId || '');
       return;
     }
     if (APP_CONFIG.DEMO_MODE) {
       const demoSales = PRESET_USERS.filter(user => user.active && ['Sales Executive', 'Sales Manager'].includes(user.role) && user.salesTeamId);
       const allowed = currentUser.role === 'Founder' || currentUser.role === 'Admin'
         ? demoSales
-        : demoSales.filter(user => user.employeeId === currentUser.employeeId);
+        : currentUser.role === 'Sales Manager'
+          ? demoSales.filter(user => user.salesTeamId === currentUser.salesTeamId)
+          : demoSales.filter(user => user.employeeId === currentUser.employeeId);
       setAssigneeOptions(allowed);
-      setAssignedEmployeeId(allowed[0]?.employeeId || currentUser.employeeId);
+      setAssignedEmployeeId(['Founder', 'Admin'].includes(currentUser.role) ? '' : currentUser.employeeId);
       return;
     }
-    if (currentUser.role === 'Founder' || currentUser.role === 'Admin') {
-      setAssignedEmployeeId('');
+    if (['Founder', 'Admin', 'Sales Manager'].includes(currentUser.role)) {
+      setAssignedEmployeeId(currentUser.role === 'Sales Manager' ? currentUser.employeeId : '');
       void (async () => {
         try {
-          const response = await fetch('/api/employees', { headers: await authenticatedReadHeaders(currentUser.employeeId) });
-          const payload = await response.json().catch(() => ({}));
-          if (!response.ok) throw new Error(payload.error || 'Sales employees could not be loaded.');
-          const salesEmployees = (payload.data || []).filter((employee: UserProfile) =>
-            employee.active && ['Sales Executive', 'Sales Manager'].includes(employee.role) && employee.salesTeamId,
-          );
+          const salesEmployees = await getLeadAssignmentOptions(currentUser.employeeId);
           setAssigneeOptions(salesEmployees);
-          setAssignedEmployeeId(salesEmployees[0]?.employeeId || '');
         } catch (error) {
           setAssigneeOptions([]);
           setSubmitError(error instanceof Error ? error.message : 'Sales employees could not be loaded.');
@@ -177,6 +173,7 @@ export const CreateLeadModal: React.FC<CreateLeadModalProps> = ({ isOpen, onClos
   }, [customerMatches, selectedCustomerId]);
 
   if (!isOpen) return null;
+  const assigneeRequired = currentUser.role === 'Sales Executive' || currentUser.role === 'Sales Manager';
 
   const setChildrenCount = (count: number) => {
     const bounded = Math.max(0, Math.min(8, count));
@@ -189,7 +186,7 @@ export const CreateLeadModal: React.FC<CreateLeadModalProps> = ({ isOpen, onClos
       setSubmitError('Enter the customer name and at least one contact method.');
       return;
     }
-    if (!assignedEmployeeId) {
+    if (assigneeRequired && !assignedEmployeeId) {
       setSubmitError('Choose an active Sales employee before creating this Lead.');
       return;
     }
@@ -257,7 +254,7 @@ export const CreateLeadModal: React.FC<CreateLeadModalProps> = ({ isOpen, onClos
         priority,
         tags: tags.split(',').map(tag => tag.trim()).filter(Boolean),
         notes: notes.trim(),
-        assignedEmployeeId,
+        ...(assignedEmployeeId ? { assignedEmployeeId } : {}),
       });
       if (buildPackage) {
         const trip = await createOrResumeLeadTrip(lead.id, lead);
@@ -288,7 +285,7 @@ export const CreateLeadModal: React.FC<CreateLeadModalProps> = ({ isOpen, onClos
             <div className="grid gap-3 sm:grid-cols-3">
               <label className={labelClass}>Lead source<select id="lead-source-platform" data-testid="lead-source" value={sourceId} onChange={event => setSourceId(event.target.value as LeadSourceId)} className={inputClass}>{LEAD_SOURCES.map(source => <option key={source.id} value={source.id}>{source.label}</option>)}</select></label>
               <label className={labelClass}>Source reference<input value={sourceReference} onChange={event => setSourceReference(event.target.value)} placeholder="Campaign, form or referral" className={inputClass} /></label>
-              <label className={labelClass}>Assign Lead To<select id="lead-assignee-select" value={assignedEmployeeId} disabled={Boolean(editingLead)} onChange={event => setAssignedEmployeeId(event.target.value)} className={inputClass}>{editingLead && <option value={editingLead.assignedEmployeeId}>{editingLead.assignedEmployeeName}</option>}{!editingLead && assigneeOptions.length === 0 && <option value="">No active Sales assignee</option>}{!editingLead && assigneeOptions.map(user => <option key={user.employeeId} value={user.employeeId}>{user.name} ({user.role})</option>)}</select></label>
+              <label className={labelClass}>Assign Lead To<select id="lead-assignee-select" value={assignedEmployeeId} disabled={Boolean(editingLead)} onChange={event => setAssignedEmployeeId(event.target.value)} className={inputClass}>{editingLead && <option value={editingLead.assignedEmployeeId || ''}>{editingLead.assignedEmployeeName || 'Unassigned'}</option>}{!editingLead && !assigneeRequired && <option value="">Auto-distribute</option>}{!editingLead && assigneeRequired && assigneeOptions.length === 0 && <option value="">No active Sales assignee</option>}{!editingLead && assigneeOptions.map(user => <option key={user.employeeId} value={user.employeeId}>{user.name} ({user.role})</option>)}</select></label>
             </div>
             {editingLead && <p className="text-[11px] text-slate-500">Contact corrections update this Lead snapshot. The linked Customer master record is unchanged.</p>}
           </section>
@@ -339,8 +336,8 @@ export const CreateLeadModal: React.FC<CreateLeadModalProps> = ({ isOpen, onClos
           {submitError && <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-rose-800">{submitError}</div>}
           <div className="flex flex-wrap justify-end gap-3 border-t border-slate-200 pt-4">
             <button id="cancel-create-lead-btn" type="button" onClick={onClose} className="rounded-lg px-4 py-2 font-medium text-slate-600 hover:bg-slate-100">Cancel</button>
-            <button id={editingLead ? 'submit-edit-lead-btn' : 'submit-create-lead-btn'} data-testid={editingLead ? 'save-lead-edit' : undefined} type="submit" disabled={isSaving || !assignedEmployeeId} className="rounded-lg border border-[#7056EE] px-5 py-2 font-bold text-[#7056EE] disabled:opacity-50">{isSaving ? 'Saving…' : editingLead ? 'Save changes' : 'Save Lead'}</button>
-            {!editingLead && <button id="save-build-package-btn" data-testid="save-build-package" type="button" disabled={isSaving || !assignedEmployeeId} onClick={() => void saveLead(true)} className="rounded-lg bg-[#7056EE] px-5 py-2 font-bold text-white disabled:opacity-50">{isSaving ? 'Saving…' : 'Save & Build Package'}</button>}
+            <button id={editingLead ? 'submit-edit-lead-btn' : 'submit-create-lead-btn'} data-testid={editingLead ? 'save-lead-edit' : undefined} type="submit" disabled={isSaving || (assigneeRequired && !assignedEmployeeId)} className="rounded-lg border border-[#7056EE] px-5 py-2 font-bold text-[#7056EE] disabled:opacity-50">{isSaving ? 'Saving…' : editingLead ? 'Save changes' : 'Save Lead'}</button>
+            {!editingLead && <button id="save-build-package-btn" data-testid="save-build-package" type="button" disabled={isSaving || (assigneeRequired && !assignedEmployeeId)} onClick={() => void saveLead(true)} className="rounded-lg bg-[#7056EE] px-5 py-2 font-bold text-white disabled:opacity-50">{isSaving ? 'Saving…' : 'Save & Build Package'}</button>}
           </div>
         </form>
       </div>

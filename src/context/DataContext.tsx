@@ -309,7 +309,7 @@ interface DataContextType {
   updateLead: (id: string, updates: Partial<Lead>) => Promise<Lead>;
   updateLeadStatus: (id: string, status: LeadStatus) => Promise<void>;
   addLeadNote: (id: string, note: string) => Promise<void>;
-  assignLead: (id: string, employeeId: string, employeeName: string) => Promise<void>;
+  assignLead: (id: string, employeeId: string, employeeName?: string, note?: string) => Promise<void>;
 
   // Customer actions
   createCustomer: (customer: Omit<Customer, 'id' | 'createdAt' | 'updatedAt' | 'totalBookings' | 'lifetimeValue'>) => Promise<Customer>;
@@ -819,6 +819,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         throw new Error(`Lead creation failed (${res.status}${code}): ${responseBody.error || 'The server did not provide an error message.'}`);
       }
       const { data: newLead } = responseBody;
+      if (!newLead || typeof newLead !== 'object' || typeof newLead.id !== 'string' || !newLead.id) {
+        throw new Error('Lead creation failed: the server returned an invalid Lead record. Reload and retry.');
+      }
       setLeads(prev => [newLead, ...prev.filter(existing => existing.id !== newLead.id)]);
       return newLead;
     } catch (err) {
@@ -891,8 +894,17 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await updateLead(id, { notes: formattedNote });
   };
 
-  const assignLead = async (id: string, employeeId: string, employeeName: string) => {
-    await updateLead(id, { assignedEmployeeId: employeeId, assignedEmployeeName: employeeName });
+  const assignLead = async (id: string, employeeId: string, _employeeName?: string, note?: string) => {
+    const previous = leads.find(lead => lead.id === id);
+    if (!previous) throw new Error('Lead not found. Reload the workspace and try again.');
+    const response = await fetch(`/api/leads/${encodeURIComponent(id)}/assignment`, {
+      method: 'PATCH',
+      headers: await authenticatedMutationHeaders(currentUser.employeeId),
+      body: JSON.stringify({ targetEmployeeId: employeeId, expectedUpdatedAt: previous.updatedAt, ...(note?.trim() ? { note: note.trim() } : {}) }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || `Lead reassignment failed (${response.status}).`);
+    setLeads(items => items.map(lead => lead.id === id ? body.data : lead));
   };
 
   // Accommodation CRUD

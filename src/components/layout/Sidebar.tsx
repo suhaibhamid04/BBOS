@@ -30,7 +30,8 @@ import {
   Flame,
   Plane,
   Compass,
-  WalletCards
+  WalletCards,
+  Shuffle
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useData } from '../../context/DataContext';
@@ -70,6 +71,7 @@ export type NavSectionKey =
   | 'approvals'
   | 'audit-logs'
   | 'settings'
+  | 'lead-distribution'
   | 'accommodation'
   | 'transport'
   | 'activities';
@@ -214,6 +216,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       title: 'ADMIN',
       items: [
         ...(permissions.canManageUsers ? [{ key: 'employees', label: 'Team & Access', icon: UserCheck } as any] : []),
+        ...(permissions.canManageUsers ? [{ key: 'lead-distribution', label: 'Lead Distribution', icon: Shuffle } as any] : []),
         ...(permissions.canManageUsers ? [{ key: 'roles-permissions', label: 'Roles & Permissions', icon: ShieldCheck } as any] : []),
         ...(permissions.canManageSettings ? [{ key: 'ai-permissions', label: 'AI Permissions', icon: Cpu } as any] : []),
         ...(permissions.canManageSettings ? [{ key: 'integrations', label: 'Integrations', icon: Boxes } as any] : []),

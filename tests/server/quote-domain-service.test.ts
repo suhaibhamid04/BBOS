@@ -440,6 +440,25 @@ describe('Stage D1 server-authoritative Quote mutations', () => {
     expect(storage.getAllAuditLogs().filter(log => log.action === 'QUOTE_SHARED')).toHaveLength(0);
   });
 
+  it('blocks new Quote work and sharing while Lead-driven package review is pending without changing historical Quote', async () => {
+    const historical = await service.createQuote(createInput(), executive);
+    storage.rawUpdate('trips', 'trip-01', {
+      costingStatus: 'PENDING',
+      packageReview: {
+        required: true, reason: 'LEAD_COMMERCIAL_DETAILS_CHANGED',
+        changes: [{ field: 'adults', before: 2, after: 4 }],
+        markedAt: '2026-09-21T00:00:00.000Z', markedByEmployeeId: executive.employeeId,
+      },
+    });
+    const before = storage.rawGet('quotes', historical.id);
+
+    await expect(service.updateQuote(historical.id, { notes: 'new revision' }, executive))
+      .rejects.toMatchObject({ code: 'PACKAGE_REVIEW_REQUIRED' });
+    await expect(service.shareQuote(historical.id, { channel: 'DOCUMENT', expectedVersion: historical.version }, executive))
+      .rejects.toMatchObject({ code: 'PACKAGE_REVIEW_REQUIRED' });
+    expect(storage.rawGet('quotes', historical.id)).toEqual(before);
+  });
+
   it('uses explicit conversion DTO allowlists and never passes supplier snapshots through', () => {
     const dto = buildQuoteConversionDto({
       success: true,

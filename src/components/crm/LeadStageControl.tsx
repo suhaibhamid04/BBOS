@@ -13,7 +13,7 @@ const display = (value: string) => value.replaceAll('_', ' ').toLowerCase().repl
 
 export const LeadStageControl: React.FC<{
   lead: Lead;
-  updateLead: (id: string, updates: Partial<Lead>) => Promise<void>;
+  updateLead: (id: string, updates: Partial<Lead>) => Promise<unknown>;
 }> = ({ lead, updateLead }) => {
   const [selectedStage, setSelectedStage] = useState<LeadStatus>(lead.status);
   const [dropReason, setDropReason] = useState<LeadDropReason | ''>(lead.dropReason || '');
