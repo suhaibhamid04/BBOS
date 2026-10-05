@@ -145,7 +145,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ...(permissions.canViewAllSales ? [{ key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard } as any] : []),
         ...(permissions.canAccessAiCommand ? [{ key: 'ai-command', label: 'AI Command Center', icon: Bot, badge: 'Live AI', badgeColor: 'bg-[#7056EE]/15 text-[#7056EE]' } as any] : []),
         { key: 'tasks', label: 'Tasks', icon: CheckSquare, badge: pendingTasksCount > 0 ? pendingTasksCount : undefined, badgeColor: 'bg-amber-100 text-amber-800' },
-        ...(canSeeApprovalInbox ? [{ key: 'approvals', label: 'Needs Attention', icon: ShieldAlert, badge: pendingApprovalCount, badgeColor: 'bg-rose-500 text-white font-bold' } as any] : []),
+        ...(canSeeApprovalInbox ? [{ key: 'approvals', label: 'Approvals & Exceptions', icon: ShieldAlert, badge: pendingApprovalCount, badgeColor: 'bg-rose-500 text-white font-bold' } as any] : []),
         { key: 'notifications', label: 'Notifications', icon: Bell },
       ]
     },

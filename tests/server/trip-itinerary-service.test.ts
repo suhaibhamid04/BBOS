@@ -42,11 +42,13 @@ function harness(trips = [trip('trip-own')], days = [day('day-own')]) {
 function seedInventory(storage: InMemoryConversionStorageProvider) {
   storage.rawSet('suppliers', 'supplier-1', { id: 'supplier-1', name: 'Valley Supplier', active: true });
   storage.rawSet('accommodation_properties', 'property-1', { id: 'property-1', name: 'Valley Hotel', supplierId: 'supplier-1', status: 'ACTIVE' });
-  storage.rawSet('room_categories', 'room-1', { id: 'room-1', propertyId: 'property-1', name: 'Premier Room', active: true });
-  storage.rawSet('rate_periods', 'rate-1', { id: 'rate-1', propertyId: 'property-1', roomCategoryId: 'room-1', mealPlan: 'MAP', validFrom: '2026-10-01', validTo: '2026-10-31', status: 'ACTIVE' });
+  storage.rawSet('room_categories', 'room-1', { id: 'room-1', propertyId: 'property-1', name: 'Premier Room', maxAdults: 2, maxChildren: 2, active: true });
+  storage.rawSet('rate_periods', 'rate-1', { id: 'rate-1', propertyId: 'property-1', roomCategoryId: 'room-1', contractType: 'STANDARD', mealPlan: 'MAP', validFrom: '2026-10-01', validTo: '2026-10-31', baseRate: 4_000, currency: 'INR', taxTreatment: 'NET', confirmationStatus: 'CONFIRMED', status: 'ACTIVE', supplements: [{ id: 'cwb', ratePeriodId: 'rate-1', type: 'CWB', amount: 500, unit: 'per_child_night', taxTreatment: 'NET' }] });
+  storage.rawSet('room_categories', 'room-premium', { id: 'room-premium', propertyId: 'property-1', name: 'Premium Room', baseAdults: 2, maxAdults: 3, maxChildren: 1, maxChildrenWithoutBed: 1, maxTotalOccupancy: 3, active: true });
+  storage.rawSet('rate_periods', 'rate-premium', { id: 'rate-premium', propertyId: 'property-1', roomCategoryId: 'room-premium', contractType: 'STANDARD', mealPlan: 'MAP', validFrom: '2026-10-01', validTo: '2026-10-31', baseRate: 6_000, currency: 'INR', taxTreatment: 'NET', confirmationStatus: 'CONFIRMED', status: 'ACTIVE', supplements: [{ id: 'eb', ratePeriodId: 'rate-premium', type: 'EB', amount: 1_000, unit: 'per_person_night', taxTreatment: 'NET' }] });
   storage.rawSet('accommodation_properties', 'property-2', { id: 'property-2', name: 'Lake Hotel', supplierId: 'supplier-1', status: 'ACTIVE' });
-  storage.rawSet('room_categories', 'room-2', { id: 'room-2', propertyId: 'property-2', name: 'Lake Suite', active: true });
-  storage.rawSet('rate_periods', 'rate-2', { id: 'rate-2', propertyId: 'property-2', roomCategoryId: 'room-2', mealPlan: 'CP', validFrom: '2026-10-01', validTo: '2026-10-31', status: 'ACTIVE' });
+  storage.rawSet('room_categories', 'room-2', { id: 'room-2', propertyId: 'property-2', name: 'Lake Suite', maxAdults: 2, maxChildren: 2, active: true });
+  storage.rawSet('rate_periods', 'rate-2', { id: 'rate-2', propertyId: 'property-2', roomCategoryId: 'room-2', contractType: 'STANDARD', mealPlan: 'CP', validFrom: '2026-10-01', validTo: '2026-10-31', baseRate: 5_000, currency: 'INR', taxTreatment: 'NET', confirmationStatus: 'CONFIRMED', status: 'ACTIVE', supplements: [{ id: 'cwb', ratePeriodId: 'rate-2', type: 'CWB', amount: 500, unit: 'per_child_night', taxTreatment: 'NET' }] });
   storage.rawSet('vehicle_categories', 'vehicle-1', { id: 'vehicle-1', name: 'Innova', displayName: 'Innova', active: true });
   storage.rawSet('transport_rate_periods', 'transport-rate-1', { id: 'transport-rate-1', vehicleCategoryId: 'vehicle-1', supplierId: 'supplier-1', serviceType: 'MULTI_DAY_JOURNEY', pricingUnit: 'PER_DAY', validFrom: '2026-10-01', validTo: '2026-10-31', status: 'ACTIVE' });
   storage.rawSet('activity_masters', 'activity-1', { id: 'activity-1', name: 'Shikara Ride', duration: '1 Hour', active: true });
@@ -148,9 +150,67 @@ describe('Stage D2B server-authoritative Trip itinerary and deletion mutations',
     expect(updated.day.items).toHaveLength(1);
   });
 
-  test('hotel rate must cover every night and a failed replacement preserves the original item', async () => {
+  test('package supplier rates are server-authored, audited, and never mutate master inventory', async () => {
     const { storage, service } = harness(); seedInventory(storage);
-    storage.rawSet('rate_periods', 'short-rate', { id: 'short-rate', propertyId: 'property-2', roomCategoryId: 'room-2', mealPlan: 'CP', validFrom: '2026-10-01', validTo: '2026-10-03', status: 'ACTIVE' });
+    const created = await service.addItineraryItem('day-own', {
+      type: 'HOTEL', title: 'Hotel', description: 'Stay',
+      metadata: { propertyId: 'property-1', roomCategoryId: 'room-1', rateId: 'rate-1', mealPlan: 'MAP', checkInDate: '2026-10-02', nights: 2, rooms: 1, roomAllocations: [{ roomIndex: 1, roomCategoryId: 'room-1', rateId: 'rate-1', adults: 2, children: 0, childAges: [] }], packageRateRequest: { entryMode: 'PER_ROOM_NIGHT', amount: 3_800, taxTreatment: 'NET', supplierQuoteReference: 'Phone call' } },
+    }, executive);
+    expect(created.item.metadata?.costSource).toBe('PACKAGE_RATE_OVERRIDE');
+    expect(created.item.metadata?.packageSupplierRate).toMatchObject({ amount: 3_800, enteredByEmployeeId: 'exec-1', originalContractedTotal: 8_000 });
+    expect(created.item.metadata?.packageSupplierRate.enteredAt).toBeString();
+    expect(storage.rawGet('rate_periods', 'rate-1')?.baseRate).toBe(4_000);
+    expect(storage.rawList('audit_logs').some(value => value.action === 'PACKAGE_SUPPLIER_RATE_ENTERED' && value.actorId === 'exec-1')).toBe(true);
+
+    const changed = await service.updateItineraryItem('day-own', created.item.id, {
+      type: 'HOTEL', title: 'Hotel', description: 'Stay',
+      metadata: { propertyId: 'property-1', roomCategoryId: 'room-1', rateId: 'rate-1', mealPlan: 'MAP', checkInDate: '2026-10-02', nights: 2, rooms: 1, roomAllocations: [{ roomIndex: 1, roomCategoryId: 'room-1', rateId: 'rate-1', adults: 2, children: 0, childAges: [] }], packageRateRequest: { entryMode: 'PER_ROOM_NIGHT', amount: 4_500, taxTreatment: 'NET' } },
+    }, executive);
+    expect(changed.item.metadata?.packageSupplierRate.amount).toBe(4_500);
+    expect(storage.rawList('audit_logs').some(value => value.action === 'PACKAGE_SUPPLIER_RATE_CHANGED')).toBe(true);
+  });
+
+  test('manual package quote works without contract and hotel replacement clears old package pricing', async () => {
+    const { storage, service } = harness(); seedInventory(storage);
+    storage.rawSet('rate_periods', 'rate-2', { ...storage.rawGet('rate_periods', 'rate-2'), status: 'ARCHIVED' });
+    const created = await service.addItineraryItem('day-own', {
+      type: 'HOTEL', title: 'Manual', description: 'Stay',
+      metadata: { propertyId: 'property-2', roomCategoryId: 'room-2', mealPlan: 'CP', checkInDate: '2026-10-02', nights: 2, rooms: 1, roomAllocations: [{ roomIndex: 1, roomCategoryId: 'room-2', adults: 2, children: 0, childAges: [] }], packageRateRequest: { entryMode: 'TOTAL_STAY', amount: 9_250, taxTreatment: 'NET', supplierQuoteReference: 'WhatsApp' } },
+    }, executive);
+    expect(created.item.metadata?.costSource).toBe('MANUAL_SUPPLIER_QUOTE');
+    expect(created.item.metadata?.rateId).toBeUndefined();
+
+    const replacement = await service.updateItineraryItem('day-own', created.item.id, {
+      type: 'HOTEL', title: 'Contracted', description: 'Stay',
+      metadata: { propertyId: 'property-1', roomCategoryId: 'room-1', rateId: 'rate-1', mealPlan: 'MAP', checkInDate: '2026-10-02', nights: 2, rooms: 1, roomAllocations: [{ roomIndex: 1, roomCategoryId: 'room-1', rateId: 'rate-1', adults: 2, children: 0, childAges: [] }] },
+    }, executive);
+    expect(replacement.item.metadata?.costSource).toBe('INVENTORY_CONTRACTED');
+    expect(replacement.item.metadata?.packageSupplierRate).toBeUndefined();
+    expect(replacement.item.metadata?.supplierQuoteReference).toBeUndefined();
+  });
+
+  test.each([0, -1, Number.NaN])('rejects invalid package supplier amount %p with zero writes', async amount => {
+    const originalDay = day('day-own');
+    const { storage, service } = harness([trip('trip-own')], [originalDay]); seedInventory(storage);
+    await expectError(service.addItineraryItem('day-own', {
+      type: 'HOTEL', title: 'Invalid', description: 'Stay',
+      metadata: { propertyId: 'property-1', roomCategoryId: 'room-1', rateId: 'rate-1', mealPlan: 'MAP', checkInDate: '2026-10-02', nights: 2, rooms: 1, packageRateRequest: { entryMode: 'PER_ROOM_NIGHT', amount, taxTreatment: 'NET' } },
+    }, executive), 'INVALID_PACKAGE_RATE_AMOUNT', 400);
+    expect(storage.rawGet('itinerary_days', 'day-own')).toEqual(originalDay);
+  });
+
+  test('rejects forged package-rate actor metadata', async () => {
+    const { storage, service } = harness(); seedInventory(storage);
+    await expectError(service.addItineraryItem('day-own', {
+      type: 'HOTEL', title: 'Invalid', description: 'Stay',
+      metadata: { propertyId: 'property-1', roomCategoryId: 'room-1', rateId: 'rate-1', mealPlan: 'MAP', checkInDate: '2026-10-02', nights: 2, rooms: 1, packageRateRequest: { entryMode: 'PER_ROOM_NIGHT', amount: 3_800, taxTreatment: 'NET', enteredByEmployeeId: 'founder-1' } },
+    }, executive), 'SERVER_CONTROLLED_ITINERARY_FIELD', 400);
+  });
+
+  test('a missing nightly rate requires package pricing and a failed replacement preserves the original item', async () => {
+    const { storage, service } = harness(); seedInventory(storage);
+    storage.rawSet('rate_periods', 'rate-2', { ...storage.rawGet('rate_periods', 'rate-2'), status: 'ARCHIVED' });
+    storage.rawSet('rate_periods', 'short-rate', { id: 'short-rate', propertyId: 'property-2', roomCategoryId: 'room-2', contractType: 'STANDARD', mealPlan: 'CP', validFrom: '2026-10-01', validTo: '2026-10-03', baseRate: 5_000, currency: 'INR', taxTreatment: 'NET', confirmationStatus: 'CONFIRMED', status: 'ACTIVE', supplements: [] });
     const created = await service.addItineraryItem('day-own', {
       type: 'HOTEL', title: 'Original', description: 'Original',
       metadata: { inventoryType: 'ACCOMMODATION', propertyId: 'property-1', roomCategoryId: 'room-1', rateId: 'rate-1', mealPlan: 'MAP', checkInDate: '2026-10-02', nights: 2, rooms: 1, adults: 2, children: 0, childrenWithBed: 0, childrenWithoutBed: 0 },
@@ -159,8 +219,72 @@ describe('Stage D2B server-authoritative Trip itinerary and deletion mutations',
     await expectError(service.updateItineraryItem('day-own', created.item.id, {
       type: 'HOTEL', title: 'Replacement', description: 'Replacement',
       metadata: { inventoryType: 'ACCOMMODATION', propertyId: 'property-2', roomCategoryId: 'room-2', rateId: 'short-rate', mealPlan: 'CP', checkInDate: '2026-10-03', nights: 2, rooms: 1, adults: 2, children: 0, childrenWithBed: 0, childrenWithoutBed: 0 },
-    }, executive), 'INVENTORY_RATE_MISMATCH', 422);
+    }, executive), 'PACKAGE_RATE_REQUIRED', 422);
     expect(storage.rawGet('itinerary_days', 'day-own')).toEqual(before);
+  });
+
+  test('server persists canonical per-room occupancy and rejects a party mismatch without writing', async () => {
+    const familyTrip = trip('trip-own', { adults: 5, children: 1, childAges: [8], travelerCount: 6 });
+    const originalDay = day('day-own');
+    const { storage, service } = harness([familyTrip], [originalDay]); seedInventory(storage);
+    const roomAllocations = [
+      { roomIndex: 1, roomCategoryId: 'room-1', adults: 2, children: 0, childAges: [] },
+      { roomIndex: 2, roomCategoryId: 'room-1', adults: 2, children: 0, childAges: [] },
+      { roomIndex: 3, roomCategoryId: 'room-1', adults: 1, children: 1, childAges: [8] },
+    ];
+    const created = await service.addItineraryItem('day-own', {
+      type: 'HOTEL', title: 'Client label', description: 'Client description',
+      metadata: { propertyId: 'property-1', roomCategoryId: 'room-1', rateId: 'rate-1', mealPlan: 'MAP', checkInDate: '2026-10-02', nights: 2, rooms: 3, roomAllocations },
+    }, executive);
+    expect(created.item.metadata?.roomAllocations).toEqual(roomAllocations.map(allocation => ({ ...allocation, rateId: 'rate-1' })));
+    expect(created.item.metadata?.childTreatments).toEqual([{ age: 8, category: 'CHILD_SUPPLEMENT', label: 'Child age 8 — child bed/supplement applies' }]);
+    expect(created.item.metadata?.childrenWithBed).toBe(1);
+
+    const before = storage.rawGet('itinerary_days', 'day-own');
+    await expectError(service.updateItineraryItem('day-own', created.item.id, {
+      type: 'HOTEL', title: 'Forged', description: 'Forged',
+      metadata: { propertyId: 'property-1', roomCategoryId: 'room-1', rateId: 'rate-1', mealPlan: 'MAP', checkInDate: '2026-10-02', nights: 2, rooms: 2, roomAllocations: roomAllocations.slice(0, 2) },
+    }, executive), 'INVALID_ROOM_DISTRIBUTION', 422);
+    expect(storage.rawGet('itinerary_days', 'day-own')).toEqual(before);
+  });
+
+  test('server preserves customer demographics while deriving a 13-year-old as an adult-equivalent guest', async () => {
+    const demographicTrip = trip('trip-own', { adults: 2, children: 1, childAges: [13], travelerCount: 3 });
+    const { storage, service } = harness([demographicTrip], [day('day-own')]); seedInventory(storage);
+    const created = await service.addItineraryItem('day-own', {
+      type: 'HOTEL', title: 'Premium', description: 'Stay',
+      metadata: { propertyId: 'property-1', roomCategoryId: 'room-premium', rateId: 'rate-premium', mealPlan: 'MAP', checkInDate: '2026-10-02', nights: 2, rooms: 1, roomAllocations: [{ roomIndex: 1, roomCategoryId: 'room-premium', rateId: 'rate-premium', adults: 2, children: 1, childAges: [13] }] },
+    }, executive);
+    expect(storage.rawGet('trips', 'trip-own')).toMatchObject({ adults: 2, children: 1, childAges: [13] });
+    expect(created.item.metadata?.adults).toBe(2);
+    expect(created.item.metadata?.children).toBe(1);
+    expect(created.item.metadata?.childTreatments).toEqual([{ age: 13, category: 'COMMERCIAL_ADULT', label: 'Child age 13 — counted as adult' }]);
+  });
+
+  test('server retains and validates different room categories and rates in one hotel stay', async () => {
+    const fourAdults = trip('trip-own', { adults: 4, children: 0, childAges: [], travelerCount: 4 });
+    const { storage, service } = harness([fourAdults], [day('day-own')]); seedInventory(storage);
+    const roomAllocations = [
+      { roomIndex: 1, roomCategoryId: 'room-1', rateId: 'rate-1', adults: 2, children: 0, childAges: [] },
+      { roomIndex: 2, roomCategoryId: 'room-premium', rateId: 'rate-premium', adults: 2, children: 0, childAges: [] },
+    ];
+    const created = await service.addItineraryItem('day-own', {
+      type: 'HOTEL', title: 'Mixed rooms', description: 'Stay',
+      metadata: { propertyId: 'property-1', roomCategoryId: 'room-1', rateId: 'rate-1', mealPlan: 'MAP', checkInDate: '2026-10-02', nights: 2, rooms: 2, roomAllocations },
+    }, executive);
+    expect(created.item.metadata?.roomAllocations).toEqual(roomAllocations);
+    expect(created.item.title).toContain('Premier Room + Premium Room');
+  });
+
+  test('new accommodation cannot cost a child whose age is missing', async () => {
+    const incomplete = trip('trip-own', { adults: 2, children: 1, travelerCount: 3, childAges: [] });
+    const originalDay = day('day-own');
+    const { storage, service } = harness([incomplete], [originalDay]); seedInventory(storage);
+    await expectError(service.addItineraryItem('day-own', {
+      type: 'HOTEL', title: 'Hotel', description: 'Stay',
+      metadata: { propertyId: 'property-1', roomCategoryId: 'room-1', rateId: 'rate-1', mealPlan: 'MAP', checkInDate: '2026-10-02', nights: 2, rooms: 1 },
+    }, executive), 'CHILD_AGES_REQUIRED', 422);
+    expect(storage.rawGet('itinerary_days', 'day-own')).toEqual(originalDay);
   });
 
   test('inventory-backed item rejects a mismatched rate without partial writes', async () => {

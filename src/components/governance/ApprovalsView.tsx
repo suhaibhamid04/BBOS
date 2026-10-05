@@ -88,7 +88,7 @@ export const ApprovalsView: React.FC<ApprovalsViewProps> = ({ onNavigate }) => {
     setLoading(true);
     setError('');
     try { setInbox(await fetchApprovalInbox(currentUser.employeeId)); }
-    catch (loadError: any) { setError(loadError?.message || 'Unable to load Needs Attention.'); }
+    catch (loadError: any) { setError(loadError?.message || 'Unable to load Approvals & Exceptions.'); }
     finally { setLoading(false); }
   }, [currentUser.employeeId]);
 
@@ -121,7 +121,7 @@ export const ApprovalsView: React.FC<ApprovalsViewProps> = ({ onNavigate }) => {
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div><div className="flex items-center gap-2"><ShieldCheck className="h-5 w-5 text-[#7056EE]" /><h2 className="text-xl font-bold text-slate-900">Needs Attention</h2></div><p className="mt-1 text-xs text-slate-500">One role-scoped view of business exceptions. Source workflows remain authoritative.</p></div>
+        <div><div className="flex items-center gap-2"><ShieldCheck className="h-5 w-5 text-[#7056EE]" /><h2 className="text-xl font-bold text-slate-900">Approvals &amp; Exceptions</h2></div><p className="mt-1 text-xs text-slate-500">One role-scoped view of business exceptions. Source workflows remain authoritative.</p></div>
         <button type="button" onClick={() => void load()} disabled={loading} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 disabled:opacity-50"><RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh</button>
       </div>
 

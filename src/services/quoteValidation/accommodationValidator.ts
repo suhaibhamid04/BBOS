@@ -131,6 +131,46 @@ export class AccommodationQuoteValidator {
       }
     }
 
+    // Trip-backed Quotes freeze the exact server-calculated accommodation cost.
+    // Inventory may change later; conversion must preserve quoted economics rather
+    // than silently repricing a historical commercial document.
+    const frozenCostSource = item.costSource;
+    if (frozenCostSource && typeof item.supplierCost === 'number' && Number.isFinite(item.supplierCost) && item.supplierCost > 0) {
+      const units = nights * roomsCount;
+      const packageRate = item.packageSupplierRate;
+      const unitRate = packageRate?.entryMode === 'PER_ROOM_NIGHT'
+        ? packageRate.amount
+        : item.supplierCost / Math.max(1, units);
+      const availabilityStatus = property.availabilityStatus === 'NOT_AVAILABLE' ? 'UNAVAILABLE'
+        : property.availabilityStatus === 'ON_HOLD' ? 'ON_REQUEST'
+        : property.availabilityStatus === 'REQUESTED' ? 'NEEDS_CONFIRMATION'
+        : 'AVAILABLE';
+      const canProceedToBooking = errors.length === 0 && availabilityStatus !== 'UNAVAILABLE';
+      return {
+        serviceType: 'ACCOMMODATION', serviceId, serviceName: property.name,
+        outcome: availabilityStatus === 'UNAVAILABLE' ? 'SERVICE_UNAVAILABLE' : availabilityStatus === 'ON_REQUEST' ? 'ON_REQUEST' : availabilityStatus === 'NEEDS_CONFIRMATION' ? 'NEEDS_CONFIRMATION' : 'AVAILABLE',
+        isValid: errors.length === 0, canProceedToBooking, rateVerified: true,
+        ...(item.ratePeriodId ? { ratePeriodId: item.ratePeriodId } : {}),
+        authoritativeSupplierCost: item.supplierCost, quotedSupplierCost: item.supplierCost,
+        availabilityStatus,
+        lineItemSnapshot: {
+          serviceId, serviceType: 'ACCOMMODATION', supplierId: property.supplierId || property.id,
+          supplierName: property.name, inventoryMasterId: property.id,
+          ...(item.ratePeriodId ? { ratePeriodId: item.ratePeriodId } : {}),
+          rateContractType: frozenCostSource === 'INVENTORY_NEGOTIATED' ? 'NEGOTIATED' : frozenCostSource === 'INVENTORY_CONTRACTED' ? 'STANDARD' : 'PACKAGE',
+          frozenSupplierUnitRate: unitRate, units, frozenSupplementsCost: 0,
+          frozenTotalSupplierCost: item.supplierCost,
+          taxTreatment: packageRate?.taxTreatment || 'INCLUSIVE', taxAmount: 0,
+          rateVerifiedAt: new Date().toISOString(), costSource: frozenCostSource,
+          ...(packageRate ? { packageSupplierRate: packageRate } : {}),
+          ...(item.originalContractedTotal !== undefined ? { originalContractedTotal: item.originalContractedTotal } : {}),
+          ...(item.nightlyRateBreakdown ? { nightlyRateBreakdown: item.nightlyRateBreakdown } : {}),
+        },
+        errors,
+        warnings,
+      };
+    }
+
     // Rate period validation
     const ratePeriodId = item.ratePeriodId || item.negotiatedRateId;
     if (!ratePeriodId) {

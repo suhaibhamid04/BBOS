@@ -756,9 +756,11 @@ export class QuoteService {
           );
         }
         const sourceTripItemId = requireNonEmptyString(item.id, 'Trip itinerary item id');
-        const ratePeriodId = requireNonEmptyString(metadata.rateId, `${sourceTripItemId}.metadata.rateId`);
 
         if (item.type === 'HOTEL') {
+          const costSource = typeof metadata.costSource === 'string' ? metadata.costSource : 'INVENTORY_CONTRACTED';
+          const ratePeriodId = typeof metadata.rateId === 'string' && metadata.rateId.trim() ? metadata.rateId.trim() : undefined;
+          if (!ratePeriodId && costSource !== 'MANUAL_SUPPLIER_QUOTE') throw new QuoteDomainError(422, 'TRIP_SERVICE_LINKAGE_INCOMPLETE', `${sourceTripItemId} has no accommodation rate or approved manual supplier quote.`);
           hotels.push({
             id: sourceTripItemId,
             sourceTripItemId,
@@ -766,7 +768,7 @@ export class QuoteService {
             propertyId: metadata.propertyId,
             hotelName: requireNonEmptyString(metadata.propertyName, `${sourceTripItemId}.metadata.propertyName`),
             roomCategoryId: requireNonEmptyString(metadata.roomCategoryId, `${sourceTripItemId}.metadata.roomCategoryId`),
-            ratePeriodId,
+            ...(ratePeriodId ? { ratePeriodId } : {}),
             roomType: requireNonEmptyString(metadata.roomCategoryName, `${sourceTripItemId}.metadata.roomCategoryName`),
             mealPlan: requireNonEmptyString(metadata.mealPlan, `${sourceTripItemId}.metadata.mealPlan`),
             checkInDate: requireNonEmptyString(metadata.checkInDate, `${sourceTripItemId}.metadata.checkInDate`),
@@ -775,9 +777,16 @@ export class QuoteService {
             roomsCount: positiveInteger(metadata.rooms ?? 1, `${sourceTripItemId}.metadata.rooms`, true),
             adultsCount: positiveInteger(metadata.adults ?? trip.adults ?? 1, `${sourceTripItemId}.metadata.adults`, true),
             childrenCount: nonNegativeInteger(metadata.children ?? trip.children ?? 0, `${sourceTripItemId}.metadata.children`) ?? 0,
+            ...(typeof item.supplierCost === 'number' ? { supplierCost: finiteNonNegative(item.supplierCost, `${sourceTripItemId}.supplierCost`) } : {}),
+            costSource,
+            ...(isRecord(metadata.packageSupplierRate) ? { packageSupplierRate: metadata.packageSupplierRate } : {}),
+            ...(typeof metadata.contractedTotalSupplierCost === 'number' ? { originalContractedTotal: metadata.contractedTotalSupplierCost } : {}),
+            ...(Array.isArray(metadata.nightlyRateBreakdown) ? { nightlyRateBreakdown: metadata.nightlyRateBreakdown } : {}),
+            ...(Array.isArray(metadata.roomAllocations) ? { roomAllocations: metadata.roomAllocations } : {}),
             ...(item.description ? { specialRequests: String(item.description) } : {}),
           });
         } else if (item.type === 'TRANSPORT') {
+          const ratePeriodId = requireNonEmptyString(metadata.rateId, `${sourceTripItemId}.metadata.rateId`);
           transports.push({
             id: sourceTripItemId,
             sourceTripItemId,
@@ -795,6 +804,7 @@ export class QuoteService {
             ...(item.description ? { specialRequests: String(item.description) } : {}),
           });
         } else {
+          const ratePeriodId = requireNonEmptyString(metadata.rateId, `${sourceTripItemId}.metadata.rateId`);
           const participants = Number(metadata.tickets || 0) ||
             (Number(metadata.adults || 0) + Number(metadata.children || 0)) ||
             Number(trip.travelerCount || 1);

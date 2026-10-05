@@ -276,6 +276,17 @@ describe('HTTP Integration Tests for calculate-rate and calculate-costs', () => 
     expect(res.data.totalSupplierCost).toBeUndefined();
   });
 
+  it('Sales Executive OWN Trip sees the authoritative multi-room supplier cost', async () => {
+    const res = await fetchAsRole('/api/accommodation/calculate-rate', {
+      ...accommodationPayload,
+      tripId: 'trip-demo-01',
+      childAges: [],
+      roomAllocations: [{ roomIndex: 1, roomCategoryId: accommodationPayload.roomCategoryId, adults: 2, children: 0, childAges: [] }],
+    }, 'Sales Executive');
+    expect(res.success).toBe(true);
+    expect(res.data.totalSupplierCost).toBe(8000);
+  });
+
   it('Operations: Accommodation calculate-rate hides supplier costs', async () => {
     const res = await fetchAsRole('/api/accommodation/calculate-rate', accommodationPayload, 'Operations');
     expect(res.success).toBe(true);

@@ -1,4 +1,4 @@
-import { MealPlanType, TaxTreatment } from './accommodation';
+import { AccommodationCostSource, AccommodationNightlyRateBreakdown, MealPlanType, PackageSupplierRate, RoomAllocation, TaxTreatment } from './accommodation';
 
 // =====================================================
 // BOOKING & SERVICE FULFILLMENT — TYPE SYSTEM
@@ -105,8 +105,8 @@ export interface LineItemCostSnapshot {
   supplierId: string;
   supplierName: string;
   inventoryMasterId: string;
-  ratePeriodId: string;
-  rateContractType: 'STANDARD' | 'NEGOTIATED' | 'GROUP';
+  ratePeriodId?: string;
+  rateContractType: 'STANDARD' | 'NEGOTIATED' | 'GROUP' | 'PACKAGE';
   frozenSupplierUnitRate: number;
   units: number;
   frozenSupplementsCost: number;
@@ -114,6 +114,10 @@ export interface LineItemCostSnapshot {
   taxTreatment: TaxTreatment;
   taxAmount: number;
   rateVerifiedAt: string;
+  costSource?: AccommodationCostSource;
+  packageSupplierRate?: PackageSupplierRate;
+  originalContractedTotal?: number;
+  nightlyRateBreakdown?: AccommodationNightlyRateBreakdown[];
 }
 
 export interface SupplierRateDiscrepancy {
@@ -203,6 +207,8 @@ export interface BookingAccommodation {
   childrenCount: number;
   guestNames?: string[];
   specialRequests?: string;
+  roomAllocations?: RoomAllocation[];
+  costSource?: AccommodationCostSource;
 
   // [B] Operations / Dispatch Fields (Editable by Operations & Admin)
   supplierId: string;

@@ -261,6 +261,8 @@ export class QuoteConversionService {
             childrenCount: item.childrenCount || 0,
             guestNames: item.guestNames || [],
             specialRequests: item.specialRequests,
+            ...(item.roomAllocations ? { roomAllocations: item.roomAllocations } : {}),
+            ...(item.costSource ? { costSource: item.costSource } : {}),
             supplierId: valService?.lineItemSnapshot?.supplierId || item.propertyId || 'supplier-acc-default',
             confirmationStatus: status,
             voucherStatus: 'PENDING',
@@ -486,6 +488,7 @@ export class QuoteConversionService {
         txn.update('leads', freshQuote.leadId, {
           status: 'CONVERTED',
           convertedBookingId: booking.id,
+          nextFollowUpAt: null,
           updatedAt: now,
         });
       }

@@ -94,6 +94,12 @@ service cloud.firestore {
       allow read, create, update, delete: if false;
     }
 
+    match /lead_events/{eventId} {
+      // Sales interactions and follow-up history are written transactionally
+      // by the authenticated Express API only.
+      allow read, create, update, delete: if false;
+    }
+
     // 4. Companies Collection
     match /companies/{companyId} {
       allow read: if isSalesExecutive() || isAccounts() || isAdmin();
@@ -454,6 +460,8 @@ service cloud.firestore {
                       'QUOTE_CREATED',
                       'QUOTE_UPDATED',
                       'QUOTE_CONVERTED_TO_BOOKING',
+                      'LEAD_INTERACTION_RECORDED',
+                      'LEAD_DROPPED',
                       'PAYMENT_RECORDED',
                       'PAYMENT_VERIFIED',
                       'PAYMENT_REJECTED',

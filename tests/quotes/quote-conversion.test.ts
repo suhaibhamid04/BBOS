@@ -424,6 +424,31 @@ describe('BBOS Phase 2B-5 Stage 4 — Quote-to-Booking Conversion Engine', () =>
     expect(snapshot?.lineItems.length).toBe(3);
   });
 
+  it('13b. package supplier rate and source are frozen without repricing from master inventory', async () => {
+    const packageRate = {
+      entryMode: 'PER_ROOM_NIGHT' as const, amount: 3_800, taxTreatment: 'NET' as const,
+      supplierQuoteReference: 'WhatsApp', enteredByEmployeeId: 'emp-sales-01', enteredAt: '2026-09-01T09:00:00.000Z',
+      originalContractedTotal: 8_000,
+    };
+    const quote = createBaseQuote({
+      transports: [], activities: [],
+      hotels: [{ ...createBaseQuote().hotels![0], quotedRate: 3_800, supplierCost: 7_600, costSource: 'PACKAGE_RATE_OVERRIDE', packageSupplierRate: packageRate, originalContractedTotal: 8_000 }],
+    });
+    storage.rawSet('quotes', quote.id, quote);
+    const result = await service.convertQuoteToBooking(quote.id, salesExecActor, { currentDate: '2026-09-15' });
+    const snapshot = await storage.getFinancialSnapshot(result.booking.id);
+    expect(snapshot?.accommodationSupplierCost).toBe(7_600);
+    expect(snapshot?.lineItems[0]).toMatchObject({
+      frozenSupplierUnitRate: 3_800,
+      frozenTotalSupplierCost: 7_600,
+      costSource: 'PACKAGE_RATE_OVERRIDE',
+      packageSupplierRate: packageRate,
+      originalContractedTotal: 8_000,
+    });
+    expect(result.accommodations[0]).toMatchObject({ costSource: 'PACKAGE_RATE_OVERRIDE' });
+    expect((result.accommodations[0] as any).packageSupplierRate).toBeUndefined();
+  });
+
   // 14. Modern service documents contain ZERO supplier costs
   it('14. Modern service documents contain ZERO supplier costs or margin fields', async () => {
     const quote = createBaseQuote();
@@ -621,13 +646,13 @@ describe('BBOS Phase 2B-5 Stage 4 — Quote-to-Booking Conversion Engine', () =>
   it('21. Lead changes to CONVERTED only after successful conversion', async () => {
     const quote = createBaseQuote();
     storage.rawSet('quotes', quote.id, quote);
-    storage.rawSet('leads', quote.leadId, { id: quote.leadId, status: 'QUOTE_SENT' });
+    storage.rawSet('leads', quote.leadId, { id: quote.leadId, status: 'QUOTE_SENT', nextFollowUpAt: '2026-09-16T05:30:00.000Z' });
 
     await service.convertQuoteToBooking(quote.id, salesExecActor, {
       currentDate: '2026-09-15',
     });
 
-    expect(storage.rawGet('leads', quote.leadId).status).toBe('CONVERTED');
+    expect(storage.rawGet('leads', quote.leadId)).toMatchObject({ status: 'CONVERTED', nextFollowUpAt: null });
   });
 
   // 22. Legacy collections are untouched

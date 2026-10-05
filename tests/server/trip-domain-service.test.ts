@@ -34,6 +34,7 @@ function tripInput(overrides: Record<string, unknown> = {}) {
     travelerCount: 3,
     adults: 2,
     children: 1,
+    childAges: [7],
     tripType: 'LEISURE',
     currency: 'INR',
     budget: 1200,

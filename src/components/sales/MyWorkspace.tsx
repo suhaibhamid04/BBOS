@@ -1,166 +1,155 @@
-import React from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { AlertCircle, CalendarClock, Clock3, RefreshCw, UserRound, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { useData } from '../../context/DataContext';
-import { Flame, GitPullRequest, Calendar, Phone, MessageSquare, Plus, ArrowRight, Sparkles } from 'lucide-react';
+import { getSalesQueue } from '../../services/leads/leadFollowUpApi';
+import type { LeadContactOutcome, SalesQueueGroup, SalesQueueItem, SalesQueueProjection } from '../../types';
+import { LeadInteractionPanel, CONTACT_OUTCOME_LABELS } from './LeadInteractionPanel';
+
+const GROUPS: Array<{ key: SalesQueueGroup; title: string; description: string; tone: string }> = [
+  { key: 'OVERDUE', title: 'Overdue', description: 'Follow-ups whose scheduled time has passed', tone: 'border-rose-200 bg-rose-50/60' },
+  { key: 'TODAY', title: 'Today', description: 'Actions due today in Asia/Kolkata', tone: 'border-amber-200 bg-amber-50/50' },
+  { key: 'NEEDS_ATTENTION', title: 'Needs attention', description: 'New or active Leads without a next action', tone: 'border-violet-200 bg-violet-50/40' },
+  { key: 'UPCOMING', title: 'Upcoming', description: 'Future follow-ups already scheduled', tone: 'border-slate-200 bg-white' },
+];
+
+const QUICK_ACTIONS: Array<{ outcome: LeadContactOutcome; label: string }> = [
+  { outcome: 'NO_ANSWER', label: 'No Answer' },
+  { outcome: 'CALLBACK_REQUESTED', label: 'Callback' },
+  { outcome: 'INTERESTED', label: 'Interested' },
+  { outcome: 'NEGOTIATING', label: 'Negotiating' },
+  { outcome: 'NOT_INTERESTED', label: 'Not Interested' },
+];
+
+function formatDateTime(value?: string | null): string {
+  return value ? new Date(value).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : 'Not scheduled';
+}
+
+function QueueCard({ item, onNavigate, onAction }: {
+  key?: React.Key;
+  item: SalesQueueItem;
+  onNavigate: (section: string, id?: string) => void;
+  onAction: (item: SalesQueueItem, outcome: LeadContactOutcome) => void;
+}) {
+  return (
+    <article data-testid={`sales-queue-lead-${item.leadId}`} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+        <div className="min-w-0 space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" onClick={() => onNavigate('lead-detail', item.leadId)} className="font-bold text-slate-900 hover:text-[#7056EE]">{item.customerName}</button>
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">{item.statusLabel}</span>
+            <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-bold text-[#7056EE]">{item.priority}</span>
+          </div>
+          <p className="text-xs text-slate-600">{item.destination || 'Destination not set'} · {item.adults ?? item.travelerCount ?? 0} adults · {item.children} children</p>
+          <div className="grid gap-1 text-xs text-slate-500 sm:grid-cols-2">
+            <p><span className="font-semibold text-slate-700">Travel:</span> {item.travelStartDate ? new Date(item.travelStartDate).toLocaleDateString('en-IN') : 'Dates TBD'}{item.nights ? ` · ${item.nights} nights` : ''}</p>
+            <p><span className="font-semibold text-slate-700">Owner:</span> {item.assignedEmployeeName || item.assignedEmployeeId || 'Assignment required'}</p>
+            <p><span className="font-semibold text-slate-700">Last:</span> {item.lastContactOutcome ? CONTACT_OUTCOME_LABELS[item.lastContactOutcome] : 'No contact'}{item.lastContactAt ? ` · ${formatDateTime(item.lastContactAt)}` : ''}</p>
+            <p data-testid={`queue-next-${item.leadId}`}><span className="font-semibold text-slate-700">Next:</span> {formatDateTime(item.nextFollowUpAt)}</p>
+          </div>
+          {item.quoteContext && <p data-testid={`quote-aging-${item.leadId}`} className="text-xs font-semibold text-amber-700">{item.quoteContext.label}</p>}
+          {item.secondaryContext.length > 0 && <p className="text-[11px] text-slate-500">Also: {item.secondaryContext.join(' · ')}</p>}
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          {QUICK_ACTIONS.map(action => (
+            <button key={action.outcome} data-testid={`queue-${action.outcome.toLowerCase().replaceAll('_', '-')}-${item.leadId}`} type="button" onClick={() => onAction(item, action.outcome)} className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 hover:border-[#7056EE] hover:text-[#7056EE]">{action.label}</button>
+          ))}
+          <button type="button" onClick={() => onNavigate('lead-detail', item.leadId)} className="rounded-lg bg-slate-900 px-3 py-1.5 text-[11px] font-bold text-white">Open Lead</button>
+        </div>
+      </div>
+    </article>
+  );
+}
 
 export const MyWorkspaceView: React.FC<{ onNavigate: (section: string, id?: string) => void }> = ({ onNavigate }) => {
   const { currentUser } = useAuth();
-  const { leads, tasks, quotes, bookings } = useData();
+  const [queue, setQueue] = useState<SalesQueueProjection | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState('');
+  const [selected, setSelected] = useState<{ item: SalesQueueItem; outcome: LeadContactOutcome } | null>(null);
 
-  // Filter for assigned data
-  const myLeads = leads.filter(l => l.assignedEmployeeId === currentUser.employeeId);
-  const myHotLeads = myLeads.filter(l => l.priority === 'HOT');
-  const myNewLeads = myLeads.filter(l => l.status === 'NEW');
-  const myFollowUps = myLeads.filter(l => l.status === 'CONTACTED' || l.status === 'NEGOTIATION');
-  const myQuotes = quotes.filter(q => myLeads.some(l => l.id === q.leadId) && (q.status === 'SENT' || q.status === 'DRAFT'));
-  const myBookings = bookings.filter(b => myLeads.some(l => l.id === b.leadId) && b.status === 'CONFIRMED');
-  
-  const myTasks = tasks.filter(t => t.assignedToId === currentUser.id || t.assignedTo === currentUser.name);
-  const todaysTasks = myTasks.filter(t => new Date(t.dueAt).toDateString() === new Date().toDateString() && t.status !== 'COMPLETED');
-  const overdueTasks = myTasks.filter(t => new Date(t.dueAt) < new Date() && t.status !== 'COMPLETED' && new Date(t.dueAt).toDateString() !== new Date().toDateString());
+  const loadQueue = useCallback(async (silent = false) => {
+    if (silent) setRefreshing(true);
+    else setLoading(true);
+    setError('');
+    try {
+      setQueue(await getSalesQueue(currentUser.employeeId));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'The Sales queue could not be loaded.');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [currentUser.employeeId]);
+
+  useEffect(() => {
+    void loadQueue();
+    const interval = window.setInterval(() => void loadQueue(true), 60_000);
+    const refreshVisible = () => {
+      if (document.visibilityState === 'visible') void loadQueue(true);
+    };
+    window.addEventListener('focus', refreshVisible);
+    document.addEventListener('visibilitychange', refreshVisible);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', refreshVisible);
+      document.removeEventListener('visibilitychange', refreshVisible);
+    };
+  }, [loadQueue]);
+
+  const total = useMemo(() => queue ? Object.values(queue.counts).reduce<number>((sum, count) => sum + Number(count), 0) : 0, [queue]);
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="mx-auto max-w-7xl space-y-6 p-6">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">My Workspace</h1>
-          <p className="text-sm text-slate-500 mt-1">Welcome back, {currentUser.name}. Here's your pipeline overview.</p>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">My Sales Queue</h1>
+          <p className="mt-1 text-sm text-slate-500">{currentUser.name} · {total} active Lead actions · Asia/Kolkata</p>
         </div>
-      </div>
+        <button type="button" onClick={() => void loadQueue(true)} disabled={refreshing} className="flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /> Refresh</button>
+      </header>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
-          <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">My New Leads</div>
-          <div className="text-3xl font-bold text-slate-900">{myNewLeads.length}</div>
+      {error && (
+        <div role="alert" className="flex flex-col gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 sm:flex-row sm:items-center sm:justify-between">
+          <span className="flex items-center gap-2"><AlertCircle className="h-4 w-4" /> {error}</span>
+          <button type="button" onClick={() => void loadQueue()} className="rounded-lg bg-rose-700 px-3 py-1.5 text-xs font-bold text-white">Retry</button>
         </div>
-        <div className="bg-white border border-rose-200 rounded-xl p-4 shadow-sm relative overflow-hidden">
-          <div className="absolute top-0 right-0 p-4">
-            <Flame className="w-8 h-8 text-rose-100" />
-          </div>
-          <div className="text-xs font-bold text-rose-600 uppercase tracking-wider mb-2 relative z-10">My Hot Leads</div>
-          <div className="text-3xl font-bold text-rose-700 relative z-10">{myHotLeads.length}</div>
-        </div>
-        <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
-          <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Open Quotes</div>
-          <div className="text-3xl font-bold text-slate-900">{myQuotes.length}</div>
-        </div>
-        <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
-          <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">My Bookings</div>
-          <div className="text-3xl font-bold text-[#7056EE]">{myBookings.length}</div>
-        </div>
-      </div>
+      )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
-          {/* Priority Leads Section */}
-          <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-              <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                <Flame className="w-4 h-4 text-rose-500" />
-                Priority Leads
-              </h2>
-            </div>
-            <div className="divide-y divide-slate-100">
-              {myHotLeads.length > 0 ? myHotLeads.map(lead => (
-                <div key={lead.id} className="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:bg-slate-50 transition-colors">
-                  <div>
-                    <h3 className="text-sm font-bold text-slate-900">{lead.customerName}</h3>
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-xs text-slate-500">
-                      <span className="flex items-center gap-1"><GitPullRequest className="w-3 h-3" /> {lead.destination}</span>
-                      <span className="flex items-center gap-1"><Calendar className="w-3 h-3" /> {lead.travelStartDate && new Date(lead.travelStartDate).toLocaleDateString()}</span>
-                      <span>{lead.travelerCount} Travelers</span>
-                      <span className="font-medium text-slate-900">₹{lead.budget?.toLocaleString()}</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <div className="text-right mr-4">
-                      <div className="text-xs font-medium text-slate-500">Score</div>
-                      <div className="text-sm font-bold text-[#7056EE]">{lead.leadScore}/100</div>
-                    </div>
-                    <div className="text-right mr-4">
-                      <div className="text-xs font-medium text-slate-500">Probability</div>
-                      <div className="text-sm font-bold text-emerald-600">{lead.bookingProbability || 0}%</div>
-                    </div>
-                    <button 
-                      onClick={() => onNavigate('lead-detail', lead.id)}
-                      className="px-3 py-1.5 bg-[#7056EE] hover:bg-[#5b42d6] text-white text-xs font-medium rounded-md transition-colors"
-                    >
-                      Open Lead
-                    </button>
-                    <button className="p-1.5 border border-slate-200 text-slate-600 rounded-md hover:bg-slate-50 hover:text-slate-900 transition-colors tooltip-trigger" title="AI Assist">
-                      <Sparkles className="w-4 h-4 text-amber-500" />
-                    </button>
-                  </div>
+      {loading && !queue ? (
+        <div className="rounded-xl border border-slate-200 bg-white p-12 text-center text-sm text-slate-500"><RefreshCw className="mx-auto mb-3 h-5 w-5 animate-spin" /> Loading authoritative Sales queue…</div>
+      ) : (
+        <div className="space-y-5">
+          {GROUPS.map(group => {
+            const items: SalesQueueItem[] = queue?.groups[group.key] || [];
+            return (
+              <section key={group.key} data-testid={`sales-queue-group-${group.key.toLowerCase().replaceAll('_', '-')}`} className={`rounded-2xl border p-4 ${group.tone}`}>
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div><h2 className="flex items-center gap-2 text-sm font-bold text-slate-900">{group.key === 'OVERDUE' ? <Clock3 className="h-4 w-4 text-rose-600" /> : group.key === 'NEEDS_ATTENTION' ? <UserRound className="h-4 w-4 text-[#7056EE]" /> : <CalendarClock className="h-4 w-4 text-amber-600" />}{group.title}<span className="rounded-full bg-white px-2 py-0.5 text-xs text-slate-600">{items.length}</span></h2><p className="mt-1 text-xs text-slate-500">{group.description}</p></div>
                 </div>
-              )) : (
-                <div className="p-8 text-center text-sm text-slate-500">No priority leads at the moment.</div>
-              )}
-            </div>
-          </div>
-
-          {/* Follow-ups */}
-          <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-              <h2 className="text-sm font-bold text-slate-900">My Follow-ups</h2>
-            </div>
-            <div className="divide-y divide-slate-100">
-              {myFollowUps.slice(0, 5).map(lead => (
-                <div key={lead.id} className="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
-                  <div>
-                    <h3 className="text-sm font-medium text-slate-900">{lead.customerName}</h3>
-                    <p className="text-xs text-slate-500 mt-0.5">Last contact: {new Date(lead.lastContactAt).toLocaleDateString()}</p>
-                  </div>
-                  <button onClick={() => onNavigate('lead-detail', lead.id)} className="text-xs font-medium text-[#7056EE] hover:text-[#5b42d6]">View</button>
+                <div className="space-y-3">
+                  {items.map(item => <QueueCard key={item.leadId} item={item} onNavigate={onNavigate} onAction={(target, outcome) => setSelected({ item: target, outcome })} />)}
+                  {items.length === 0 && <div className="rounded-xl border border-dashed border-slate-300 bg-white/70 p-6 text-center text-xs text-slate-500">No Leads in this queue.</div>}
                 </div>
-              ))}
-            </div>
+              </section>
+            );
+          })}
+        </div>
+      )}
+
+      {selected && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-white p-2 shadow-2xl">
+            <div className="flex items-center justify-between px-3 py-2"><div><p className="text-sm font-bold text-slate-900">{selected.item.customerName}</p><p className="text-xs text-slate-500">{selected.item.destination}</p></div><button type="button" aria-label="Close" onClick={() => setSelected(null)} className="rounded-lg p-2 hover:bg-slate-100"><X className="h-4 w-4" /></button></div>
+            <LeadInteractionPanel
+              title="Record interaction"
+              initialOutcome={selected.outcome}
+              lead={{ id: selected.item.leadId, status: selected.item.status, updatedAt: selected.item.updatedAt, lastContactAt: selected.item.lastContactAt, lastContactOutcome: selected.item.lastContactOutcome, nextFollowUpAt: selected.item.nextFollowUpAt }}
+              onRecorded={async () => { setSelected(null); await loadQueue(true); }}
+            />
           </div>
         </div>
-
-        <div className="space-y-6">
-          {/* Overdue Tasks */}
-          {overdueTasks.length > 0 && (
-            <div className="bg-rose-50 border border-rose-200 rounded-xl shadow-sm overflow-hidden">
-              <div className="px-5 py-3 border-b border-rose-100 bg-rose-100/50">
-                <h2 className="text-xs font-bold text-rose-800 uppercase tracking-wider">Overdue Tasks ({overdueTasks.length})</h2>
-              </div>
-              <div className="divide-y divide-rose-100">
-                {overdueTasks.slice(0, 3).map(task => (
-                  <div key={task.id} className="p-4">
-                    <h3 className="text-sm font-medium text-rose-900">{task.title}</h3>
-                    <p className="text-xs text-rose-700 mt-1 flex items-center gap-1">
-                      <Calendar className="w-3 h-3" /> Due: {new Date(task.dueAt).toLocaleDateString()}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Today's Tasks */}
-          <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-              <h2 className="text-sm font-bold text-slate-900">Today's Tasks</h2>
-              <span className="text-xs font-bold bg-slate-200 text-slate-700 px-2 py-0.5 rounded-full">{todaysTasks.length}</span>
-            </div>
-            <div className="divide-y divide-slate-100">
-              {todaysTasks.length > 0 ? todaysTasks.map(task => (
-                <div key={task.id} className="p-4 flex gap-3 hover:bg-slate-50 transition-colors">
-                  <div className="mt-0.5">
-                    <div className="w-4 h-4 rounded border border-slate-300"></div>
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-medium text-slate-900">{task.title}</h3>
-                    <div className="text-xs text-slate-500 mt-1">{task.description}</div>
-                  </div>
-                </div>
-              )) : (
-                <div className="p-6 text-center text-sm text-slate-500">No tasks due today!</div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
+      )}
     </div>
   );
 };

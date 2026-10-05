@@ -404,6 +404,39 @@ describe('GET /api/leads', () => {
   });
 });
 
+describe('GET /api/leads/:id', () => {
+  const getHandler = () => {
+    const route = (leadsRouter as any).stack.find((entry: any) => entry.route?.path === '/:id' && entry.route.methods.get);
+    return route.route.stack[1].handle;
+  };
+
+  it('loads the authoritative OWN Lead by stable ID and normalizes optional arrays', async () => {
+    const json = mock((value: any) => value);
+    const status = mock((_code: number) => ({ json }));
+    await getAdminDb().collection('leads').doc('lead-detail-own').set({
+      id: 'lead-detail-own', customerId: 'customer-1', customerName: 'Queue Detail Lead', customerPhone: '9876543210',
+      destination: 'Kashmir', sourceId: 'DIRECT_CALL', source: 'Direct Call', sourcePlatform: 'Direct Call',
+      createdSourceType: 'MANUAL', status: 'NEW', priority: 'NORMAL', assignedEmployeeId: 'emp-1',
+      salesTeamId: 'sales-team-1', createdAt: '2026-10-03T08:00:00.000Z', updatedAt: '2026-10-03T08:00:00.000Z',
+    });
+    await getHandler()({ params: { id: 'lead-detail-own' }, user: { employeeId: 'emp-1', role: 'Sales Executive' } } as any, { json, status } as any, () => {});
+    expect(json.mock.calls[0][0]).toMatchObject({ success: true, data: { id: 'lead-detail-own', tags: [], childAges: [] } });
+  });
+
+  it('denies an out-of-scope Lead and returns a clear not-found response', async () => {
+    const json = mock((value: any) => value);
+    const status = mock((_code: number) => ({ json }));
+    await getHandler()({ params: { id: 'lead-1' }, user: { employeeId: 'emp-other', role: 'Sales Executive' } } as any, { json, status } as any, () => {});
+    expect(status).toHaveBeenCalledWith(403);
+    expect(json.mock.calls[0][0].code).toBe('LEAD_SCOPE_DENIED');
+
+    json.mockClear(); status.mockClear();
+    await getHandler()({ params: { id: 'missing-lead' }, user: { employeeId: 'emp-1', role: 'Sales Executive' } } as any, { json, status } as any, () => {});
+    expect(status).toHaveBeenCalledWith(404);
+    expect(json.mock.calls[0][0].code).toBe('LEAD_NOT_FOUND');
+  });
+});
+
 describe('GET /api/leads/customer-matches', () => {
   it('matches authoritative Customers by normalized phone without silently linking them', async () => {
     const json = mock((value: any) => value);
@@ -498,6 +531,7 @@ describe('PATCH /api/leads/:id', () => {
 
   it('rejects non-canonical stages and requires a controlled drop reason', async () => {
     const route = (leadsRouter as any).stack.find((entry: any) => entry.route?.path === '/:id' && entry.route.methods.patch);
+    await getAdminDb().collection('leads').doc('lead-1').update({ nextFollowUpAt: '2026-11-01T05:30:00.000Z' });
     req.body = await versioned({ status: 'QUALIFIED' });
     await route.route.stack[1].handle(req as Request, res as Response, () => {});
     expect(statusMock).toHaveBeenCalledWith(400);
@@ -512,7 +546,7 @@ describe('PATCH /api/leads/:id', () => {
     jsonMock.mockClear(); statusMock.mockClear();
     req.body = await versioned({ status: 'DROPPED', dropReason: 'BUDGET_MISMATCH' });
     await route.route.stack[1].handle(req as Request, res as Response, () => {});
-    expect(jsonMock.mock.calls[0][0].data).toMatchObject({ status: 'DROPPED', dropReason: 'BUDGET_MISMATCH' });
+    expect(jsonMock.mock.calls[0][0].data).toMatchObject({ status: 'DROPPED', dropReason: 'BUDGET_MISMATCH', nextFollowUpAt: null });
   });
 
   it('rejects client-forged ownership and team metadata', async () => {

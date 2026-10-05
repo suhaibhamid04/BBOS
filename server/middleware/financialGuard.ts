@@ -27,7 +27,11 @@ const SUPPLIER_COST_KEYS = [
   'supplementCost',
   'baseSupplierCost',
   'additionalChargesTotal',
-  'totalSupplierCost'
+  'totalSupplierCost',
+  'packageSupplierRate',
+  'contractedTotalSupplierCost',
+  'originalContractedTotal',
+  'nightlyRateBreakdown',
 ];
 
 const PROFIT_MARGIN_KEYS = [

@@ -35,6 +35,8 @@ const HOTEL_FIELDS = [
   'negotiatedRateId', 'roomType', 'mealPlan', 'checkInDate', 'checkOutDate', 'nights',
   'roomsCount', 'rooms', 'adultsCount', 'childrenCount', 'rate', 'quotedRate',
   'supplierCost', 'isFoc', 'focReason', 'guestNames', 'specialRequests',
+  'costSource', 'packageSupplierRate', 'originalContractedTotal',
+  'nightlyRateBreakdown', 'roomAllocations',
 ] as const;
 
 const TRANSPORT_FIELDS = [

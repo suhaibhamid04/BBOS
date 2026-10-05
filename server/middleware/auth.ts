@@ -78,6 +78,11 @@ const PRESET_MOCK_USERS: Record<string, AuthenticatedUser> = {
     name: 'Tariq Bhat', email: 'tariq.sales@bookingbridge.com', role: 'Sales Executive', active: true,
     salesTeamId: 'sales-team-01', managerEmployeeId: 'emp-mgr-01', isDemo: true,
   },
+  'emp-sales-02': {
+    id: 'emp-sales-02', uid: 'emp-sales-02', firebaseUid: 'emp-sales-02', employeeId: 'emp-sales-02',
+    name: 'Ayesha Zargar', email: 'ayesha.sales@bookingbridge.com', role: 'Sales Executive', active: true,
+    salesTeamId: 'sales-team-01', managerEmployeeId: 'emp-mgr-01', isDemo: true,
+  },
   'emp-res-01': {
     id: 'emp-res-01', uid: 'emp-res-01', firebaseUid: 'emp-res-01', employeeId: 'emp-res-01',
     name: 'Zoya Qadri', email: 'zoya.reservations@bookingbridge.com', role: 'Reservations', active: true, isDemo: true,

@@ -94,12 +94,27 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
     endDate: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
     adults: 2,
     children: 0,
+    childAges: [] as Array<number | null>,
     tripType: 'Honeymoon',
     budget: 85000,
     currency: 'INR',
     assignedSalesEmployeeId: ''
   });
   const [formError, setFormError] = useState('');
+
+  const setTripChildrenCount = (countValue: number) => {
+    const count = Math.max(0, Math.floor(countValue || 0));
+    setTripForm(previous => ({
+      ...previous,
+      children: count,
+      childAges: Array.from({ length: count }, (_, index) => previous.childAges[index] ?? null),
+    }));
+  };
+
+  const setTripChildAge = (index: number, value: string) => setTripForm(previous => ({
+    ...previous,
+    childAges: previous.childAges.map((age, ageIndex) => ageIndex === index ? (value === '' ? null : Number(value)) : age),
+  }));
 
   // Selector state for Hotel Modal
   const [selectedHotelId, setSelectedHotelId] = useState<string>('');
@@ -190,6 +205,7 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
       endDate: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
       adults: 2,
       children: 0,
+      childAges: [],
       tripType: 'Honeymoon',
       budget: 95000,
       currency: 'INR',
@@ -219,6 +235,7 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
       endDate: target.endDate,
       adults: target.adults || 2,
       children: target.children || 0,
+      childAges: Array.from({ length: target.children || 0 }, (_, index) => target.childAges?.[index] ?? null),
       tripType: target.tripType || 'Leisure',
       budget: target.budget || target.totalSellingPrice || 85000,
       currency: target.currency || 'INR',
@@ -274,7 +291,9 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
       title: `${lead.destination} ${lead.tripType || 'Tour'} for ${lead.customerName}`,
       startDate: lead.travelStartDate || prev.startDate,
       endDate: lead.travelEndDate || prev.endDate,
-      adults: lead.travelerCount || 2,
+      adults: lead.adults || 2,
+      children: lead.childAges?.length || lead.children || 0,
+      childAges: Array.from({ length: lead.childAges?.length || lead.children || 0 }, (_, index) => lead.childAges?.[index] ?? null),
       tripType: lead.tripType || 'Leisure',
       budget: lead.budget || 85000
     }));
@@ -324,6 +343,11 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
 
     if (Number(tripForm.adults) < 1) {
       setFormError('At least 1 adult traveler is required.');
+      return false;
+    }
+
+    if (tripForm.childAges.length !== Number(tripForm.children) || tripForm.childAges.some(age => !Number.isInteger(age) || Number(age) < 0 || Number(age) > 17)) {
+      setFormError('Enter an age between 0 and 17 for every child.');
       return false;
     }
 
@@ -388,6 +412,7 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
           travelerCount: Number(tripForm.adults) + Number(tripForm.children),
           adults: Number(tripForm.adults),
           children: Number(tripForm.children),
+          childAges: tripForm.childAges as number[],
           tripType: tripForm.tripType,
           currency: tripForm.currency,
           budget: Number(tripForm.budget),
@@ -427,6 +452,7 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
         travelerCount: Number(tripForm.adults) + Number(tripForm.children),
         adults: Number(tripForm.adults),
         children: Number(tripForm.children),
+        childAges: tripForm.childAges as number[],
         tripType: tripForm.tripType,
         budget: Number(tripForm.budget),
         totalSellingPrice: Number(tripForm.budget) || 0
@@ -609,9 +635,24 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
     );
   });
 
-  // Financial permission guards
-  const canSeeSupplierCosts = currentUser.role === 'Founder' || currentUser.role === 'Admin' || currentUser.role === 'Accounts';
-  const canSeeMargins = canSeeSupplierCosts || currentUser.role === 'Sales Manager';
+  // Resource-aware financial visibility mirrors the server policy. The server
+  // remains authoritative; these checks prevent the UI from hiding financials
+  // that an authorized salesperson needs for their own/team package.
+  const canSeeSupplierCostsForTrip = (trip: Trip) =>
+    currentUser.role === 'Founder'
+    || currentUser.role === 'Admin'
+    || currentUser.role === 'Accounts'
+    || (currentUser.role === 'Sales Executive' && trip.assignedSalesEmployeeId === currentUser.employeeId)
+    || (currentUser.role === 'Sales Manager' && Boolean(trip.salesTeamId) && trip.salesTeamId === currentUser.salesTeamId)
+    || (currentUser.role === 'Reservations' && trip.assignedReservationsEmployeeId === currentUser.employeeId);
+  const canSeeMarginsForTrip = (trip: Trip) =>
+    currentUser.role === 'Founder'
+    || currentUser.role === 'Admin'
+    || currentUser.role === 'Accounts'
+    || (currentUser.role === 'Sales Executive' && trip.assignedSalesEmployeeId === currentUser.employeeId)
+    || (currentUser.role === 'Sales Manager' && Boolean(trip.salesTeamId) && trip.salesTeamId === currentUser.salesTeamId);
+  const canSeeSupplierCosts = activeTrip ? canSeeSupplierCostsForTrip(activeTrip) : false;
+  const canSeeMargins = activeTrip ? canSeeMarginsForTrip(activeTrip) : false;
 
   // --------------------------------------------------------------------------
   // RENDER: ACTIVE TRIP BUILDER VIEW
@@ -914,9 +955,11 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
                           </div>
                           <div className="flex items-center gap-4">
                             <div className="text-right">
-                              <p className="text-xs font-bold text-slate-500">{item.metadata?.rateId ? 'Inventory linked' : 'Legacy item'}</p>
+                              <p className="text-xs font-bold text-slate-500">{item.metadata?.costSource === 'MANUAL_SUPPLIER_QUOTE' ? 'Manual hotel quote' : item.metadata?.costSource === 'PACKAGE_RATE_OVERRIDE' ? 'Package rate override' : item.metadata?.rateId ? 'Contracted rate' : 'Legacy item'}</p>
+                              {canSeeSupplierCosts && item.metadata?.contractedTotalSupplierCost !== undefined && <p className="text-[10px] text-slate-400">Contracted: ₹{Number(item.metadata.contractedTotalSupplierCost).toLocaleString('en-IN')}</p>}
+                              {canSeeSupplierCosts && item.metadata?.packageSupplierRate?.amount !== undefined && <p className="text-[10px] text-violet-600">Package: ₹{Number(item.metadata.packageSupplierRate.amount).toLocaleString('en-IN')}{item.metadata.packageSupplierRate.entryMode === 'PER_ROOM_NIGHT' ? '/room/night' : ' total'}</p>}
                               {canSeeSupplierCosts && (
-                                <p className="text-[10px] text-slate-400">Cost: ₹{item.supplierCost?.toLocaleString('en-IN')}</p>
+                                <p className="text-[10px] text-slate-400">Supplier cost: {item.supplierCost === undefined ? 'Recalculate required' : `₹${item.supplierCost.toLocaleString('en-IN')}`}</p>
                               )}
                             </div>
                             {item.metadata?.inventoryType === 'ACCOMMODATION' && (
@@ -1082,12 +1125,14 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
              <div className="animate-in fade-in zoom-in duration-150 w-full max-w-2xl">
                 <HotelInventoryPicker
+                  tripId={activeTrip!.id}
+                  customerName={getCustomerName(activeTrip!.customerId)}
+                  destination={String(activeTrip!.destination)}
                   checkInDate={editingItem?.type === 'HOTEL' && editingItem.metadata?.inventoryType === 'ACCOMMODATION' ? editingItem.metadata.checkInDate : activeDay?.date || new Date().toISOString().split('T')[0]}
                   nights={editingItem?.type === 'HOTEL' && editingItem.metadata?.inventoryType === 'ACCOMMODATION' ? editingItem.metadata.nights : 1}
-                  adults={editingItem?.type === 'HOTEL' && editingItem.metadata?.inventoryType === 'ACCOMMODATION' ? editingItem.metadata.adults : activeTrip?.adults || 2}
-                  childrenCount={editingItem?.type === 'HOTEL' && editingItem.metadata?.inventoryType === 'ACCOMMODATION' ? editingItem.metadata.children : activeTrip?.children || 0}
-                  childrenWithBed={editingItem?.type === 'HOTEL' && editingItem.metadata?.inventoryType === 'ACCOMMODATION' ? editingItem.metadata.childrenWithBed : 0}
-                  childrenWithoutBed={editingItem?.type === 'HOTEL' && editingItem.metadata?.inventoryType === 'ACCOMMODATION' ? editingItem.metadata.childrenWithoutBed : activeTrip?.children || 0}
+                  adults={activeTrip?.adults || 2}
+                  childrenCount={activeTrip?.children || 0}
+                  childAges={activeTrip?.childAges || []}
                   initialMetadata={editingItem?.type === 'HOTEL' && editingItem.metadata?.inventoryType === 'ACCOMMODATION' ? editingItem.metadata as AccommodationItineraryMetadata : undefined}
                   onConfirm={handleAddHotel}
                   onCancel={() => { setEditingItem(null); setShowHotelModal(false); }}
@@ -1383,7 +1428,7 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
                       type="number"
                       min="0"
                       value={tripForm.children}
-                      onChange={(e) => setTripForm({ ...tripForm, children: Number(e.target.value) })}
+                      onChange={(e) => setTripChildrenCount(Number(e.target.value))}
                       className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg"
                     />
                   </div>
@@ -1403,6 +1448,10 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
                     </select>
                   </div>
                 </div>
+
+                {tripForm.children > 0 && <div data-testid="trip-child-ages" className="grid grid-cols-2 gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3 sm:grid-cols-4">
+                  {tripForm.childAges.map((age, index) => <label key={index} className="text-xs font-semibold text-amber-900">Child {index + 1} age<input data-testid={`trip-child-age-${index}`} type="number" min="0" max="17" value={age ?? ''} onChange={event => setTripChildAge(index, event.target.value)} className="mt-1 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs" required /></label>)}
+                </div>}
 
                 {/* Budget & Sales Employee */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1533,7 +1582,7 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
                     </td>
                     <td className="py-3 px-4">
                       <p className="font-bold text-slate-900">₹{trip.totalSellingPrice?.toLocaleString('en-IN') || 0}</p>
-                      {canSeeMargins && trip.grossMargin ? (
+                      {canSeeMarginsForTrip(trip) && trip.grossMargin ? (
                         <p className="text-[10px] text-emerald-600 font-medium">Margin: {trip.grossMargin}%</p>
                       ) : null}
                     </td>
@@ -1798,7 +1847,7 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
                     type="number"
                     min="0"
                     value={tripForm.children}
-                    onChange={(e) => setTripForm({ ...tripForm, children: Number(e.target.value) })}
+                    onChange={(e) => setTripChildrenCount(Number(e.target.value))}
                     className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg"
                   />
                 </div>
@@ -1818,6 +1867,10 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
                   </select>
                 </div>
               </div>
+
+              {tripForm.children > 0 && <div data-testid="trip-child-ages" className="grid grid-cols-2 gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3 sm:grid-cols-4">
+                {tripForm.childAges.map((age, index) => <label key={index} className="text-xs font-semibold text-amber-900">Child {index + 1} age<input data-testid={`trip-child-age-${index}`} type="number" min="0" max="17" value={age ?? ''} onChange={event => setTripChildAge(index, event.target.value)} className="mt-1 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs" required /></label>)}
+              </div>}
 
               {/* Budget & Sales Specialist */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

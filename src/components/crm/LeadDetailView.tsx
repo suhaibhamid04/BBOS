@@ -1,13 +1,16 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useAuth } from '../../context/AuthContext';
 import { useData } from '../../context/DataContext';
 import { 
-  ArrowLeft, Bot, Calendar, Clock, DollarSign, Flame, GitPullRequest, 
-  MapPin, MessageSquare, Phone, Plus, Star, Sparkles, Building2, User, ChevronDown, Plane, FileText, CheckCircle2
+  AlertCircle, ArrowLeft, Bot, Calendar, DollarSign, Flame, GitPullRequest,
+  Loader2, MapPin, MessageSquare, Phone, Plus, RefreshCw, Star, Sparkles, Building2, User, ChevronDown, Plane, FileText, CheckCircle2
 } from 'lucide-react';
 import { AiSalesHeadTab } from './AiSalesHeadTab';
 import { LeadStageControl } from './LeadStageControl';
 import { CreateLeadModal } from './CreateLeadModal';
 import { LeadAssignmentPanel } from './LeadAssignmentPanel';
+import { LeadInteractionPanel } from '../sales/LeadInteractionPanel';
+import type { Lead } from '../../types';
 
 interface Props {
   leadId: string;
@@ -15,20 +18,48 @@ interface Props {
 }
 
 export const LeadDetailView: React.FC<Props> = ({ leadId, onNavigate }) => {
-  const { leads, customers, trips, quotes, bookings, createOrResumeLeadTrip, updateLead, runSalesAiAnalysis } = useData();
-  
-  const lead = leads.find(l => l.id === leadId);
-  const customer = lead ? customers.find(c => c.id === lead.customerId) : null;
-  
-  const [activeTab, setActiveTab] = useState<'SUMMARY' | 'AI_SALES_HEAD' | 'CONVERSATION' | 'TASKS' | 'QUOTES' | 'AUDIT'>('SUMMARY');
+  const { currentUser } = useAuth();
+  const { leads, customers, trips, quotes, bookings, createOrResumeLeadTrip, updateLead, loadLead, runSalesAiAnalysis } = useData();
+  const [activeTab, setActiveTab] = useState<'SUMMARY' | 'AI_SALES_HEAD' | 'QUOTES'>('SUMMARY');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiMenuOpen, setAiMenuOpen] = useState(false);
   const [isBuildingPackage, setIsBuildingPackage] = useState(false);
   const [workflowError, setWorkflowError] = useState('');
   const [isEditingLead, setIsEditingLead] = useState(false);
+  const [authoritativeLead, setAuthoritativeLead] = useState<Lead | null>(null);
+  const [detailLoading, setDetailLoading] = useState(true);
+  const [detailError, setDetailError] = useState('');
+  const [reloadToken, setReloadToken] = useState(0);
 
-  if (!lead) {
-    return <div className="p-8 text-center text-slate-500">Lead not found.</div>;
+  useEffect(() => {
+    let active = true;
+    setAuthoritativeLead(null);
+    setDetailLoading(true);
+    setDetailError('');
+    if (!leadId) {
+      setDetailError('The Lead link is missing its stable Lead ID.');
+      setDetailLoading(false);
+      return () => { active = false; };
+    }
+    void loadLead(leadId)
+      .then(lead => { if (active) setAuthoritativeLead(lead); })
+      .catch(error => { if (active) setDetailError(error instanceof Error ? error.message : 'Lead could not be loaded.'); })
+      .finally(() => { if (active) setDetailLoading(false); });
+    return () => { active = false; };
+  }, [leadId, reloadToken, currentUser.employeeId]);
+
+  const contextLead = leads.find(item => item.id === leadId);
+  const lead = contextLead && authoritativeLead && contextLead.updatedAt >= authoritativeLead.updatedAt
+    ? contextLead
+    : authoritativeLead;
+  const customer = lead ? customers.find(c => c.id === lead.customerId) : null;
+
+  if (detailLoading) {
+    return <div data-testid="lead-detail-loading" className="flex min-h-[320px] items-center justify-center gap-2 text-sm text-slate-500"><Loader2 className="h-5 w-5 animate-spin" /> Loading authoritative Lead…</div>;
+  }
+
+  if (detailError || !lead) {
+    return <div data-testid="lead-detail-error" className="mx-auto max-w-xl rounded-xl border border-rose-200 bg-rose-50 p-6 text-center text-rose-800"><AlertCircle className="mx-auto mb-3 h-7 w-7" /><p className="text-sm font-bold">Lead detail could not be opened</p><p className="mt-1 text-xs">{detailError || 'The authoritative Lead record is unavailable.'}</p><div className="mt-4 flex justify-center gap-2"><button type="button" onClick={() => setReloadToken(value => value + 1)} className="flex items-center gap-2 rounded-lg bg-rose-700 px-3 py-2 text-xs font-bold text-white"><RefreshCw className="h-4 w-4" /> Retry</button><button type="button" onClick={() => onNavigate('sales-workspace')} className="rounded-lg border border-rose-300 px-3 py-2 text-xs font-bold">Back to My Sales Queue</button></div></div>;
   }
 
   const handleAiAction = async (action: string) => {
@@ -82,6 +113,7 @@ export const LeadDetailView: React.FC<Props> = ({ leadId, onNavigate }) => {
       <div className="bg-white border-b border-slate-200 px-6 py-4 flex flex-col md:flex-row md:items-center justify-between gap-4 sticky top-0 z-20">
         <div className="flex items-center gap-4">
           <button 
+            data-testid="back-to-sales-queue"
             onClick={() => onNavigate('sales-workspace')}
             className="p-2 hover:bg-slate-100 rounded-lg text-slate-500 transition-colors"
           >
@@ -155,7 +187,7 @@ export const LeadDetailView: React.FC<Props> = ({ leadId, onNavigate }) => {
       {/* Tabs */}
       <div className="bg-white border-b border-slate-200 px-6">
         <div className="flex space-x-6 overflow-x-auto custom-scrollbar">
-          {['SUMMARY', 'AI_SALES_HEAD', 'CONVERSATION', 'TASKS', 'QUOTES', 'AUDIT'].map(tab => (
+          {(['SUMMARY', 'AI_SALES_HEAD', 'QUOTES'] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab as any)}
@@ -255,7 +287,7 @@ export const LeadDetailView: React.FC<Props> = ({ leadId, onNavigate }) => {
                       <div className="text-sm font-medium text-slate-900">{[lead.hotelPreference, lead.mealPlanPreference, lead.vehiclePreference].filter(Boolean).join(' · ') || 'Not specified'}</div>
                     </div>
                     <div><div className="text-xs font-medium text-slate-500 mb-1">Special requirements</div><div className="text-sm font-medium text-slate-900">{lead.specialRequirements || 'None recorded'}</div></div>
-                    <div><div className="text-xs font-medium text-slate-500 mb-1">Tags</div><div className="text-sm font-medium text-slate-900">{lead.tags.join(', ') || 'None'}</div></div>
+                    <div><div className="text-xs font-medium text-slate-500 mb-1">Tags</div><div className="text-sm font-medium text-slate-900">{(lead.tags || []).join(', ') || 'None'}</div></div>
                   </div>
                 </div>
 
@@ -278,6 +310,7 @@ export const LeadDetailView: React.FC<Props> = ({ leadId, onNavigate }) => {
 
               {/* Right Column: Meta & Actions */}
               <div className="space-y-6">
+                <LeadInteractionPanel lead={lead} onRecorded={updated => setAuthoritativeLead(updated)} />
                 
                 {/* Customer Summary Widget */}
                 <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
@@ -423,15 +456,6 @@ export const LeadDetailView: React.FC<Props> = ({ leadId, onNavigate }) => {
             </div>
           )}
 
-          {activeTab !== 'SUMMARY' && activeTab !== 'AI_SALES_HEAD' && activeTab !== 'QUOTES' && (
-            <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-slate-500 flex items-center justify-center min-h-[400px]">
-              <div className="space-y-3">
-                <Clock className="w-8 h-8 text-slate-300 mx-auto" />
-                <p>This module section is actively being built for {activeTab}.</p>
-                <p className="text-xs">Connecting to Firestore references...</p>
-              </div>
-            </div>
-          )}
         </div>
       </div>
 

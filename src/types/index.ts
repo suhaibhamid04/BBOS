@@ -2,6 +2,7 @@ import { BookingComponentStatus, VoucherStatus } from './booking';
 import type { QuoteShareChannel } from './customerPackage';
 export * from './lead';
 export * from './leadDistribution';
+export * from './leadFollowUp';
 
 export const USER_ROLES = [
   'Founder',
@@ -326,6 +327,11 @@ export interface QuoteHotelItem {
   rate?: number; // Optional component-level selling price
   quotedRate?: number; // Authoritative unit supplier rate quoted
   supplierCost?: number; // Should be stripped from customer preview
+  costSource?: import('./accommodation').AccommodationCostSource;
+  packageSupplierRate?: import('./accommodation').PackageSupplierRate;
+  originalContractedTotal?: number;
+  nightlyRateBreakdown?: import('./accommodation').AccommodationNightlyRateBreakdown[];
+  roomAllocations?: import('./accommodation').RoomAllocation[];
   isFoc?: boolean;
   focReason?: string;
   guestNames?: string[];
@@ -540,7 +546,7 @@ export interface AccommodationItineraryMetadata {
   propertyName: string;
   roomCategoryId: string;
   roomCategoryName: string;
-  rateId: string;
+  rateId?: string;
   supplierId?: string;
   supplierName?: string;
   mealPlan: 'EP' | 'CP' | 'MAP' | 'AP' | 'CUSTOM';
@@ -552,8 +558,16 @@ export interface AccommodationItineraryMetadata {
   children: number;
   childrenWithBed: number;
   childrenWithoutBed: number;
+  roomAllocations?: import('./accommodation').RoomAllocation[];
+  childTreatments?: import('./accommodation').ChildChargingTreatment[];
   needsConfirmation: boolean;
   taxDescription: string;
+  costSource?: import('./accommodation').AccommodationCostSource;
+  /** Browser proposal accepted only by the Trip API; never authoritative by itself. */
+  packageRateRequest?: import('./accommodation').PackageSupplierRateInput;
+  packageSupplierRate?: import('./accommodation').PackageSupplierRate;
+  contractedTotalSupplierCost?: number;
+  nightlyRateBreakdown?: import('./accommodation').AccommodationNightlyRateBreakdown[];
 }
 
 export interface TransportItineraryMetadata {
@@ -989,6 +1003,10 @@ export type {
   ConfirmationStatus,
   PropertyPhotoCategory,
   RoomPhotoCategory,
+  ChildChargeCategory,
+  ChildAgePolicy,
+  RoomAllocation,
+  ChildChargingTreatment,
   PropertyPhoto,
   AccommodationProperty,
   RoomCategory,

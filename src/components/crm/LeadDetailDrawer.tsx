@@ -4,6 +4,7 @@ import { useData } from '../../context/DataContext';
 import { LeadStageControl } from './LeadStageControl';
 import { CreateLeadModal } from './CreateLeadModal';
 import { LeadAssignmentPanel } from './LeadAssignmentPanel';
+import { LeadInteractionPanel } from '../sales/LeadInteractionPanel';
 import {
   X,
   Flame,
@@ -203,6 +204,7 @@ export const LeadDetailDrawer: React.FC<LeadDetailDrawerProps> = ({ leadId, onCl
         <div className="flex-1 overflow-y-auto p-5 text-xs space-y-5">
           {activeTab === 'OVERVIEW' && (
             <div className="space-y-4">
+              <LeadInteractionPanel lead={lead} />
               <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
                 <LeadStageControl lead={lead} updateLead={updateLead} />
               </div>

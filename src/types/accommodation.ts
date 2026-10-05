@@ -51,6 +51,40 @@ export const SUPPLEMENT_LABELS: Record<SupplementType, string> = {
 
 export type TaxTreatment = 'NET' | 'INCLUSIVE' | 'GST_5' | 'GST_18' | 'CUSTOM_TAX' | 'NEEDS_CONFIRMATION';
 
+export type AccommodationCostSource =
+  | 'INVENTORY_CONTRACTED'
+  | 'INVENTORY_NEGOTIATED'
+  | 'MANUAL_SUPPLIER_QUOTE'
+  | 'PACKAGE_RATE_OVERRIDE'
+  | 'PENDING';
+
+export type PackageRateEntryMode = 'PER_ROOM_NIGHT' | 'TOTAL_STAY';
+
+/** Allowlisted browser proposal. Actor and timestamp are always supplied by the server. */
+export interface PackageSupplierRateInput {
+  entryMode: PackageRateEntryMode;
+  amount: number;
+  taxTreatment: TaxTreatment;
+  supplierQuoteReference?: string;
+  overrideReason?: string;
+}
+
+/** Auditable package-only supplier price. This never updates inventory RatePeriod data. */
+export interface PackageSupplierRate extends PackageSupplierRateInput {
+  enteredByEmployeeId: string;
+  enteredAt: string;
+  originalContractedTotal?: number;
+}
+
+export interface AccommodationNightlyRateBreakdown {
+  roomIndex: number;
+  roomCategoryId: string;
+  date: string;
+  rateId: string;
+  baseRate: number;
+  totalAmount: number;
+}
+
 export const TAX_TREATMENT_LABELS: Record<TaxTreatment, string> = {
   NET: 'NET (Tax Included)',
   INCLUSIVE: 'Tax Inclusive',
@@ -65,6 +99,32 @@ export const TAX_TREATMENT_LABELS: Record<TaxTreatment, string> = {
 export type RateContractType = 'STANDARD' | 'GROUP' | 'NEGOTIATED';
 export type AvailabilityStatusType = 'NOT_CHECKED' | 'REQUESTED' | 'AVAILABLE' | 'NOT_AVAILABLE' | 'ON_HOLD' | 'CONFIRMED';
 export type ConfirmationStatus = 'CONFIRMED' | 'NEEDS_CONFIRMATION';
+
+export type ChildChargeCategory = 'COMPLIMENTARY_NO_BED' | 'CHILD_SUPPLEMENT' | 'COMMERCIAL_ADULT';
+
+/** Compact policy hook for future property-specific age bands. */
+export interface ChildAgePolicy {
+  complimentaryMaxAge: number;
+  childSupplementMaxAge: number;
+  adultFromAge: number;
+}
+
+/** Authoritative occupancy for one physical room. */
+export interface RoomAllocation {
+  roomIndex: number;
+  roomCategoryId: string;
+  /** Authoritative contracted rate selected for this room category. */
+  rateId?: string;
+  adults: number;
+  children: number;
+  childAges: number[];
+}
+
+export interface ChildChargingTreatment {
+  age: number;
+  category: ChildChargeCategory;
+  label: string;
+}
 
 // --- Photo Categories ---
 
@@ -125,8 +185,16 @@ export interface RoomCategory {
   propertyId: string;
   name: string;                  // 'Deluxe Room', 'Suite', 'Cottage', etc.
   description?: string;
-  maxAdults: number;             // Default 2 (double sharing base)
-  maxChildren: number;           // Default 1
+  /** Adults included in the base room rate. Defaults to 2 for legacy records. */
+  baseAdults?: number;
+  /** Maximum adult-equivalent guests for explicit M4.1A records. */
+  maxAdults: number;
+  /** Maximum children of all charging treatments. */
+  maxChildren: number;
+  /** Maximum children permitted without a bed. Defaults to min(1, maxChildren). */
+  maxChildrenWithoutBed?: number;
+  maxTotalOccupancy?: number;    // Optional hard cap when the supplier defines one
+  childAgePolicy?: Partial<ChildAgePolicy>;
   bedConfiguration?: string;     // e.g. '1 King' or '2 Twin'
   amenities: string[];
   photos: PropertyPhoto[];
@@ -229,6 +297,7 @@ export interface OccupancyValidation {
   valid: boolean;
   reason?: string;               // 'OCCUPANCY_EXCEEDS_ROOM_CAPACITY', 'EB_SUPPLEMENT_REQUIRED_BUT_MISSING', etc.
   ebRequired: boolean;
+  extraAdultCount?: number;
   cwbCount: number;
   cnbCount: number;
   suggestMultipleRooms?: boolean;
@@ -253,6 +322,13 @@ export interface RateCalculationResult {
   taxIncluded?: boolean;
   taxDescription?: string;
   applicableSupplements?: { name: string; displayAmount: number }[];
+  roomAllocations?: RoomAllocation[];
+  childTreatments?: ChildChargingTreatment[];
+  costSource?: AccommodationCostSource;
+  contractedTotalSupplierCost?: number;
+  packageSupplierRate?: PackageSupplierRateInput;
+  nightlyRateBreakdown?: AccommodationNightlyRateBreakdown[];
+  missingRateDates?: string[];
   // ONLY included for Founder/Admin/Accounts (stripped by server for other roles):
   supplierCostPerNight?: number;
   totalSupplierCost?: number;
@@ -274,6 +350,8 @@ export interface RateCalculationRequest {
   children: number;
   childrenWithBed: number;       // Number of children needing bed (CWB)
   childrenWithoutBed: number;    // Number of children without bed (CNB)
+  roomAllocations?: RoomAllocation[];
   useNegotiatedRate?: boolean;   // Only for authorized roles
   negotiatedRateId?: string;
+  packageRate?: PackageSupplierRateInput;
 }

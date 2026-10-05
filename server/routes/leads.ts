@@ -10,19 +10,21 @@ import {
   normalizeLeadEmail,
   normalizeLeadPhone,
   type Lead,
+  type LeadInteractionInput,
   type LeadDropReason,
   type LeadPriority,
   type LeadStatus,
   type UserRole,
 } from '../../src/types/index.js';
 import { APP_CONFIG } from '../../src/config.js';
-import { DEMO_CUSTOMERS, DEMO_LEADS } from '../../src/services/demoData.js';
+import { DEMO_CUSTOMERS, DEMO_LEADS, DEMO_QUOTES } from '../../src/services/demoData.js';
 import { PRESET_USERS } from '../../src/services/permissions.js';
 import { InMemoryConversionStorageProvider } from '../../src/services/conversion/conversionStorageProvider.js';
 import {
   LeadDistributionError,
   LeadDistributionService,
 } from '../services/leadDistributionService.js';
+import { LeadInteractionError, LeadInteractionService } from '../services/leadInteractionService.js';
 
 export const leadsRouter = Router();
 
@@ -99,12 +101,14 @@ function normalizeStoredLead(value: UnknownRecord): Lead {
 const demoLeads = new Map<string, Lead>(DEMO_LEADS.map(lead => [lead.id, normalizeStoredLead({ ...structuredClone(lead), isDemo: true })]));
 const demoCustomers = new Map(DEMO_CUSTOMERS.map(customer => [customer.id, structuredClone(customer)]));
 const demoAuditLogs = new Map<string, UnknownRecord>();
-const demoDistributionStorage = new InMemoryConversionStorageProvider({ leads: [...demoLeads.values()] });
+const demoDistributionStorage = new InMemoryConversionStorageProvider({ leads: [...demoLeads.values()], quotes: DEMO_QUOTES });
 for (const customer of demoCustomers.values()) demoDistributionStorage.rawSet('customers', customer.id, customer);
 for (const employee of PRESET_USERS) demoDistributionStorage.rawSet('employees', employee.employeeId, employee);
 demoDistributionStorage.rawSet('sales_teams', 'sales-team-01', { id: 'sales-team-01', name: 'Kashmir Sales Team', active: true });
 const demoLeadDistribution = new LeadDistributionService(demoDistributionStorage);
 const productionLeadDistribution = new LeadDistributionService();
+const demoLeadInteractions = new LeadInteractionService(demoDistributionStorage);
+const productionLeadInteractions = new LeadInteractionService();
 
 class LeadRequestError extends Error {
   constructor(readonly statusCode: number, readonly code: string, message: string) { super(message); }
@@ -165,12 +169,17 @@ function parseChildAges(value: unknown): number[] {
 function sendError(res: Response, error: unknown, fallback: string) {
   if (error instanceof LeadRequestError) return res.status(error.statusCode).json({ error: error.message, code: error.code });
   if (error instanceof LeadDistributionError) return res.status(error.statusCode).json({ error: error.message, code: error.code });
+  if (error instanceof LeadInteractionError) return res.status(error.statusCode).json({ error: error.message, code: error.code });
   console.error(`[LEADS] ${fallback}:`, error);
   return res.status(500).json({ error: fallback, code: 'LEAD_OPERATION_FAILED' });
 }
 
 function distributionService(req: Request) {
   return isDemoRequest(req) ? demoLeadDistribution : productionLeadDistribution;
+}
+
+function interactionService(req: Request) {
+  return isDemoRequest(req) ? demoLeadInteractions : productionLeadInteractions;
 }
 
 function distributionActor(req: Request) {
@@ -449,6 +458,40 @@ leadsRouter.get('/assignment-options', requireRole(['Founder', 'Admin', 'Sales M
   } catch (error) { return sendError(res, error, 'Lead assignment options could not be loaded.'); }
 });
 
+leadsRouter.get('/sales-queue', requireRole(crmRoles), async (req, res) => {
+  try {
+    const data = await interactionService(req).getSalesQueue(distributionActor(req));
+    return res.json({ success: true, data, ...(isDemoRequest(req) ? { mode: 'DEMO' } : {}) });
+  } catch (error) { return sendError(res, error, 'Sales queue could not be loaded.'); }
+});
+
+leadsRouter.get('/:id', requireRole(crmRoles), async (req, res) => {
+  try {
+    const leadId = req.params.id;
+    const snapshot = isDemoRequest(req) ? null : await getAdminDb().collection('leads').doc(leadId).get();
+    const stored = isDemoRequest(req)
+      ? demoLeads.get(leadId)
+      : snapshot?.exists
+        ? normalizeStoredLead({ id: snapshot.id, ...snapshot.data() })
+        : undefined;
+    if (!stored) throw new LeadRequestError(404, 'LEAD_NOT_FOUND', 'Lead not found.');
+    if (!canReadLead(req, stored)) throw new LeadRequestError(403, 'LEAD_SCOPE_DENIED', 'This Lead is outside your Sales scope.');
+    return res.json({ success: true, data: normalizeStoredLead(stored), ...(isDemoRequest(req) ? { mode: 'DEMO' } : {}) });
+  } catch (error) { return sendError(res, error, 'Lead could not be loaded.'); }
+});
+
+leadsRouter.post('/:id/interaction', requireRole(crmRoles), async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body as UnknownRecord : {};
+    const allowed = new Set(['outcome', 'expectedUpdatedAt', 'idempotencyKey', 'note', 'nextFollowUpAt', 'dropReason', 'dropNote']);
+    const unsupported = Object.keys(body).find(field => !allowed.has(field));
+    if (unsupported) throw new LeadRequestError(400, 'UNSUPPORTED_INTERACTION_FIELD', `${unsupported} is not accepted by the interaction endpoint.`);
+    const result = await interactionService(req).recordInteraction(req.params.id, body as LeadInteractionInput, distributionActor(req));
+    if (isDemoRequest(req)) demoLeads.set(result.lead.id, result.lead);
+    return res.status(result.idempotent ? 200 : 201).json({ success: true, data: result.lead, eventId: result.eventId, idempotent: result.idempotent });
+  } catch (error) { return sendError(res, error, 'Lead interaction could not be recorded.'); }
+});
+
 leadsRouter.get('/:id/assignment-history', requireRole(crmRoles), async (req, res) => {
   try {
     const data = await distributionService(req).getHistory(req.params.id, distributionActor(req));
@@ -490,6 +533,7 @@ leadsRouter.patch('/:id', requireRole(crmRoles), async (req, res) => {
     const protectedFields = [
       'id', 'customerId', 'companyId', 'salesTeamId', 'assignedEmployeeName', 'createdByEmployeeId',
       'updatedByEmployeeId', 'createdAt', 'bookingId', 'quoteId', 'convertedBookingId', 'createdSourceType',
+      'nextFollowUpAt', 'lastContactAt', 'lastContactOutcome', 'lastContactByEmployeeId',
     ];
     if (protectedFields.some(field => field in body)) throw new LeadRequestError(400, 'PROTECTED_LEAD_FIELD', 'Ownership, team, audit, and timestamp fields are server-controlled.');
 
@@ -532,6 +576,7 @@ leadsRouter.patch('/:id', requireRole(crmRoles), async (req, res) => {
       delete (updated as UnknownRecord).dropReason;
       delete (updated as UnknownRecord).dropNote;
     }
+    if (['CONVERTED', 'DROPPED', 'CANCELLED'].includes(stage)) updated.nextFollowUpAt = null;
     const packageChanges = commercialChanges(existing, updated);
     const audits: UnknownRecord[] = [];
     if (stage !== existing.status) audits.push(audit(stage === 'DROPPED' ? 'LEAD_DROPPED' : 'LEAD_STAGE_CHANGED', actor, leadId, existing, updated, `Lead stage changed from ${existing.status} to ${stage}.`));

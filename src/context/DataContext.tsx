@@ -12,7 +12,7 @@ import {
 } from '../services/db/repositories';
 import { inventoryApi } from '../services/inventory/inventoryApi';
 import { authenticatedMutationHeaders, authenticatedReadHeaders } from '../services/auth/authenticatedApi';
-import { calculateStayTotal } from '../services/accommodationEngine';
+import { calculateMixedAllocatedStayTotal, distributeGuestsAcrossRooms } from '../services/accommodationEngine';
 import { calculateTransportCost } from '../services/transportEngine';
 import { calculateActivityCost } from '../services/activityEngine';
 import { buildCustomerPackageProjection } from '../services/quote/customerPackage';
@@ -70,8 +70,10 @@ import {
   ActivityRatePeriod,
   CustomerPackageDocument,
   QuoteShareChannel,
-  QuoteShareResult
+  QuoteShareResult,
+  LeadInteractionInput
 } from '../types';
+import { getLeadById, recordLeadInteraction as recordLeadInteractionApi } from '../services/leads/leadFollowUpApi';
 import {
   INITIAL_PACKAGES,
   DEMO_CUSTOMERS,
@@ -137,6 +139,7 @@ type TripDraftInput = Omit<Trip, 'id' | 'createdAt' | 'updatedAt' | 'status' | '
 const TRIP_WRITE_FIELDS = [
   'customerId', 'leadId', 'title', 'destination', 'startDate', 'endDate',
   'travelerCount', 'adults', 'children', 'tripType', 'currency', 'budget',
+  'childAges',
 ] as const;
 
 function buildTripWritePayload(sourceValue: TripDraftInput | Partial<Trip>, isCreate: boolean): Record<string, unknown> {
@@ -310,6 +313,8 @@ interface DataContextType {
   updateLeadStatus: (id: string, status: LeadStatus) => Promise<void>;
   addLeadNote: (id: string, note: string) => Promise<void>;
   assignLead: (id: string, employeeId: string, employeeName?: string, note?: string) => Promise<void>;
+  loadLead: (id: string) => Promise<Lead>;
+  recordLeadInteraction: (id: string, input: Omit<LeadInteractionInput, 'expectedUpdatedAt'> & { expectedUpdatedAt?: string }) => Promise<Lead>;
 
   // Customer actions
   createCustomer: (customer: Omit<Customer, 'id' | 'createdAt' | 'updatedAt' | 'totalBookings' | 'lifetimeValue'>) => Promise<Customer>;
@@ -907,6 +912,28 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setLeads(items => items.map(lead => lead.id === id ? body.data : lead));
   };
 
+  const recordLeadInteraction = async (
+    id: string,
+    input: Omit<LeadInteractionInput, 'expectedUpdatedAt'> & { expectedUpdatedAt?: string },
+  ): Promise<Lead> => {
+    const current = leads.find(lead => lead.id === id);
+    const expectedUpdatedAt = input.expectedUpdatedAt || current?.updatedAt;
+    if (!expectedUpdatedAt) throw new Error('Lead version is unavailable. Reload the Sales queue and try again.');
+    const result = await recordLeadInteractionApi(id, { ...input, expectedUpdatedAt }, currentUser.employeeId);
+    setLeads(items => items.some(lead => lead.id === id)
+      ? items.map(lead => lead.id === id ? result.lead : lead)
+      : [result.lead, ...items]);
+    return result.lead;
+  };
+
+  const loadLead = async (id: string): Promise<Lead> => {
+    const demoLead = APP_CONFIG.DEMO_MODE ? leads.find(lead => lead.id === id) : undefined;
+    if (demoLead) return demoLead;
+    const authoritativeLead = await getLeadById(id, currentUser.employeeId);
+    setLeads(items => [authoritativeLead, ...items.filter(lead => lead.id !== id)]);
+    return authoritativeLead;
+  };
+
   // Accommodation CRUD
   const addAccommodationProperty = async (propertyData: Omit<AccommodationProperty, 'id' | 'createdAt' | 'updatedAt'>): Promise<AccommodationProperty> => {
     const newProperty = await inventoryApi.createProperty(propertyData, currentUser.employeeId);
@@ -1096,6 +1123,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       newTrip = result.data as Trip;
     } else {
       const tripId = `trip-${Date.now()}`;
+      const sourceLead = tripData.leadId ? leads.find(lead => lead.id === tripData.leadId) : undefined;
+      const assignedSalesEmployeeId = sourceLead?.assignedEmployeeId || currentUser.employeeId;
+      const salesTeamId = sourceLead?.salesTeamId
+        || (assignedSalesEmployeeId === currentUser.employeeId ? currentUser.salesTeamId : undefined);
       const initialCost = tripData.totalSupplierCost || 0;
       const initialPrice = tripData.totalSellingPrice ?? tripData.budget ?? 0;
       const profit = initialPrice - initialCost;
@@ -1110,6 +1141,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         totalSellingPrice: initialPrice,
         grossProfit: profit,
         grossMargin: margin,
+        assignedSalesEmployeeId,
+        ...(salesTeamId ? { salesTeamId } : {}),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         isDemo: true,
@@ -1311,20 +1344,21 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
             const room = roomCategories.find(value => value.id === metadata.roomCategoryId);
             if (!room) throw new Error(`Room category ${metadata.roomCategoryId || ''} not found.`);
-            const calculation = calculateStayTotal(
-              room,
-              ratePeriods.filter(value => value.propertyId === metadata.propertyId),
-              metadata.propertyId,
-              metadata.checkInDate,
-              Number(metadata.nights || 0),
-              Number(metadata.adults || trip.adults),
-              Number(metadata.children || trip.children),
-              Number(metadata.childrenWithBed || 0),
-              Number(metadata.childrenWithoutBed || 0),
-              metadata.mealPlan,
+            const childAges = Array.isArray(trip.childAges) ? trip.childAges : [];
+            if (trip.children > 0 && childAges.length !== trip.children) {
+              throw new Error('Child ages are required for accurate hotel costing. Return to the Lead or Trip and add every child age.');
+            }
+            const allocations = Array.isArray(metadata.roomAllocations)
+              ? metadata.roomAllocations
+              : distributeGuestsAcrossRooms(metadata.roomCategoryId, trip.adults, childAges, Number(metadata.rooms || 1));
+            const calculation = calculateMixedAllocatedStayTotal(
+              roomCategories.filter(value => value.propertyId === metadata.propertyId), ratePeriods.filter(value => value.propertyId === metadata.propertyId),
+              metadata.propertyId, metadata.checkInDate, Number(metadata.nights || 0), allocations,
+              { adults: trip.adults, children: trip.children, childAges }, metadata.mealPlan,
+              metadata.packageSupplierRate,
             );
             if (!calculation.available) throw new Error('The selected accommodation is unavailable for these dates.');
-            supplierCost = Number(calculation.totalAmount || 0) * Number(metadata.rooms || 1);
+            supplierCost = Number(calculation.totalAmount || 0);
           } else if (item.type === 'TRANSPORT') {
             if (!metadata.vehicleCategoryId || !metadata.rateId || !metadata.startDate || !metadata.serviceType) {
               if (Number.isFinite(item.supplierCost) && Number(item.supplierCost) >= 0) {
@@ -1612,8 +1646,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const targetDay = itineraryDays.find(d => d.id === dayId);
     if (!targetDay) throw new Error(`Day ${dayId} not found`);
 
+    const now = new Date().toISOString();
+    const demoItemData = APP_CONFIG.DEMO_MODE && itemData.type === 'HOTEL' && itemData.metadata?.packageRateRequest
+      ? { ...itemData, metadata: (() => { const { packageRateRequest, ...metadata } = itemData.metadata!; return { ...metadata, packageSupplierRate: { ...packageRateRequest, enteredByEmployeeId: currentUser.employeeId, enteredAt: now } }; })() }
+      : itemData;
     const newItem: ItineraryItem = {
-      ...itemData,
+      ...demoItemData,
       id: `item-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       dayId,
       tripId: targetDay.tripId
@@ -1671,7 +1709,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setTrips(prev => prev.map(trip => trip.id === targetDay.tripId ? result.data.trip as Trip : trip));
       return result.data.item as ItineraryItem;
     }
-    const updatedItem = { ...itemData, id: itemId, dayId, tripId: targetDay.tripId } as ItineraryItem;
+    const now = new Date().toISOString();
+    const demoItemData = itemData.type === 'HOTEL' && itemData.metadata?.packageRateRequest
+      ? { ...itemData, metadata: (() => { const { packageRateRequest, ...metadata } = itemData.metadata!; return { ...metadata, packageSupplierRate: { ...packageRateRequest, enteredByEmployeeId: currentUser.employeeId, enteredAt: now } }; })() }
+      : itemData;
+    const updatedItem = { ...demoItemData, id: itemId, dayId, tripId: targetDay.tripId } as ItineraryItem;
     const updatedDay = { ...targetDay, items: targetDay.items.map(item => item.id === itemId ? updatedItem : item) };
     setItineraryDays(prev => prev.map(day => day.id === dayId ? updatedDay : day));
     setTrips(prev => prev.map(trip => trip.id === targetDay.tripId ? { ...trip, costingStatus: 'PENDING', updatedAt: new Date().toISOString() } : trip));
@@ -2398,6 +2440,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updateLeadStatus,
         addLeadNote,
         assignLead,
+        loadLead,
+        recordLeadInteraction,
         createCustomer,
         updateCustomer,
         createTask,

@@ -18,8 +18,13 @@ import {
 
 // Accommodation
 import { DEMO_ACCOMMODATION_PROPERTIES, DEMO_ROOM_CATEGORIES, DEMO_RATE_PERIODS } from '../../src/services/accommodationDemoData.js';
-import { calculateStayTotal } from '../../src/services/accommodationEngine.js';
+import {
+  calculateMixedAllocatedStayTotal,
+  calculateStayTotal,
+  distributeGuestsAcrossRooms,
+} from '../../src/services/accommodationEngine.js';
 import { AccommodationProperty, RatePeriod, RoomCategory } from '../../src/types/accommodation.js';
+import type { RoomAllocation } from '../../src/types/accommodation.js';
 
 // Transport
 import { DEMO_TRANSPORT_RATE_PERIODS, DEMO_TRANSPORT_SUPPLEMENTS } from '../../src/services/transportDemoData.js';
@@ -168,30 +173,59 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
           }
         }
 
-        if (!activeRate) {
+        const storedChildAges = Array.isArray(storedTrip.childAges) ? storedTrip.childAges.map(Number) : [];
+        const hasCompleteAges = Number(storedTrip.children || 0) === storedChildAges.length;
+        if (!activeRate && !Array.isArray(item.metadata.roomAllocations) && !hasCompleteAges) {
           throw new Error(`Missing active rate for room category ${roomCategoryId} on ${checkInDate}`);
         }
 
         const roomCategory = roomCategories.find(rc => rc.id === roomCategoryId);
         if (roomCategory) {
-           const stayCalc = calculateStayTotal(
-             roomCategory,
-             allRatePeriods,
-             propertyId,
-             checkInDate,
-             nights,
-             adults || 2,
-             children || 0,
-             childrenWithBed || 0,
-             childrenWithoutBed || 0,
-             mealPlan
-           );
+           let stayCalc;
+           if (Array.isArray(item.metadata.roomAllocations) || hasCompleteAges) {
+             let allocations: RoomAllocation[];
+             try {
+               allocations = Array.isArray(item.metadata.roomAllocations)
+                 ? item.metadata.roomAllocations as RoomAllocation[]
+                 : distributeGuestsAcrossRooms(roomCategoryId, Number(storedTrip.adults || 0), storedChildAges, Number(rooms || 1));
+             } catch (distributionError) {
+               throw new TripDomainError(422, 'INVALID_ROOM_DISTRIBUTION', distributionError instanceof Error ? distributionError.message : 'Room distribution is invalid.');
+             }
+             stayCalc = calculateMixedAllocatedStayTotal(
+               roomCategories.filter(category => category.propertyId === propertyId), allRatePeriods, propertyId, checkInDate, nights, allocations,
+               { adults: Number(storedTrip.adults || 0), children: Number(storedTrip.children || 0), childAges: storedChildAges },
+               mealPlan,
+               item.metadata.packageSupplierRate,
+             );
+           } else {
+             // Compatibility for historical items that already stored explicit supplier
+             // charging buckets. No child age is invented; new items cannot use this path.
+             if (Number(storedTrip.children || 0) > 0 && Number(childrenWithBed || 0) + Number(childrenWithoutBed || 0) !== Number(storedTrip.children || 0)) {
+               throw new TripDomainError(422, 'CHILD_AGES_REQUIRED', 'Child ages are required for accurate hotel costing. Return to the Lead or Trip and add every child age.');
+             }
+             const roomTotal = Math.max(1, Number(rooms || 1));
+             let legacyTotal = 0;
+             for (let roomIndex = 0; roomIndex < roomTotal; roomIndex += 1) {
+               const split = (total: number) => Math.floor(total / roomTotal) + (roomIndex < total % roomTotal ? 1 : 0);
+               const roomStay = calculateStayTotal(
+                 roomCategory, [activeRate!], propertyId, checkInDate, nights,
+                 split(Number(adults || storedTrip.adults || 0)),
+                 split(Number(children || storedTrip.children || 0)),
+                 split(Number(childrenWithBed || 0)), split(Number(childrenWithoutBed || 0)), mealPlan,
+               );
+               if (!roomStay.available || !Number.isFinite(roomStay.totalAmount)) {
+                 throw new TripDomainError(422, 'INVALID_ROOM_DISTRIBUTION', `Room ${roomIndex + 1}: ${roomStay.reason || 'The saved occupancy is invalid.'}`);
+               }
+               legacyTotal += roomStay.totalAmount || 0;
+             }
+             stayCalc = { available: true, totalAmount: legacyTotal } as ReturnType<typeof calculateStayTotal>;
+           }
            if (stayCalc.available && Number.isFinite(stayCalc.totalAmount)) {
-             const itemCost = (stayCalc.totalAmount || 0) * Number(rooms || 1);
+             const itemCost = stayCalc.totalAmount || 0;
              totalTripCost += itemCost;
              itemSupplierCosts[item.id] = itemCost;
            } else {
-             throw new Error(`Stay is unavailable for room category ${roomCategoryId}`);
+             throw new TripDomainError(422, 'INVALID_ROOM_DISTRIBUTION', stayCalc.reason || `Stay is unavailable for room category ${roomCategoryId}`);
            }
         } else {
           throw new Error(`Room category ${roomCategoryId} not found`);
@@ -350,6 +384,9 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
     });
 
   } catch (error: any) {
+    if (error instanceof TripDomainError) {
+      return res.status(error.statusCode).json({ error: error.message, code: error.code, ...(error.details !== undefined ? { details: error.details } : {}) });
+    }
     if (error instanceof ResourceAuthorizationError) {
       return res.status(error.statusCode).json({ error: error.message, code: error.code });
     }

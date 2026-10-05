@@ -72,6 +72,7 @@ const ACCOMMODATION_FIELDS = [
   'id', 'bookingId', 'tripId', 'customerId', 'propertyId', 'propertyName',
   'roomCategoryId', 'roomCategoryName', 'mealPlan', 'checkInDate', 'checkOutDate',
   'nightsCount', 'roomsCount', 'adultsCount', 'childrenCount', 'guestNames',
+  'roomAllocations', 'costSource',
   'specialRequests', 'supplierId', 'supplierContactName', 'supplierContactPhone',
   'confirmationStatus', 'supplierConfirmationCode', 'allocatedRoomNumbers',
   'operationalNotes', 'supplierNotes', 'voucherId', 'voucherStatus', 'schemaVersion',
@@ -130,6 +131,7 @@ const LINE_ITEM_FULL_FIELDS = [
   'ratePeriodId', 'rateContractType', 'frozenSupplierUnitRate', 'units',
   'frozenSupplementsCost', 'frozenTotalSupplierCost', 'taxTreatment', 'taxAmount',
   'rateVerifiedAt',
+  'costSource', 'packageSupplierRate', 'originalContractedTotal', 'nightlyRateBreakdown',
 ] as const;
 
 function projectBooking(booking: Booking, visibility: BookingVisibility): BookingListItem {

@@ -5,12 +5,15 @@ import { APP_CONFIG } from '../../src/config';
 
 const originalDemoMode = APP_CONFIG.DEMO_MODE;
 let tripWriteCount = 0;
-let storedTrip = {
+let storedTrip: any = {
   id: 'trip-123',
   assignedSalesEmployeeId: 'emp-sales-01',
   salesTeamId: 'sales-team-01',
   status: 'DRAFT',
   totalSellingPrice: 50000,
+  adults: 2,
+  children: 0,
+  childAges: [],
 };
 let storedItineraryItems: any[] = [];
 
@@ -86,6 +89,9 @@ describe('POST /api/trips/calculate-costs', () => {
       salesTeamId: 'sales-team-01',
       status: 'DRAFT',
       totalSellingPrice: 50000,
+      adults: 2,
+      children: 0,
+      childAges: [],
     };
     jsonMock = mock((data: any) => data);
     statusMock = mock((code: number) => {
@@ -219,6 +225,37 @@ describe('POST /api/trips/calculate-costs', () => {
     expect(result.data.grossProfit).toBe(38000); // Uses stored totalSellingPrice=50000
     expect(result.data.grossMargin).toBe(76);
     expect(tripWriteCount).toBe(1);
+  });
+
+  it('prices a September-to-October stay night-by-night', async () => {
+    req.body = { tripId: 'trip-123', items: [] };
+    storedItineraryItems = [{
+      id: 'hotel-boundary', type: 'HOTEL', metadata: {
+        propertyId: 'accom-sgr-kareemresidency', roomCategoryId: 'rc-accom-sgr-kareemresidency',
+        rateId: 'rp-accom-sgr-kareemresidency-sep', checkInDate: '2026-09-28', nights: 7, mealPlan: 'MAP',
+        roomAllocations: [{ roomIndex: 1, roomCategoryId: 'rc-accom-sgr-kareemresidency', adults: 2, children: 0, childAges: [] }],
+      },
+    }];
+    const handler = (tripsRouter as any).stack[0].route.stack[0].handle;
+    await handler(req as Request, res as Response, () => {});
+    expect(jsonMock.mock.calls[0][0].data.totalSupplierCost).toBe(26_500);
+  });
+
+  it('uses the stored package override without changing inventory rate data', async () => {
+    req.body = { tripId: 'trip-123', items: [] };
+    storedItineraryItems = [{
+      id: 'hotel-override', type: 'HOTEL', metadata: {
+        propertyId: 'accom-sgr-kareemresidency', roomCategoryId: 'rc-accom-sgr-kareemresidency',
+        rateId: 'rp-accom-sgr-kareemresidency-oct', checkInDate: '2026-10-05', nights: 2, mealPlan: 'MAP',
+        roomAllocations: [{ roomIndex: 1, roomCategoryId: 'rc-accom-sgr-kareemresidency', adults: 2, children: 0, childAges: [] }],
+        packageSupplierRate: { entryMode: 'PER_ROOM_NIGHT', amount: 3_800, taxTreatment: 'NET', enteredByEmployeeId: 'emp-sales-01', enteredAt: '2026-10-01T00:00:00Z' },
+      },
+    }];
+    const master = DEMO_RATE_PERIODS.find(rate => rate.id === 'rp-accom-sgr-kareemresidency-oct')!;
+    const handler = (tripsRouter as any).stack[0].route.stack[0].handle;
+    await handler(req as Request, res as Response, () => {});
+    expect(jsonMock.mock.calls[0][0].data.totalSupplierCost).toBe(7_600);
+    expect(master.baseRate).toBe(4_000);
   });
 
   it('allows a same-team Sales Manager and rejects another-team Sales Manager', async () => {

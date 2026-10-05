@@ -32,6 +32,17 @@ export const LEAD_DROP_REASONS = [
 ] as const;
 export type LeadDropReason = (typeof LEAD_DROP_REASONS)[number];
 
+export const LEAD_CONTACT_OUTCOMES = [
+  'NO_ANSWER',
+  'CALLBACK_REQUESTED',
+  'INTERESTED',
+  'QUOTE_REQUESTED',
+  'NEGOTIATING',
+  'ADVANCE_PROMISED',
+  'NOT_INTERESTED',
+] as const;
+export type LeadContactOutcome = (typeof LEAD_CONTACT_OUTCOMES)[number];
+
 export interface Lead {
   id: string;
   customerId: string;
@@ -90,7 +101,9 @@ export interface Lead {
   leadScore?: number;
   bookingProbability?: number;
   lastContactAt?: string;
-  nextFollowUpAt?: string;
+  lastContactOutcome?: LeadContactOutcome;
+  lastContactByEmployeeId?: string;
+  nextFollowUpAt?: string | null;
   keyInterests?: string[];
   scoreReasoning?: string;
   creationRequestId?: string;
@@ -122,7 +135,7 @@ export interface LeadEvent {
   actorType: 'HUMAN' | 'AI' | 'SYSTEM';
   actorId: string;
   actorName: string;
-  eventType: 'STATUS_CHANGE' | 'NOTE_ADDED' | 'FOLLOWUP_SCHEDULED' | 'AI_ANALYSIS' | 'QUOTE_CREATED' | 'ASSIGNMENT';
+  eventType: 'STATUS_CHANGE' | 'NOTE_ADDED' | 'FOLLOWUP_SCHEDULED' | 'INTERACTION_RECORDED' | 'AI_ANALYSIS' | 'QUOTE_CREATED' | 'ASSIGNMENT';
   description: string;
   timestamp: string;
   metadata?: Record<string, any>;

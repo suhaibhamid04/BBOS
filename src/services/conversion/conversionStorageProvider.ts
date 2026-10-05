@@ -12,6 +12,7 @@ export interface BookingWithServices {
 export interface ConversionTransaction {
   get(collectionName: string, docId: string): Promise<any | null>;
   findByField(collectionName: string, field: string, value: unknown, limit?: number): Promise<any[]>;
+  list(collectionName: string, limit?: number): Promise<any[]>;
   set(collectionName: string, docId: string, data: any): void;
   update(collectionName: string, docId: string, data: any): void;
   delete(collectionName: string, docId: string): void;
@@ -154,6 +155,18 @@ export class InMemoryConversionStorageProvider implements ConversionStorageProvi
             if (matches.length >= limit) break;
           }
           return matches;
+        },
+
+        list: async (collectionName: string, limit = 500) => {
+          await new Promise(r => setTimeout(r, 2));
+          const records: any[] = [];
+          for (const [docId, storedValue] of this.getCollection(collectionName).entries()) {
+            const key = this.getKey(collectionName, docId);
+            readVersions.set(key, this.docVersions.get(key) || 0);
+            records.push(JSON.parse(JSON.stringify(storedValue)));
+            if (records.length >= limit) break;
+          }
+          return records;
         },
 
         set: (collectionName: string, docId: string, data: any) => {
@@ -308,6 +321,10 @@ export class FirestoreConversionStorageProvider implements ConversionStorageProv
         async findByField(collectionName: string, field: string, value: unknown, limit = 2) {
           const query = db.collection(collectionName).where(field, '==', value).limit(limit);
           const snapshot = await firestoreTx.get(query);
+          return snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+        },
+        async list(collectionName: string, limit = 500) {
+          const snapshot = await firestoreTx.get(db.collection(collectionName).limit(limit));
           return snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
         },
         set(collectionName: string, docId: string, data: any) {

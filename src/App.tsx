@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AuthProvider } from './context/AuthContext';
 import { DataProvider } from './context/DataContext';
 import { AppLayout } from './components/layout/AppLayout';
@@ -40,13 +40,48 @@ import { ActivityInventoryView } from './components/inventory/ActivityInventoryV
 import { SupplierPayablesView } from './components/finance/SupplierPayablesView';
 import { LeadDistributionSettingsView } from './components/governance/LeadDistributionSettingsView';
 
+interface BrowserRouteState {
+  activeNav: NavSectionKey;
+  targetId?: string;
+}
+
+function readBrowserRoute(): BrowserRouteState {
+  const params = new URLSearchParams(window.location.search);
+  const view = params.get('view');
+  const targetId = params.get('id') || undefined;
+  if (view === 'lead-detail' && targetId) return { activeNav: 'lead-detail', targetId };
+  if (view === 'sales-workspace') return { activeNav: 'sales-workspace' };
+  return { activeNav: 'dashboard' };
+}
+
+function writeBrowserRoute(section: NavSectionKey, id?: string) {
+  const url = new URL(window.location.href);
+  if (section === 'lead-detail' && id) {
+    url.searchParams.set('view', 'lead-detail');
+    url.searchParams.set('id', id);
+  } else if (section === 'sales-workspace') {
+    url.searchParams.set('view', 'sales-workspace');
+    url.searchParams.delete('id');
+  } else {
+    url.searchParams.delete('view');
+    url.searchParams.delete('id');
+  }
+  window.history.pushState(null, '', `${url.pathname}${url.search}${url.hash}`);
+}
+
 export function AppContent() {
-  const [activeNav, setActiveNav] = useState<NavSectionKey>('dashboard');
-  const [targetId, setTargetId] = useState<string | undefined>();
+  const [route, setRoute] = useState<BrowserRouteState>(() => readBrowserRoute());
+  const { activeNav, targetId } = route;
+
+  useEffect(() => {
+    const handlePopState = () => setRoute(readBrowserRoute());
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   const handleNavigate = (section: NavSectionKey, id?: string) => {
-    setActiveNav(section);
-    setTargetId(id);
+    setRoute({ activeNav: section, targetId: id });
+    writeBrowserRoute(section, id);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 

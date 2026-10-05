@@ -14,6 +14,8 @@ const SUPPLIER_KEYS = new Set([
   'authoritativeSupplierCost', 'quotedSupplierCost', 'authoritativeTotalSupplierCost',
   'quotedTotalSupplierCost', 'supplementCost', 'baseSupplierCost',
   'additionalChargesTotal', 'totalSupplierCost',
+  'packageSupplierRate', 'contractedTotalSupplierCost', 'originalContractedTotal',
+  'nightlyRateBreakdown',
 ]);
 
 const PROFIT_KEYS = new Set([

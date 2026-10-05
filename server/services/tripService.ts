@@ -7,6 +7,12 @@ import {
 import { assertAuthorizedResource, ResourceAuthorizationError } from '../authorization/assertAuthorizedResource.js';
 import { tripResourceContext } from '../authorization/resourceContext.js';
 import type { AuthorizationPrincipal } from '../authorization/policyTypes.js';
+import {
+  calculateMixedAllocatedStayTotal,
+  distributeGuestsAcrossRooms,
+  validateRoomAllocationsForCategories,
+} from '../../src/services/accommodationEngine.js';
+import type { PackageSupplierRate, PackageSupplierRateInput, RoomAllocation, RoomCategory, RatePeriod, TaxTreatment } from '../../src/types/accommodation.js';
 
 type UnknownRecord = Record<string, any>;
 
@@ -39,7 +45,7 @@ const MUTATION_ROLES = new Set(['Founder', 'Admin', 'Sales Manager', 'Sales Exec
 const WRITABLE_FIELDS = new Set([
   'customerId', 'leadId', 'title', 'destination', 'startDate', 'endDate',
   'travelerCount', 'adults', 'children', 'tripType', 'currency', 'budget',
-  'totalSellingPrice',
+  'childAges', 'totalSellingPrice',
 ]);
 const SERVER_CONTROLLED_FIELDS = new Set([
   'id', 'status', 'totalSupplierCost', 'totalCost', 'grossProfit', 'grossMargin',
@@ -61,7 +67,12 @@ const ITINERARY_SERVER_CONTROLLED_FIELDS = new Set([
 const NESTED_PROTECTED_ITINERARY_FIELDS = new Set([
   'supplierCost', 'totalSupplierCost', 'grossProfit', 'grossMargin',
   'assignedSalesEmployeeId', 'salesTeamId', 'status', 'costingStatus',
+  'costSource', 'packageSupplierRate', 'contractedTotalSupplierCost',
+  'nightlyRateBreakdown', 'enteredByEmployeeId', 'enteredAt',
 ]);
+const PACKAGE_RATE_MAX = 100_000_000;
+const PACKAGE_RATE_INPUT_FIELDS = new Set(['entryMode', 'amount', 'taxTreatment', 'supplierQuoteReference', 'overrideReason']);
+const PACKAGE_RATE_TAXES = new Set<TaxTreatment>(['NET', 'INCLUSIVE', 'GST_5', 'GST_18', 'CUSTOM_TAX', 'NEEDS_CONFIRMATION']);
 
 function isRecord(value: unknown): value is UnknownRecord {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -143,49 +154,165 @@ function stayIsWithin(checkInDate: string, nights: number, validFrom: unknown, v
   return dateIsWithin(finalNight.toISOString().slice(0, 10), validFrom, validTo);
 }
 
-async function resolveInventoryItem(tx: ConversionTransaction, input: UnknownRecord): Promise<UnknownRecord> {
+function validatePackageRateProposal(value: unknown): PackageSupplierRateInput | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) throw new TripDomainError(400, 'INVALID_PACKAGE_RATE', 'Package supplier rate must be an object.');
+  const unsupported = Object.keys(value).find(key => !PACKAGE_RATE_INPUT_FIELDS.has(key));
+  if (unsupported) throw new TripDomainError(400, 'SERVER_CONTROLLED_PACKAGE_RATE_FIELD', `${unsupported} is not accepted from the client.`);
+  if (value.entryMode !== 'PER_ROOM_NIGHT' && value.entryMode !== 'TOTAL_STAY') throw new TripDomainError(400, 'INVALID_PACKAGE_RATE_MODE', 'Choose a per-room/night rate or total-stay supplier quote.');
+  if (typeof value.amount !== 'number' || !Number.isFinite(value.amount) || value.amount <= 0 || value.amount > PACKAGE_RATE_MAX) throw new TripDomainError(400, 'INVALID_PACKAGE_RATE_AMOUNT', `Package supplier rate must be greater than zero and no more than ${PACKAGE_RATE_MAX}.`);
+  if (!PACKAGE_RATE_TAXES.has(value.taxTreatment as TaxTreatment)) throw new TripDomainError(400, 'INVALID_PACKAGE_RATE_TAX', 'Package supplier rate tax treatment is invalid.');
+  const optionalText = (key: 'supplierQuoteReference' | 'overrideReason') => {
+    if (value[key] === undefined) return undefined;
+    if (typeof value[key] !== 'string') throw new TripDomainError(400, 'INVALID_PACKAGE_RATE_REFERENCE', `${key} must be text.`);
+    return value[key].trim().slice(0, 500) || undefined;
+  };
+  const supplierQuoteReference = optionalText('supplierQuoteReference');
+  const overrideReason = optionalText('overrideReason');
+  return { entryMode: value.entryMode, amount: value.amount, taxTreatment: value.taxTreatment as TaxTreatment, ...(supplierQuoteReference ? { supplierQuoteReference } : {}), ...(overrideReason ? { overrideReason } : {}) };
+}
+
+function packageRateSignature(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  return JSON.stringify({
+    entryMode: value.entryMode,
+    amount: value.amount,
+    taxTreatment: value.taxTreatment,
+    supplierQuoteReference: value.supplierQuoteReference || null,
+    overrideReason: value.overrideReason || null,
+  });
+}
+
+async function resolveInventoryItem(tx: ConversionTransaction, input: UnknownRecord, trip: Trip, actor: TripMutationActor, now: string): Promise<UnknownRecord> {
   if (!['HOTEL', 'TRANSPORT', 'ACTIVITY'].includes(String(input.type))) return input;
   const metadata = input.metadata;
   if (!isRecord(metadata)) {
     throw new TripDomainError(422, 'INVENTORY_LINK_REQUIRED', `${input.type} itinerary items must reference authoritative inventory.`);
   }
 
-  const rateId = nonEmptyString(metadata.rateId, 'metadata.rateId');
   if (input.type === 'HOTEL') {
     const propertyId = nonEmptyString(metadata.propertyId, 'metadata.propertyId');
     const roomCategoryId = nonEmptyString(metadata.roomCategoryId, 'metadata.roomCategoryId');
     const checkInDate = validateDate(metadata.checkInDate, 'metadata.checkInDate');
     const nights = nonNegativeInteger(metadata.nights, 'metadata.nights');
     const rooms = metadata.rooms === undefined ? 1 : nonNegativeInteger(metadata.rooms, 'metadata.rooms');
+    const packageRateProposal = validatePackageRateProposal(metadata.packageRateRequest);
     if (nights < 1 || rooms < 1) throw new TripDomainError(400, 'INVALID_ITINERARY_FIELD', 'Accommodation nights and rooms must be at least 1.');
-    const [property, room, rate] = await Promise.all([
+    const [property, roomValue, propertyRateValues] = await Promise.all([
       tx.get('accommodation_properties', propertyId),
       tx.get('room_categories', roomCategoryId),
-      tx.get('rate_periods', rateId),
+      tx.findByField('rate_periods', 'propertyId', propertyId, 500),
     ]);
-    if (!property || !room || !rate) throw new TripDomainError(422, 'INVENTORY_REFERENCE_NOT_FOUND', 'Selected accommodation inventory or rate no longer exists.');
+    const room = roomValue as RoomCategory | null;
+    const propertyRates = (propertyRateValues as RatePeriod[]).filter(value => value.status === 'ACTIVE');
+    let rateId = typeof metadata.rateId === 'string' ? metadata.rateId.trim() : '';
+    let rate = rateId ? propertyRates.find(value => value.id === rateId) || null : propertyRates.find(value => value.roomCategoryId === roomCategoryId && value.mealPlan === metadata.mealPlan && dateIsWithin(checkInDate, value.validFrom, value.validTo)) || null;
+    if (!rate && packageRateProposal) {
+      rate = { id: 'PACKAGE', propertyId, roomCategoryId, contractType: 'STANDARD', mealPlan: metadata.mealPlan, validFrom: checkInDate, validTo: null, baseRate: packageRateProposal.amount, currency: 'INR', taxTreatment: packageRateProposal.taxTreatment, confirmationStatus: 'CONFIRMED', supplements: [
+        { id: 'package-eb', ratePeriodId: 'PACKAGE', type: 'EB', name: 'Extra Bed', amount: 0, unit: 'per_person_night', taxTreatment: 'NET' },
+        { id: 'package-cwb', ratePeriodId: 'PACKAGE', type: 'CWB', name: 'Child With Bed', amount: 0, unit: 'per_child_night', taxTreatment: 'NET' },
+      ], createdAt: '', updatedAt: '', status: 'ACTIVE' } as RatePeriod;
+      rateId = rate.id;
+    }
+    if (!property || !room || !rate) throw new TripDomainError(422, packageRateProposal ? 'INVENTORY_REFERENCE_NOT_FOUND' : 'PACKAGE_RATE_REQUIRED', packageRateProposal ? 'Selected accommodation inventory no longer exists.' : 'No contracted rate is available. Enter a package supplier rate to continue.');
     if (property.status !== 'ACTIVE' || !room.active || rate.status !== 'ACTIVE') throw new TripDomainError(409, 'INVENTORY_INACTIVE', 'Only active accommodation inventory may be newly selected.');
-    if (room.propertyId !== propertyId || rate.propertyId !== propertyId || rate.roomCategoryId !== roomCategoryId || rate.mealPlan !== metadata.mealPlan || !stayIsWithin(checkInDate, nights, rate.validFrom, rate.validTo)) {
+    if (room.propertyId !== propertyId || rate.propertyId !== propertyId || rate.roomCategoryId !== roomCategoryId || rate.mealPlan !== metadata.mealPlan || !dateIsWithin(checkInDate, rate.validFrom, rate.validTo)) {
       throw new TripDomainError(422, 'INVENTORY_RATE_MISMATCH', 'The selected accommodation rate does not match the property, room, meal plan, or service date.');
     }
+    const childAges = Array.isArray(trip.childAges) ? trip.childAges.map(Number) : [];
+    if (trip.children > 0 && childAges.length !== trip.children) {
+      throw new TripDomainError(422, 'CHILD_AGES_REQUIRED', 'Child ages are required for accurate hotel costing. Return to the Lead or Trip and add every child age.');
+    }
+    const suppliedAllocations = Array.isArray(metadata.roomAllocations) ? metadata.roomAllocations as RoomAllocation[] : null;
+    let roomAllocations: RoomAllocation[];
+    try {
+      roomAllocations = suppliedAllocations || distributeGuestsAcrossRooms(roomCategoryId, trip.adults, childAges, rooms);
+    } catch (error) {
+      throw new TripDomainError(422, 'INVALID_ROOM_DISTRIBUTION', error instanceof Error ? error.message : 'Room distribution is invalid.');
+    }
+    const canonicalAllocations = roomAllocations.map((allocation, index) => ({
+      ...allocation,
+      rateId: allocation.rateId || propertyRates.find(value => value.roomCategoryId === allocation.roomCategoryId && value.mealPlan === metadata.mealPlan && dateIsWithin(checkInDate, value.validFrom, value.validTo))?.id || (packageRateProposal ? 'PACKAGE' : undefined),
+      roomIndex: allocation.roomIndex || index + 1,
+    }));
+    if (canonicalAllocations[0]?.roomCategoryId !== roomCategoryId || canonicalAllocations[0]?.rateId !== rateId) {
+      throw new TripDomainError(422, 'INVENTORY_RATE_MISMATCH', 'The primary room category and rate must match Room 1.');
+    }
+    if (canonicalAllocations.some(allocation => !allocation.rateId) && !packageRateProposal) {
+      throw new TripDomainError(422, 'INVENTORY_RATE_MISMATCH', 'Every room category must have an authoritative contracted rate.');
+    }
+    if (new Set(canonicalAllocations.map(allocation => allocation.roomCategoryId)).size > 1 && packageRateProposal?.entryMode === 'PER_ROOM_NIGHT') {
+      throw new TripDomainError(422, 'AMBIGUOUS_MIXED_ROOM_PACKAGE_RATE', 'Use a total-stay supplier quote when the stay contains different room categories.');
+    }
+    const categoryIds = [...new Set(canonicalAllocations.map(allocation => allocation.roomCategoryId))];
+    const rateIds = [...new Set(canonicalAllocations.map(allocation => allocation.rateId!))];
+    const [categoryValues, rateValues] = await Promise.all([
+      Promise.all(categoryIds.map(id => tx.get('room_categories', id))),
+      Promise.all(rateIds.map(id => id === 'PACKAGE' ? Promise.resolve(rate) : tx.get('rate_periods', id))),
+    ]);
+    const occupancyRooms = categoryValues.filter((value): value is RoomCategory => Boolean(value));
+    const occupancyRates = rateValues.filter((value): value is RatePeriod => Boolean(value));
+    if (occupancyRooms.length !== categoryIds.length || occupancyRates.length !== rateIds.length) throw new TripDomainError(422, 'INVENTORY_REFERENCE_NOT_FOUND', 'A selected room category or rate no longer exists.');
+    for (const allocation of canonicalAllocations) {
+      const allocationRoom = occupancyRooms.find(value => value.id === allocation.roomCategoryId)!;
+      const allocationRate = occupancyRates.find(value => value.id === allocation.rateId)!;
+      if (allocationRoom.propertyId !== propertyId || !allocationRoom.active || allocationRate.status !== 'ACTIVE' || allocationRate.propertyId !== propertyId || (allocationRate.id !== 'PACKAGE' && allocationRate.roomCategoryId !== allocationRoom.id) || allocationRate.mealPlan !== metadata.mealPlan || !dateIsWithin(checkInDate, allocationRate.validFrom, allocationRate.validTo)) {
+        throw new TripDomainError(422, 'INVENTORY_RATE_MISMATCH', `Room ${allocation.roomIndex} does not match an active room category and contracted rate for this stay.`);
+      }
+    }
+    const occupancy = validateRoomAllocationsForCategories(canonicalAllocations, occupancyRooms, {
+      adults: trip.adults,
+      children: trip.children,
+      childAges,
+    }, new Map(occupancyRooms.map(category => [category.id, occupancyRates.find(value => value.id === canonicalAllocations.find(allocation => allocation.roomCategoryId === category.id)?.rateId)?.supplements || []])));
+    if (occupancy.valid === false) throw new TripDomainError(422, 'INVALID_ROOM_DISTRIBUTION', occupancy.reason);
+    const calculation = calculateMixedAllocatedStayTotal(
+      occupancyRooms,
+      propertyRates,
+      propertyId,
+      checkInDate,
+      nights,
+      canonicalAllocations,
+      { adults: trip.adults, children: trip.children, childAges },
+      metadata.mealPlan,
+      packageRateProposal,
+    );
+    if (!calculation.available) throw new TripDomainError(422, calculation.costSource === 'PENDING' ? 'PACKAGE_RATE_REQUIRED' : 'INVALID_ROOM_DISTRIBUTION', calculation.reason || 'Accommodation costing is unavailable.');
+    const packageSupplierRate: PackageSupplierRate | undefined = packageRateProposal ? {
+      ...packageRateProposal,
+      enteredByEmployeeId: actor.employeeId,
+      enteredAt: now,
+      ...(calculation.contractedTotalSupplierCost !== undefined ? { originalContractedTotal: calculation.contractedTotalSupplierCost } : {}),
+    } : undefined;
     const supplier = property.supplierId ? await tx.get('suppliers', property.supplierId) : null;
     const checkOut = new Date(`${checkInDate}T00:00:00Z`); checkOut.setUTCDate(checkOut.getUTCDate() + nights);
+    const { packageRateRequest: _packageRateRequest, ...safeMetadata } = metadata;
     return {
       ...input,
       referenceId: propertyId,
       inventoryId: propertyId,
-      title: `${property.name} — ${room.name} — ${rate.mealPlan}`,
+      title: `${property.name} — ${[...new Set(occupancyRooms.map(value => value.name))].join(' + ')} — ${rate.mealPlan}`,
       description: `${nights} night${nights === 1 ? '' : 's'} · ${rooms} room${rooms === 1 ? '' : 's'}`,
       metadata: {
-        ...metadata, inventoryType: 'ACCOMMODATION', propertyId, propertyName: property.name,
-        roomCategoryId, roomCategoryName: room.name, rateId, supplierId: property.supplierId,
+        ...safeMetadata, inventoryType: 'ACCOMMODATION', propertyId, propertyName: property.name,
+        roomCategoryId, roomCategoryName: room.name, ...(calculation.ratePeriodId ? { rateId: calculation.ratePeriodId } : {}), supplierId: property.supplierId,
         supplierName: supplier?.name, mealPlan: rate.mealPlan, checkInDate,
-        checkOutDate: checkOut.toISOString().slice(0, 10), nights, rooms,
+        checkOutDate: checkOut.toISOString().slice(0, 10), nights, rooms: roomAllocations.length,
+        adults: trip.adults, children: trip.children,
+        childrenWithBed: occupancy.childTreatments.filter(item => item.category === 'CHILD_SUPPLEMENT').length,
+        childrenWithoutBed: occupancy.childTreatments.filter(item => item.category === 'COMPLIMENTARY_NO_BED').length,
+        roomAllocations: calculation.roomAllocations || canonicalAllocations,
+        childTreatments: occupancy.childTreatments,
+        costSource: calculation.costSource,
+        ...(packageSupplierRate ? { packageSupplierRate } : {}),
+        ...(calculation.contractedTotalSupplierCost !== undefined ? { contractedTotalSupplierCost: calculation.contractedTotalSupplierCost } : {}),
+        ...(calculation.nightlyRateBreakdown ? { nightlyRateBreakdown: calculation.nightlyRateBreakdown } : {}),
       },
     };
   }
 
   if (input.type === 'TRANSPORT') {
+    const rateId = nonEmptyString(metadata.rateId, 'metadata.rateId');
     const vehicleCategoryId = nonEmptyString(metadata.vehicleCategoryId, 'metadata.vehicleCategoryId');
     const startDate = validateDate(metadata.startDate, 'metadata.startDate');
     const serviceType = nonEmptyString(metadata.serviceType, 'metadata.serviceType');
@@ -213,6 +340,7 @@ async function resolveInventoryItem(tx: ConversionTransaction, input: UnknownRec
   }
 
   const activityId = nonEmptyString(metadata.activityId, 'metadata.activityId');
+  const rateId = nonEmptyString(metadata.rateId, 'metadata.rateId');
   const date = validateDate(metadata.date, 'metadata.date');
   const [activity, rate] = await Promise.all([
     tx.get('activity_masters', activityId),
@@ -247,6 +375,12 @@ function validateTripFields(value: UnknownRecord): UnknownRecord {
   if (value.travelerCount !== undefined && nonNegativeInteger(value.travelerCount, 'travelerCount') !== travelerCount) {
     throw new TripDomainError(400, 'INVALID_TRIP_FIELD', 'travelerCount must equal adults plus children.');
   }
+  const rawChildAges = value.childAges === undefined && children === 0 ? [] : value.childAges;
+  if (!Array.isArray(rawChildAges) || rawChildAges.length !== children) {
+    throw new TripDomainError(400, 'INVALID_TRIP_FIELD', 'childAges must contain one age for every child.');
+  }
+  const childAges = rawChildAges.map((age, index) => nonNegativeInteger(age, `childAges[${index}]`));
+  if (childAges.some(age => age > 17)) throw new TripDomainError(400, 'INVALID_TRIP_FIELD', 'Child ages must be between 0 and 17.');
 
   const startDate = validateDate(value.startDate, 'startDate');
   const endDate = validateDate(value.endDate, 'endDate');
@@ -271,6 +405,7 @@ function validateTripFields(value: UnknownRecord): UnknownRecord {
     travelerCount,
     adults,
     children,
+    childAges,
     tripType: nonEmptyString(value.tripType, 'tripType'),
     currency,
     ...(budget !== undefined ? { budget } : {}),
@@ -803,7 +938,7 @@ export class TripService {
       if (!storedDay) throw new TripDomainError(404, 'ITINERARY_DAY_NOT_FOUND', 'Itinerary day not found.');
       const trip = await this.loadAuthorizedCommercialTrip(tx, storedDay.tripId, actor);
       const now = new Date().toISOString();
-      const resolvedInput = await resolveInventoryItem(tx, input);
+      const resolvedInput = await resolveInventoryItem(tx, input, trip as Trip, actor, now);
       const item = withoutUndefined({
         ...resolvedInput,
         id: `item-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -816,6 +951,14 @@ export class TripService {
       tx.update('trips', trip.id, updatedTrip);
       const audit = auditEvent('ITINERARY_ITEM_CREATED', 'ITINERARY_ITEM', item.id, actor, null, item as UnknownRecord, now);
       tx.set('audit_logs', audit.id, audit);
+      const packageRate = isRecord(item.metadata) && isRecord(item.metadata.packageSupplierRate) ? item.metadata.packageSupplierRate : null;
+      if (packageRate) {
+        const rateAudit = auditEvent('PACKAGE_SUPPLIER_RATE_ENTERED', 'ITINERARY_ITEM', item.id, actor, null, {
+          tripId: storedDay.tripId, propertyId: item.metadata?.propertyId, roomCategoryId: item.metadata?.roomCategoryId,
+          packageSupplierRate: packageRate, contractedTotalSupplierCost: item.metadata?.contractedTotalSupplierCost,
+        }, now);
+        tx.set('audit_logs', rateAudit.id, rateAudit);
+      }
       return { day, item, trip: updatedTrip as Trip };
     });
   }
@@ -829,13 +972,29 @@ export class TripService {
       const existing = (storedDay.items || []).find(candidate => candidate.id === itemId);
       if (!existing) throw new TripDomainError(404, 'ITINERARY_ITEM_NOT_FOUND', 'Itinerary item not found.');
       const trip = await this.loadAuthorizedCommercialTrip(tx, storedDay.tripId, actor);
-      const resolvedInput = await resolveInventoryItem(tx, input);
+      const now = new Date().toISOString();
+      const resolvedInput = await resolveInventoryItem(tx, input, trip as Trip, actor, now);
+      if (isRecord(existing.metadata) && isRecord(resolvedInput.metadata)) {
+        const previousPackageRate = existing.metadata.packageSupplierRate;
+        if (packageRateSignature(previousPackageRate) === packageRateSignature(resolvedInput.metadata.packageSupplierRate)) {
+          resolvedInput.metadata.packageSupplierRate = previousPackageRate;
+        }
+      }
       const item = withoutUndefined({ ...resolvedInput, id: existing.id, dayId, tripId: storedDay.tripId }) as ItineraryItem;
       const day = { ...storedDay, items: (storedDay.items || []).map(candidate => candidate.id === itemId ? item : candidate) } as ItineraryDay;
-      const now = new Date().toISOString(); const updatedTrip = this.markCostingPending(trip, actor, now);
+      const updatedTrip = this.markCostingPending(trip, actor, now);
       tx.update('itinerary_days', dayId, day); tx.update('trips', trip.id, updatedTrip);
       const audit = auditEvent('ITINERARY_ITEM_UPDATED', 'ITINERARY_ITEM', itemId, actor, existing as UnknownRecord, item as UnknownRecord, now);
       tx.set('audit_logs', audit.id, audit);
+      const beforeRate = isRecord(existing.metadata) && isRecord(existing.metadata.packageSupplierRate) ? existing.metadata.packageSupplierRate : null;
+      const afterRate = isRecord(item.metadata) && isRecord(item.metadata.packageSupplierRate) ? item.metadata.packageSupplierRate : null;
+      if (JSON.stringify(beforeRate) !== JSON.stringify(afterRate)) {
+        const rateAudit = auditEvent(afterRate && !beforeRate ? 'PACKAGE_SUPPLIER_RATE_ENTERED' : 'PACKAGE_SUPPLIER_RATE_CHANGED', 'ITINERARY_ITEM', itemId, actor, beforeRate ? { packageSupplierRate: beforeRate } : null, {
+          tripId: storedDay.tripId, propertyId: item.metadata?.propertyId, roomCategoryId: item.metadata?.roomCategoryId,
+          ...(afterRate ? { packageSupplierRate: afterRate } : {}), contractedTotalSupplierCost: item.metadata?.contractedTotalSupplierCost,
+        }, now);
+        tx.set('audit_logs', rateAudit.id, rateAudit);
+      }
       return { day, item, trip: updatedTrip as Trip };
     });
   }
