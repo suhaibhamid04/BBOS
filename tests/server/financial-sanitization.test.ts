@@ -250,6 +250,7 @@ describe('HTTP Integration Tests for calculate-rate and calculate-costs', () => 
   };
 
   const transportPayload = {
+    tripId: 'trip-demo-01',
     vehicleCategoryId: 'vc_innova_crysta',
     startDate: '2026-10-01',
     days: 2,
@@ -305,34 +306,30 @@ describe('HTTP Integration Tests for calculate-rate and calculate-costs', () => 
     expect(res.data.totalSupplierCost).toBeDefined();
   });
 
-  it('Sales Executive: Transport calculate-rate hides supplier costs', async () => {
+  it('Sales Executive OWN: Transport calculate-rate shows scoped supplier costs', async () => {
     const res = await fetchAsRole('/api/transport/calculate-rate', transportPayload, 'Sales Executive');
     expect(res.success).toBe(true);
-    expect(res.data.baseSupplierCost).toBeUndefined();
-    expect(res.data.supplementCost).toBeUndefined();
-    expect(res.data.supplierCost).toBeUndefined();
-  });
-
-  it('Operations: Transport calculate-rate hides supplier costs', async () => {
-    const res = await fetchAsRole('/api/transport/calculate-rate', transportPayload, 'Operations');
-    expect(res.success).toBe(true);
-    expect(res.data.baseSupplierCost).toBeUndefined();
-    expect(res.data.supplierCost).toBeUndefined();
-  });
-
-  it('Reservations: Transport calculate-rate shows supplier costs', async () => {
-    const res = await fetchAsRole('/api/transport/calculate-rate', transportPayload, 'Reservations');
-    expect(res.success).toBe(true);
     expect(res.data.baseSupplierCost).toBeDefined();
+    expect(res.data.supplementCost).toBeDefined();
     expect(res.data.supplierCost).toBeDefined();
   });
 
-  it('Sales Manager: Transport calculate-rate hides supplier costs', async () => {
+  it('Operations unassigned: Transport calculate-rate is denied', async () => {
+    const res = await fetchAsRole('/api/transport/calculate-rate', transportPayload, 'Operations');
+    expect(res.code).toBe('RESOURCE_ACCESS_DENIED');
+  });
+
+  it('Reservations assigned to a draft Trip: Transport calculate-rate remains workflow-denied', async () => {
+    const res = await fetchAsRole('/api/transport/calculate-rate', transportPayload, 'Reservations');
+    expect(res.code).toBe('RESOURCE_ACCESS_DENIED');
+  });
+
+  it('Sales Manager TEAM: Transport calculate-rate shows scoped supplier costs', async () => {
     const res = await fetchAsRole('/api/transport/calculate-rate', transportPayload, 'Sales Manager');
     expect(res.success).toBe(true);
-    expect(res.data.supplierCost).toBeUndefined();
-    expect(res.data.baseSupplierCost).toBeUndefined();
-    expect(res.data.supplementCost).toBeUndefined();
+    expect(res.data.supplierCost).toBeDefined();
+    expect(res.data.baseSupplierCost).toBeDefined();
+    expect(res.data.supplementCost).toBeDefined();
   });
 
   it('Sales Executive OWN: Trips calculate-costs returns full authorized financials', async () => {

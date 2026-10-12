@@ -52,6 +52,16 @@ export interface ApprovalInboxItem {
     difference?: number;
     reason?: string;
     changeType?: string;
+    tripId?: string;
+    salespersonName?: string;
+    supplierCost?: number;
+    sellingPrice?: number;
+    profit?: number;
+    marginPercent?: number;
+    thresholdPercent?: number;
+    salesNote?: string;
+    decidedByName?: string;
+    decisionNote?: string;
   };
 }
 
@@ -73,4 +83,5 @@ export interface ApprovalInboxDecisionInput {
   decision: 'APPROVED' | 'REJECTED';
   expectedUpdatedAt: string;
   rejectionReason?: string;
+  decisionNote?: string;
 }

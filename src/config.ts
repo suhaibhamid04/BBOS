@@ -9,7 +9,13 @@
  */
 const serverDemoMode = typeof process !== 'undefined' ? process.env.BBOS_DEMO_MODE : undefined;
 const clientDemoMode = import.meta.env.VITE_BBOS_DEMO_MODE;
+const serverLowMarginThreshold = typeof process !== 'undefined' ? process.env.BBOS_LOW_MARGIN_THRESHOLD_PERCENT : undefined;
+const clientLowMarginThreshold = import.meta.env.VITE_BBOS_LOW_MARGIN_THRESHOLD_PERCENT;
+const configuredLowMarginThreshold = serverLowMarginThreshold ?? clientLowMarginThreshold;
 
 export const APP_CONFIG = {
   DEMO_MODE: (serverDemoMode ?? clientDemoMode) === 'true',
+  LOW_MARGIN_THRESHOLD_PERCENT: configuredLowMarginThreshold === undefined || configuredLowMarginThreshold === ''
+    ? undefined
+    : Number(configuredLowMarginThreshold),
 };

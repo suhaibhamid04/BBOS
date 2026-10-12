@@ -76,7 +76,7 @@ approvalsRouter.get(
 
 approvalsRouter.patch(
   '/:itemId/decision',
-  requireRole(['Founder', 'Admin', 'Accounts']),
+  requireRole(['Founder', 'Admin', 'Accounts', 'Sales Manager']),
   async (req: Request, res: Response) => {
     try {
       const data = await approvalInboxService.decide(req.params.itemId, req.body, actorFromRequest(req));

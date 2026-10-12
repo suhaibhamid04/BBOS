@@ -44,7 +44,7 @@ test('Sales builds, reloads, costs, and replaces a hotel using authoritative inv
   await expect(page.getByTestId('confirm-trip-activity')).toBeEnabled();
   await page.getByTestId('confirm-trip-activity').click();
   await expect(page.locator('p').filter({ hasText: /^Gulmarg Gondola Phase 1 —/ })).toBeVisible();
-  await expect(page.getByTestId('trip-costing-status')).toHaveText('PENDING');
+  await expect(page.getByTestId('trip-costing-status')).toHaveText('Needs update');
 
   await page.reload();
   await openDemoTrip(page);
@@ -53,7 +53,7 @@ test('Sales builds, reloads, costs, and replaces a hotel using authoritative inv
   await expect(page.locator('p').filter({ hasText: /^Gulmarg Gondola Phase 1 —/ })).toBeVisible();
 
   await page.getByTestId('calculate-trip-costs').click();
-  await expect(page.getByTestId('trip-costing-status')).toHaveText('CALCULATED');
+  await expect(page.getByTestId('trip-costing-status')).toHaveText('Costs current');
   await expect(page.getByText(/Authoritative inventory costing completed/)).toBeVisible();
   await expect.poll(() => page.evaluate(() => {
     const trips = JSON.parse(localStorage.getItem('bb_trips') || '[]') as Array<{ id: string; totalSupplierCost?: number }>;
@@ -72,7 +72,7 @@ test('Sales builds, reloads, costs, and replaces a hotel using authoritative inv
   await expect(page.getByTestId('trip-hotel-rate')).toHaveValue(cpRateId);
   await page.getByTestId('trip-hotel-rooms').fill('2');
   await page.getByTestId('confirm-trip-hotel').click();
-  await expect(page.getByTestId('trip-costing-status')).toHaveText('PENDING');
+  await expect(page.getByTestId('trip-costing-status')).toHaveText('Needs update');
   await expect(page.locator('p').filter({ hasText: /^Kareem Residency/ })).toContainText('Premium Deluxe');
   await expect(page.locator('p').filter({ hasText: /^Regal Palace —/ })).toHaveCount(0);
 
@@ -81,5 +81,5 @@ test('Sales builds, reloads, costs, and replaces a hotel using authoritative inv
   await expect(page.locator('p').filter({ hasText: /^Kareem Residency/ })).toContainText('Premium Deluxe');
   await expect(page.locator('[data-testid^="edit-trip-item-"]')).toHaveCount(3);
   await page.getByTestId('calculate-trip-costs').click();
-  await expect(page.getByTestId('trip-costing-status')).toHaveText('CALCULATED');
+  await expect(page.getByTestId('trip-costing-status')).toHaveText('Costs current');
 });

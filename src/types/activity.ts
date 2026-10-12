@@ -52,6 +52,7 @@ export interface ActivityMaster {
 
 export type ActivityPricingModel =
   | 'PER_PERSON'
+  | 'PER_CHILD'
   | 'PER_ADULT_CHILD'
   | 'PER_COUPLE'
   | 'PER_GROUP'
@@ -60,8 +61,12 @@ export type ActivityPricingModel =
   | 'PER_TICKET'
   | 'PER_HOUR'
   | 'PER_DAY'
+  | 'PER_UNIT'
+  | 'FLAT_TOTAL'
   | 'FIXED'
   | 'CUSTOM';
+
+export type ActivityInclusionStatus = 'INCLUDED' | 'OPTIONAL' | 'NOT_INCLUDED';
 
 export interface ActivityRatePeriod {
   id: string;

@@ -27,6 +27,7 @@ const QUOTE_ROOT_FIELDS = [
   'exclusions', 'termsAndConditions', 'salesEmployeeId', 'salesEmployeeName',
   'salesTeamId', 'createdByEmployeeId', 'updatedByEmployeeId', 'version', 'isDemo',
   'convertedBookingId', 'requiresLowMarginApproval',
+  'supplierCostBreakdown', 'pricingMode', 'pricingInput', 'approval',
   'sharedAt', 'sharedByEmployeeId', 'shareChannel',
 ] as const;
 
@@ -43,18 +44,21 @@ const TRANSPORT_FIELDS = [
   'id', 'sourceTripItemId', 'transportId', 'vehicleCategoryId', 'transportRouteId', 'ratePeriodId',
   'vehicleType', 'route', 'serviceDate', 'days', 'passengerCount', 'pickupLocation',
   'dropoffLocation', 'rate', 'quotedRate', 'supplierCost', 'isFoc', 'focReason',
-  'specialRequests',
+  'specialRequests', 'vehicleCount', 'chargeableDays', 'serviceDays', 'costSource',
+  'packageSupplierRate', 'originalContractedTotal',
 ] as const;
 
 const ACTIVITY_FIELDS = [
   'id', 'sourceTripItemId', 'activityId', 'activityMasterId', 'activityRatePeriodId', 'name',
   'activityName', 'destinationId', 'destinationName', 'serviceDate', 'date', 'pax',
   'rate', 'quotedRate', 'supplierCost', 'isFoc', 'focReason', 'specialRequests',
+  'pricingModel', 'inclusionStatus', 'costSource', 'packageSupplierRate', 'originalContractedTotal',
 ] as const;
 
 const VERSION_FIELDS = [
   'version', 'updatedAt', 'updatedBy', 'totalAmount', 'discountAmount', 'finalAmount',
   'totalSupplierCost', 'grossProfit', 'grossMargin', 'status', 'notes', 'inclusions',
+  'supplierCostBreakdown', 'pricingMode', 'pricingInput',
   'exclusions', 'termsAndConditions', 'hotels', 'transports', 'activities',
   'backupAccommodations',
 ] as const;
@@ -95,9 +99,19 @@ export function buildQuoteDto(
     });
   }
   if (quote.supplierCostSource) {
-    dto.supplierCostSource = pick(asRecord(quote.supplierCostSource), ['type', 'sourceId', 'asOf']);
+    dto.supplierCostSource = pick(asRecord(quote.supplierCostSource), ['type', 'sourceId', 'asOf', 'costingRevision']);
   }
-  if (quote.approval) dto.approval = pick(asRecord(quote.approval), ['required', 'state']);
+  if (quote.approval) {
+    const approval = asRecord(quote.approval);
+    dto.approval = pick(approval, ['required', 'state', 'thresholdPercent', 'assessedAt']);
+    if (approval.currentDecision) {
+      (dto.approval as UnknownRecord).currentDecision = pick(asRecord(approval.currentDecision), [
+        'decision', 'quoteVersion', 'costingRevision', 'totalSupplierCost', 'totalSellingPrice',
+        'grossProfit', 'grossMargin', 'thresholdPercent', 'reviewerEmployeeId', 'reviewerName',
+        'decidedAt', 'note',
+      ]);
+    }
+  }
 
   return dto;
 }
@@ -122,8 +136,10 @@ const SERVICE_FIELDS = [
   'nightsCount', 'roomsCount', 'adultsCount', 'childrenCount', 'guestNames',
   'specialRequests', 'supplierId', 'vehicleCategoryId', 'vehicleCategoryName', 'routeId',
   'routeName', 'serviceDate', 'endDate', 'daysCount', 'pickupLocation', 'dropoffLocation',
-  'passengerCount', 'activityMasterId', 'activityName', 'destinationId',
+  'passengerCount', 'vehicleCount', 'chargeableDays', 'serviceDays',
+  'activityMasterId', 'activityName', 'destinationId',
   'destinationName', 'participantCount', 'confirmationStatus', 'voucherStatus',
+  'pricingModel', 'inclusionStatus',
   'schemaVersion', 'createdAt', 'updatedAt', 'isDemo',
 ] as const;
 

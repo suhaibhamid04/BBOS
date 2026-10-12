@@ -34,8 +34,14 @@ import { calculateTransportCost } from '../../src/services/transportEngine.js';
 import { DEMO_ACTIVITY_RATE_PERIODS } from '../../src/services/activityDemoData.js';
 import { calculateActivityCost } from '../../src/services/activityEngine.js';
 
-import { ItineraryDay, ItineraryItem } from '../../src/types/index.js';
+import { ItineraryDay, ItineraryItem, type PackageSupplierCostCategory } from '../../src/types/index.js';
 import { TripDomainError, TripService } from '../services/tripService.js';
+import {
+  assessLowMarginPolicy,
+  buildPackageSupplierCostBreakdown,
+  calculatePackageEconomics,
+  type PackageCostEntry,
+} from '../../src/utils/packageCommercials.js';
 
 export const tripsRouter = Router();
 const tripService = new TripService();
@@ -69,6 +75,30 @@ function sendTripMutationError(res: Response, error: unknown, operation: string)
   return res.status(500).json({ error: `Failed to ${operation}` });
 }
 
+function packageTransportCost(metadata: Record<string, any>): number | undefined {
+  const rate = metadata.packageSupplierRate;
+  if (!rate || typeof rate.amount !== 'number' || !Number.isFinite(rate.amount) || rate.amount < 0) return undefined;
+  if (rate.entryMode === 'TOTAL_SERVICE') return rate.amount;
+  if (rate.entryMode === 'PER_VEHICLE_DAY') {
+    return rate.amount * Math.max(1, Number(metadata.vehicleCount || 1)) * Math.max(1, Number(metadata.chargeableDays || metadata.vehicleDays || 1));
+  }
+  return undefined;
+}
+
+function packageActivityCost(metadata: Record<string, any>): number | undefined {
+  const rate = metadata.packageSupplierRate;
+  if (!rate || typeof rate.amount !== 'number' || !Number.isFinite(rate.amount) || rate.amount < 0) return undefined;
+  switch (rate.entryMode) {
+    case 'PER_PERSON': return rate.amount * Math.max(0, Number(metadata.adults || 0)) + Number(rate.childAmount ?? rate.amount) * Math.max(0, Number(metadata.children || 0));
+    case 'PER_CHILD': return rate.amount * Math.max(0, Number(metadata.children || 0));
+    case 'PER_GROUP': return rate.amount * Math.max(1, Number(metadata.groups || 1));
+    case 'PER_UNIT': return rate.amount * Math.max(1, Number(metadata.units || metadata.tickets || 1));
+    case 'FLAT_TOTAL':
+    case 'TOTAL_SERVICE': return rate.amount;
+    default: return undefined;
+  }
+}
+
 tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
   try {
     const { tripId, items: clientItems } = req.body;
@@ -90,6 +120,7 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
     if (!storedTrip) {
       return res.status(404).json({ error: 'Trip not found', code: 'TRIP_NOT_FOUND' });
     }
+    const calculationRevision = Number(storedTrip.costingRevision || 0);
 
     // P0 boundary: stored ownership/team/state is authoritative. No inventory
     // calculation or Admin-SDK mutation occurs before this decision succeeds.
@@ -129,6 +160,12 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
 
     let totalTripCost = 0;
     const itemSupplierCosts: Record<string, number> = {};
+    const costEntries: PackageCostEntry[] = [];
+    const recordCost = (item: ItineraryItem, amount: number, category: PackageSupplierCostCategory) => {
+      totalTripCost += amount;
+      itemSupplierCosts[item.id] = amount;
+      costEntries.push({ category, label: item.title || 'Package service', amount });
+    };
 
     // We process each item, calculate its true cost independently of what the client sends
     for (const item of items as ItineraryItem[]) {
@@ -136,7 +173,7 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
         const { propertyId, roomCategoryId, rateId, checkInDate, nights, rooms = 1, adults, children, childrenWithBed, childrenWithoutBed, mealPlan } = item.metadata;
 
         if (!propertyId || !roomCategoryId || !checkInDate || !nights) {
-          if (Number.isFinite(item.supplierCost) && Number(item.supplierCost) >= 0) { totalTripCost += Number(item.supplierCost); itemSupplierCosts[item.id] = Number(item.supplierCost); continue; }
+          if (Number.isFinite(item.supplierCost) && Number(item.supplierCost) >= 0) { recordCost(item, Number(item.supplierCost), 'ACCOMMODATION'); continue; }
           throw new Error('Accommodation item is missing authoritative inventory linkage.');
         }
 
@@ -222,8 +259,7 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
            }
            if (stayCalc.available && Number.isFinite(stayCalc.totalAmount)) {
              const itemCost = stayCalc.totalAmount || 0;
-             totalTripCost += itemCost;
-             itemSupplierCosts[item.id] = itemCost;
+             recordCost(item, itemCost, 'ACCOMMODATION');
            } else {
              throw new TripDomainError(422, 'INVALID_ROOM_DISTRIBUTION', stayCalc.reason || `Stay is unavailable for room category ${roomCategoryId}`);
            }
@@ -232,10 +268,10 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
         }
       } else if (item.type === 'TRANSPORT' && item.metadata) {
         // Phase 2B-4: Calculate Transport Cost
-        const { vehicleCategoryId, rateId, startDate, vehicleDays, nightHalts, serviceType, occurrences, distanceKm, hours } = item.metadata;
+        const { vehicleCategoryId, rateId, startDate, vehicleDays, vehicleCount, chargeableDays, nightHalts, serviceType, occurrences, distanceKm, hours } = item.metadata;
 
         if (!vehicleCategoryId || !startDate || !vehicleDays || !serviceType) {
-          if (Number.isFinite(item.supplierCost) && Number(item.supplierCost) >= 0) { totalTripCost += Number(item.supplierCost); itemSupplierCosts[item.id] = Number(item.supplierCost); continue; }
+          if (Number.isFinite(item.supplierCost) && Number(item.supplierCost) >= 0) { recordCost(item, Number(item.supplierCost), 'TRANSPORT'); continue; }
           throw new Error('Transport item is missing authoritative inventory linkage.');
         }
 
@@ -266,35 +302,38 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
           }
         }
 
-        if (!activeRate) {
+        const packageCost = packageTransportCost(item.metadata);
+        if (!activeRate && packageCost === undefined) {
           throw new Error(`Missing active transport rate for category ${vehicleCategoryId} on ${startDate}`);
         }
 
-        const transportCalc = calculateTransportCost({
+        const transportCalc = activeRate ? calculateTransportCost({
           ratePeriod: activeRate,
           supplements: transportSupplements,
           serviceParams: {
             vehicleDays,
+            vehicleCount: vehicleCount || 1,
+            chargeableDays: chargeableDays || vehicleDays,
             nightHalts: nightHalts || 0,
             occurrences: occurrences || 1,
             distanceKm: distanceKm || 0,
             hours: hours || 0,
           }
-        });
+        }) : null;
 
-        if (transportCalc.available && Number.isFinite(transportCalc.totalAmount)) {
-           totalTripCost += transportCalc.totalAmount;
-           itemSupplierCosts[item.id] = transportCalc.totalAmount;
+        const transportTotal = packageCost ?? transportCalc?.totalAmount;
+        if ((packageCost !== undefined || transportCalc?.available) && Number.isFinite(transportTotal)) {
+           recordCost(item, Number(transportTotal), 'TRANSPORT');
         } else {
            throw new Error(`Transport is unavailable for category ${vehicleCategoryId}`);
         }
 
       } else if (item.type === 'ACTIVITY' && item.metadata) {
          // Phase 2B-4: Calculate Activity Cost
-         const { activityId, rateId, date, adults, children, infants, vehicles, groups, tickets, hours, days, sessions } = item.metadata;
+         const { activityId, rateId, date, adults, children, infants, vehicles, groups, tickets, hours, days, sessions, units, inclusionStatus } = item.metadata;
 
          if (!activityId || !date) {
-           if (Number.isFinite(item.supplierCost) && Number(item.supplierCost) >= 0) { totalTripCost += Number(item.supplierCost); itemSupplierCosts[item.id] = Number(item.supplierCost); continue; }
+           if (Number.isFinite(item.supplierCost) && Number(item.supplierCost) >= 0) { recordCost(item, Number(item.supplierCost), 'ACTIVITIES'); continue; }
            throw new Error('Activity item is missing authoritative inventory linkage.');
          }
 
@@ -320,61 +359,132 @@ tripsRouter.post('/calculate-costs', async (req: Request, res: Response) => {
            }
          }
 
-         if (!activeRate) {
+         const packageCost = packageActivityCost(item.metadata);
+         if (!activeRate && packageCost === undefined) {
            throw new Error(`Missing active activity rate for ${activityId} on ${date}`);
          }
 
-         const activityCalc = calculateActivityCost({
+         const activityCalc = activeRate ? calculateActivityCost({
            ratePeriod: activeRate,
-           params: { adults, children, infants, vehicles, groups, tickets, hours, days, sessions }
-         });
+           params: { adults, children, infants, vehicles, groups, tickets, hours, days, sessions, units }
+         }) : null;
 
-         if (activityCalc.available && Number.isFinite(activityCalc.totalAmount)) {
-           totalTripCost += activityCalc.totalAmount;
-           itemSupplierCosts[item.id] = activityCalc.totalAmount;
+         const includedTotal = inclusionStatus === 'OPTIONAL' || inclusionStatus === 'NOT_INCLUDED'
+           ? 0
+           : (packageCost ?? activityCalc?.totalAmount);
+         if ((packageCost !== undefined || activityCalc?.available) && Number.isFinite(includedTotal)) {
+           recordCost(item, Number(includedTotal), 'ACTIVITIES');
          } else {
            throw new Error(`Activity is unavailable for ${activityId}`);
          }
+      } else {
+        const metadata = item.metadata as Record<string, any> | undefined;
+        const inclusionStatus = metadata?.inclusionStatus;
+        const isIncluded = inclusionStatus !== 'OPTIONAL' && inclusionStatus !== 'NOT_INCLUDED';
+        const hasServerCostSource = typeof metadata?.costSource === 'string' && metadata.costSource !== 'PENDING';
+        if (isIncluded && hasServerCostSource && Number.isFinite(item.supplierCost) && Number(item.supplierCost) >= 0) {
+          recordCost(item, Number(item.supplierCost), 'OTHER');
+        }
       }
     }
 
-    // Calculate profit/margin
-    let grossProfit: number | null = null;
-    let grossMargin: number | null = null;
-
-    const authoritativeSellingPrice = storedTrip.totalSellingPrice;
-    if (typeof authoritativeSellingPrice === 'number' && authoritativeSellingPrice > 0) {
-      grossProfit = authoritativeSellingPrice - totalTripCost;
-      grossMargin = Number(((grossProfit / authoritativeSellingPrice) * 100).toFixed(1));
+    const calculatedAt = new Date().toISOString();
+    const supplierCostBreakdown = buildPackageSupplierCostBreakdown(costEntries);
+    const pricingMode = storedTrip.pricingMode || 'SELLING_PRICE';
+    const pricingInput = storedTrip.pricingInput ?? storedTrip.totalSellingPrice ?? 0;
+    let economics;
+    try {
+      economics = calculatePackageEconomics(totalTripCost, pricingMode, pricingInput);
+    } catch (error) {
+      throw new TripDomainError(422, 'INVALID_PRICING_INPUT', error instanceof Error ? error.message : 'Package pricing is invalid.');
     }
+    let configuredThreshold: number | undefined = APP_CONFIG.LOW_MARGIN_THRESHOLD_PERCENT;
+    if (!APP_CONFIG.DEMO_MODE) {
+      const settingsSnapshot = await getAdminDb().collection('commercial_settings').doc('package-pricing').get();
+      const settingValue = settingsSnapshot.data()?.lowMarginThresholdPercent;
+      if (typeof settingValue === 'number') configuredThreshold = settingValue;
+    }
+    const commercialApproval = assessLowMarginPolicy(economics.grossMargin, configuredThreshold, calculatedAt);
 
-    // Persist securely to Firestore bypassing client rules
+    // Commit the result only if the commercial inputs are still the same
+    // revision that was loaded before calculation. This prevents an older,
+    // slower calculation from marking a newer package current.
     if (!APP_CONFIG.DEMO_MODE) {
       const db = getAdminDb();
-      if (typeof (db as any).batch === 'function') {
-        const batch = db.batch();
+      await db.runTransaction(async transaction => {
+        const tripRef = db.collection('trips').doc(tripId);
+        const currentSnapshot = await transaction.get(tripRef);
+        if (!currentSnapshot.exists) {
+          throw new TripDomainError(404, 'TRIP_NOT_FOUND', 'Trip not found.');
+        }
+        const currentTrip = currentSnapshot.data() || {};
+        if (Number(currentTrip.costingRevision || 0) !== calculationRevision) {
+          throw new TripDomainError(
+            409,
+            'COSTING_INPUT_CHANGED',
+            'Package details changed while costs were updating. Review the latest package and update costs again.',
+          );
+        }
         for (const day of persistedDays) {
-          batch.update(db.collection('itinerary_days').doc(day.id), {
+          transaction.update(db.collection('itinerary_days').doc(day.id), {
             items: day.items.map(item => itemSupplierCosts[item.id] === undefined ? item : { ...item, supplierCost: itemSupplierCosts[item.id] }),
           });
         }
-        batch.update(db.collection('trips').doc(tripId), {
-          totalSupplierCost: totalTripCost, grossProfit, grossMargin, costingStatus: 'CALCULATED', updatedAt: new Date().toISOString(),
+        transaction.update(tripRef, {
+          totalSupplierCost: totalTripCost,
+          supplierCostBreakdown,
+          totalSellingPrice: economics.totalSellingPrice,
+          pricingMode: economics.pricingMode,
+          pricingInput: economics.pricingInput,
+          grossProfit: economics.grossProfit,
+          grossMargin: economics.grossMargin,
+          commercialApproval,
+          costingStatus: 'CALCULATED',
+          costingCalculatedRevision: calculationRevision,
+          updatedAt: calculatedAt,
+          updatedByEmployeeId: currentUser.employeeId,
         });
-        await batch.commit();
-      } else {
-        await db.collection('trips').doc(tripId).update({
-          totalSupplierCost: totalTripCost, grossProfit, grossMargin, costingStatus: 'CALCULATED', updatedAt: new Date().toISOString(),
+        const auditRef = db.collection('audit_logs').doc(`audit-costing-${tripId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
+        transaction.set(auditRef, {
+          id: auditRef.id,
+          timestamp: calculatedAt,
+          actorType: 'HUMAN',
+          actorId: currentUser.employeeId,
+          actorName: `${currentUser.name} (${currentUser.role})`,
+          action: 'COSTING_RECALCULATED',
+          entityType: 'TRIP',
+          entityId: tripId,
+          before: {
+            costingStatus: currentTrip.costingStatus,
+            costingRevision: currentTrip.costingRevision || 0,
+            totalSupplierCost: currentTrip.totalSupplierCost,
+          },
+          after: {
+            costingStatus: 'CALCULATED',
+            costingRevision: calculationRevision,
+            totalSupplierCost: totalTripCost,
+            grossProfit: economics.grossProfit,
+            grossMargin: economics.grossMargin,
+          },
+          reason: 'Authoritative package costs recalculated from current commercial inputs.',
         });
-      }
+      });
     }
 
     // Return the response.
     const responseData = {
       totalSupplierCost: totalTripCost,
-      grossProfit,
-      grossMargin,
+      supplierCostBreakdown,
+      totalSellingPrice: economics.totalSellingPrice,
+      pricingMode: economics.pricingMode,
+      pricingInput: economics.pricingInput,
+      grossProfit: economics.grossProfit,
+      grossMargin: economics.grossMargin,
+      commercialApproval,
       costingStatus: 'CALCULATED',
+      costingRevision: calculationRevision,
+      costingCalculatedRevision: calculationRevision,
+      updatedAt: calculatedAt,
       itemSupplierCosts,
     };
 

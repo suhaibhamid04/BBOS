@@ -51,6 +51,8 @@ function storedTrip(overrides: Record<string, unknown> = {}) {
     totalSupplierCost: 100,
     grossProfit: 900,
     grossMargin: 90,
+    costingStatus: 'CALCULATED',
+    costingRevision: 0,
     assignedSalesEmployeeId: 'exec-1',
     salesTeamId: 'team-a',
     createdAt: '2026-09-01T00:00:00.000Z',
@@ -155,15 +157,87 @@ describe('Stage D2A server-authoritative Trip mutations', () => {
     expect(trip.createdByEmployeeId).toBe('exec-1');
   });
 
-  test('Sales Executive updates OWN Trip and selling-price financials are derived from stored cost', async () => {
+  test('Sales Executive selling-price changes preserve supplier freshness and advance the commercial revision', async () => {
     const { service } = harness([storedTrip()]);
-    const trip = await service.updateTrip('trip-1', { totalSellingPrice: 500 }, executive);
+    const trip = await service.updateTrip('trip-1', { totalSellingPrice: 500, expectedCostingRevision: 0 }, executive);
 
     expect(trip.totalSupplierCost).toBe(100);
     expect(trip.totalSellingPrice).toBe(500);
+    expect(trip.costingStatus).toBe('CALCULATED');
+    expect(trip.costingRevision).toBe(1);
+    expect(trip.costingCalculatedRevision).toBe(1);
     expect(trip.grossProfit).toBe(400);
     expect(trip.grossMargin).toBe(80);
     expect(trip.updatedByEmployeeId).toBe('exec-1');
+  });
+
+  test('target profit and target margin are derived server-side and mode switches are audited', async () => {
+    const { storage, service } = harness([storedTrip({ costingCalculatedRevision: 0 })]);
+    const profitMode = await service.updateTrip('trip-1', {
+      pricingMode: 'TARGET_PROFIT', pricingInput: 800, expectedCostingRevision: 0,
+    }, executive);
+    expect(profitMode).toMatchObject({ totalSupplierCost: 100, totalSellingPrice: 900, grossProfit: 800, grossMargin: 88.9, costingRevision: 1, costingCalculatedRevision: 1 });
+
+    const marginMode = await service.updateTrip('trip-1', {
+      pricingMode: 'TARGET_MARGIN', pricingInput: 15, expectedCostingRevision: 1,
+    }, executive);
+    expect(marginMode).toMatchObject({ totalSupplierCost: 100, totalSellingPrice: 118, grossProfit: 18, grossMargin: 15.3, costingRevision: 2, costingCalculatedRevision: 2 });
+    expect(storage.getAllAuditLogs().filter(log => log.action === 'PRICING_MODE_CHANGED')).toHaveLength(2);
+    expect(storage.getAllAuditLogs().filter(log => log.action === 'SELLING_PRICE_CHANGED')).toHaveLength(2);
+  });
+
+  test('stale pricing write is rejected without overwriting newer economics', async () => {
+    const original = storedTrip({ costingRevision: 4, costingCalculatedRevision: 4 });
+    const { storage, service } = harness([original]);
+    await expectTripError(
+      service.updateTrip('trip-1', { totalSellingPrice: 700, expectedCostingRevision: 3 }, executive),
+      'TRIP_VERSION_CONFLICT', 409,
+    );
+    expect(storage.rawGet('trips', 'trip-1')).toEqual(original);
+  });
+
+  test('uses the stored configurable low-margin threshold and does not self-approve', async () => {
+    const { storage, service } = harness([storedTrip({ costingCalculatedRevision: 0 })]);
+    storage.rawSet('commercial_settings', 'package-pricing', { lowMarginThresholdPercent: 20 });
+    const lowMargin = await service.updateTrip('trip-1', { totalSellingPrice: 120, expectedCostingRevision: 0 }, executive);
+    expect(lowMargin.commercialApproval).toMatchObject({ required: true, state: 'REVIEW_REQUIRED', thresholdPercent: 20 });
+    const healthy = await service.updateTrip('trip-1', { totalSellingPrice: 200, expectedCostingRevision: 1 }, executive);
+    expect(healthy.commercialApproval).toMatchObject({ required: false, state: 'NOT_REQUIRED', thresholdPercent: 20 });
+  });
+
+  test('commercial repricing invalidates an old approval and healthy economics remove the current requirement', async () => {
+    const original = storedTrip({ costingCalculatedRevision: 0 });
+    const { storage, service } = harness([original]);
+    storage.rawSet('commercial_settings', 'package-pricing', { lowMarginThresholdPercent: 20 });
+    storage.rawUpdate('trips', 'trip-1', {
+      commercialApproval: {
+        required: true, state: 'APPROVED', thresholdPercent: 20, assessedAt: '2026-10-08T00:00:00.000Z',
+        currentDecision: {
+          decision: 'APPROVED', quoteVersion: 1, costingRevision: 0, totalSupplierCost: 100,
+          totalSellingPrice: 120, grossProfit: 20, grossMargin: 16.7, thresholdPercent: 20,
+          reviewerEmployeeId: 'manager-1', decidedAt: '2026-10-08T00:00:00.000Z',
+        },
+      },
+    });
+    const stillLow = await service.updateTrip('trip-1', { totalSellingPrice: 121, expectedCostingRevision: 0 }, executive);
+    expect(stillLow.commercialApproval).toMatchObject({ required: true, state: 'REVIEW_REQUIRED', thresholdPercent: 20 });
+    expect(stillLow.commercialApproval?.currentDecision).toBeUndefined();
+    const healthy = await service.updateTrip('trip-1', { totalSellingPrice: 200, expectedCostingRevision: 1 }, executive);
+    expect(healthy.commercialApproval).toMatchObject({ required: false, state: 'NOT_REQUIRED', thresholdPercent: 20 });
+  });
+
+  test('dates and pax invalidate costing while a budget-only metadata change does not', async () => {
+    const { storage, service } = harness([storedTrip()]);
+    const changed = await service.updateTrip('trip-1', {
+      startDate: '2026-10-02', endDate: '2026-10-06', adults: 3,
+      children: 1, childAges: [7], travelerCount: 4,
+    }, executive);
+    expect(changed).toMatchObject({ costingStatus: 'PENDING', costingRevision: 1 });
+    expect(storage.getAllAuditLogs().filter(log => log.action === 'COSTING_INVALIDATED')).toHaveLength(1);
+
+    storage.rawUpdate('trips', 'trip-1', { costingStatus: 'CALCULATED', costingRevision: 1 });
+    const metadataOnly = await service.updateTrip('trip-1', { budget: 1_500 }, executive);
+    expect(metadataOnly).toMatchObject({ costingStatus: 'CALCULATED', costingRevision: 1 });
   });
 
   test('reconciles stale Lead travel fields while preserving selected itinerary services', async () => {
@@ -251,6 +325,8 @@ describe('Stage D2A server-authoritative Trip mutations', () => {
       ['totalSupplierCost', 1],
       ['grossProfit', 999],
       ['grossMargin', 99],
+      ['supplierCostBreakdown', { total: 1 }],
+      ['commercialApproval', { required: false, state: 'APPROVED' }],
       ['status', 'BOOKED'],
     ] as const;
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useData } from '../../context/DataContext';
-import { ActivityItineraryMetadata, AccommodationItineraryMetadata, Trip, ItineraryDay, ItineraryItem, TransportItineraryMetadata } from '../../types';
+import { ActivityItineraryMetadata, AccommodationItineraryMetadata, Trip, ItineraryDay, ItineraryItem, TransportItineraryMetadata, type PackagePricingMode } from '../../types';
 import {
   Plane,
   Calendar,
@@ -26,6 +26,7 @@ import { useAuth } from '../../context/AuthContext';
 import { HotelInventoryPicker } from './HotelInventoryPicker';
 import { TransportInventoryPicker } from './TransportInventoryPicker';
 import { ActivityInventoryPicker } from './ActivityInventoryPicker';
+import { isTripCostingFresh } from '../../utils/costingFreshness';
 
 interface TripBuilderViewProps {
   initialTripId?: string;
@@ -78,6 +79,9 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
   const [isCalculatingCosts, setIsCalculatingCosts] = useState(false);
   const [isApplyingLeadChanges, setIsApplyingLeadChanges] = useState(false);
   const [isCreatingQuote, setIsCreatingQuote] = useState(false);
+  const [isSavingPricing, setIsSavingPricing] = useState(false);
+  const [pricingMode, setPricingMode] = useState<PackagePricingMode>('SELLING_PRICE');
+  const [pricingInput, setPricingInput] = useState('0');
 
   // Form state for New / Edit Trip
   const [tripForm, setTripForm] = useState({
@@ -165,6 +169,11 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
   };
 
   const activeTrip = trips.find(t => t.id === selectedTripId);
+  useEffect(() => {
+    if (!activeTrip) return;
+    setPricingMode(activeTrip.pricingMode || 'SELLING_PRICE');
+    setPricingInput(String(activeTrip.pricingInput ?? activeTrip.totalSellingPrice ?? 0));
+  }, [activeTrip?.id, activeTrip?.pricingMode, activeTrip?.pricingInput, activeTrip?.totalSellingPrice]);
   const tripDays = activeTrip
     ? itineraryDays.filter(d => d.tripId === activeTrip.id).sort((a, b) => a.dayNumber - b.dayNumber)
     : [];
@@ -502,7 +511,7 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
     const wasEditing = Boolean(editingItem);
     const payload = {
       type: 'TRANSPORT',
-      title: `${metadata.vehicleName} — ${metadata.supplierName || 'Contracted supplier'} — ${metadata.pricingUnit}`,
+      title: `${metadata.vehicleName} — ${metadata.vehicleCount || 1} vehicle${(metadata.vehicleCount || 1) === 1 ? '' : 's'} — ${metadata.chargeableDays || metadata.vehicleDays} chargeable day${(metadata.chargeableDays || metadata.vehicleDays) === 1 ? '' : 's'}`,
       description: metadata.routeName,
       referenceId: metadata.vehicleCategoryId,
       inventoryId: metadata.vehicleCategoryId,
@@ -522,7 +531,7 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
     const payload = {
       type: 'ACTIVITY',
       title: `${metadata.activityName}${metadata.duration ? ` — ${metadata.duration}` : ''}`,
-      description: `${metadata.pricingModel} · ${metadata.supplierName || 'Contracted provider'}`,
+      description: `${String(metadata.pricingModel).replaceAll('_', ' ')} · ${metadata.inclusionStatus === 'OPTIONAL' ? 'Optional add-on' : metadata.inclusionStatus === 'NOT_INCLUDED' ? 'Not included' : 'Included'}`,
       referenceId: metadata.activityId,
       inventoryId: metadata.activityId,
       metadata
@@ -540,6 +549,39 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
     try { await recalculateTripCost(activeTrip.id); notify('Authoritative inventory costing completed.'); }
     catch (error: any) { notify(error.message || 'Unable to calculate Trip costs.'); }
     finally { setIsCalculatingCosts(false); }
+  };
+
+  const handleSavePricing = async () => {
+    if (!activeTrip) return;
+    const value = Number(pricingInput);
+    if (!Number.isFinite(value) || value < 0 || (pricingMode === 'TARGET_MARGIN' && value >= 100)) {
+      notify(pricingMode === 'TARGET_MARGIN' ? 'Target margin must be between 0 and less than 100%.' : 'Enter a valid non-negative amount.');
+      return;
+    }
+    setIsSavingPricing(true);
+    try {
+      await updateTrip(activeTrip.id, {
+        pricingMode,
+        pricingInput: value,
+        ...(pricingMode === 'SELLING_PRICE' ? { totalSellingPrice: value } : {}),
+        expectedCostingRevision: Number(activeTrip.costingRevision || 0),
+      });
+      notify('Package selling economics saved.');
+    } catch (error: any) {
+      notify(error.message || 'Unable to save package pricing.');
+    } finally {
+      setIsSavingPricing(false);
+    }
+  };
+
+  const handlePricingModeChange = (mode: PackagePricingMode) => {
+    setPricingMode(mode);
+    if (!activeTrip) return;
+    setPricingInput(String(
+      mode === 'TARGET_PROFIT' ? activeTrip.grossProfit
+        : mode === 'TARGET_MARGIN' ? activeTrip.grossMargin
+          : activeTrip.totalSellingPrice,
+    ));
   };
 
   const handleApplyLeadChanges = async () => {
@@ -582,7 +624,7 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
       if (onNavigate) onNavigate('quotes', existingQuote.id);
       return;
     }
-    if (activeTrip.costingStatus !== 'CALCULATED') {
+    if (!isTripCostingFresh(activeTrip)) {
       notify('Recalculate package cost before creating a quote.');
       return;
     }
@@ -653,6 +695,13 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
     || (currentUser.role === 'Sales Manager' && Boolean(trip.salesTeamId) && trip.salesTeamId === currentUser.salesTeamId);
   const canSeeSupplierCosts = activeTrip ? canSeeSupplierCostsForTrip(activeTrip) : false;
   const canSeeMargins = activeTrip ? canSeeMarginsForTrip(activeTrip) : false;
+  const canEditCommercials = activeTrip ? (
+    currentUser.role === 'Founder'
+    || currentUser.role === 'Admin'
+    || (currentUser.role === 'Sales Executive' && activeTrip.assignedSalesEmployeeId === currentUser.employeeId)
+    || (currentUser.role === 'Sales Manager' && Boolean(activeTrip.salesTeamId) && activeTrip.salesTeamId === currentUser.salesTeamId)
+  ) : false;
+  const costingIsFresh = isTripCostingFresh(activeTrip);
 
   // --------------------------------------------------------------------------
   // RENDER: ACTIVE TRIP BUILDER VIEW
@@ -736,8 +785,8 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
             <button
               data-testid="create-quote-from-trip"
               onClick={handleGenerateQuote}
-              disabled={isCreatingQuote || (activeTrip.costingStatus !== 'CALCULATED' && !quotes.some(quote => quote.tripId === activeTrip.id)) || (activeTrip.packageReview?.required && !quotes.some(quote => quote.tripId === activeTrip.id))}
-              title={activeTrip.costingStatus !== 'CALCULATED' ? 'Recalculate Trip costing before creating a Quote.' : undefined}
+              disabled={isCreatingQuote || (!costingIsFresh && !quotes.some(quote => quote.tripId === activeTrip.id))}
+              title={!costingIsFresh ? 'Recalculate Trip costing before creating a Quote.' : undefined}
               className="px-4 py-2 bg-[#7056EE] hover:bg-[#5e43dc] disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-2 shadow-sm"
             >
               <CheckCircle2 className="w-4 h-4" /> {quotes.some(quote => quote.tripId === activeTrip.id) ? 'Open Quote' : isCreatingQuote ? 'Creating…' : 'Create Quote'}
@@ -754,13 +803,22 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
           </div>
         </div>}
 
+        {!costingIsFresh && <div data-testid="costing-freshness-banner" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div><p className="font-black">Costs need updating after your recent changes.</p><p className="mt-1 text-xs">Supplier cost, profit, and margin are not current. Your selling price is preserved.</p></div>
+            <button data-testid="update-costs-banner" type="button" disabled={isCalculatingCosts || activeTrip.packageReview?.required} onClick={() => void handleCalculateCosts()} className="rounded-lg bg-amber-900 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{isCalculatingCosts ? 'Updating costs…' : activeTrip.packageReview?.required ? 'Apply Lead changes first' : 'Update Costs'}</button>
+          </div>
+        </div>}
+
         {/* Real-time Costing Engine Header */}
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs shrink-0 flex flex-wrap items-center justify-between gap-4">
           <div className="flex flex-wrap items-center gap-6 md:gap-8">
             <div>
               <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">Supplier Cost</p>
               {canSeeSupplierCosts ? (
-                <p className="text-lg font-black text-slate-900">₹{activeTrip.totalSupplierCost?.toLocaleString('en-IN') || 0}</p>
+                costingIsFresh
+                  ? <p data-testid="trip-supplier-cost" className="text-lg font-black text-slate-900">₹{activeTrip.totalSupplierCost?.toLocaleString('en-IN') || 0}</p>
+                  : <div><p data-testid="trip-supplier-cost" className="text-sm font-black text-amber-800">Needs update</p>{Number.isFinite(activeTrip.totalSupplierCost) && <p className="text-[10px] text-slate-500">Last calculated: ₹{activeTrip.totalSupplierCost.toLocaleString('en-IN')}</p>}</div>
               ) : (
                 <p className="text-xs font-bold text-slate-400 italic py-1">[Protected by RBAC]</p>
               )}
@@ -781,9 +839,7 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
             <div>
               <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">Gross Profit</p>
               {canSeeMargins ? (
-                <p className={`text-lg font-black ${activeTrip.grossProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                  ₹{activeTrip.grossProfit?.toLocaleString('en-IN') || 0}
-                </p>
+                costingIsFresh ? <p data-testid="trip-gross-profit" className={`text-lg font-black ${activeTrip.grossProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>₹{activeTrip.grossProfit?.toLocaleString('en-IN') || 0}</p> : <p data-testid="trip-gross-profit" className="text-lg font-black text-slate-400">—</p>
               ) : (
                 <p className="text-xs font-bold text-slate-400 italic py-1">[Restricted]</p>
               )}
@@ -794,9 +850,7 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
             <div>
               <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">Gross Margin</p>
               {canSeeMargins ? (
-                <p className={`text-lg font-black ${activeTrip.grossMargin >= 25 ? 'text-emerald-600' : 'text-amber-600'}`}>
-                  {activeTrip.grossMargin || 0}%
-                </p>
+                costingIsFresh ? <p data-testid="trip-gross-margin" className={`text-lg font-black ${activeTrip.grossMargin >= 25 ? 'text-emerald-600' : 'text-amber-600'}`}>{activeTrip.grossMargin || 0}%</p> : <p data-testid="trip-gross-margin" className="text-lg font-black text-slate-400">—</p>
               ) : (
                 <p className="text-xs font-bold text-slate-400 italic py-1">[Restricted]</p>
               )}
@@ -805,11 +859,11 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
 
           <div className="text-right">
             <div className="flex items-center justify-end gap-2 mb-1">
-              <span data-testid="trip-costing-status" className={`text-[10px] font-bold px-2 py-1 rounded ${activeTrip.costingStatus === 'CALCULATED' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-800'}`}>
-                {activeTrip.costingStatus || 'PENDING'}
+              <span data-testid="trip-costing-status" className={`text-[10px] font-bold px-2 py-1 rounded ${costingIsFresh ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-800'}`}>
+                {costingIsFresh ? 'Costs current' : 'Needs update'}
               </span>
               <button data-testid="calculate-trip-costs" type="button" disabled={isCalculatingCosts || activeTrip.packageReview?.required} onClick={() => void handleCalculateCosts()} className="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold disabled:opacity-50">
-                {isCalculatingCosts ? 'Calculating…' : 'Calculate costs'}
+                {isCalculatingCosts ? 'Updating…' : 'Update Costs'}
               </button>
             </div>
             <span className="text-[11px] font-medium text-slate-500">
@@ -817,6 +871,50 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
             </span>
           </div>
         </div>
+
+        {canSeeSupplierCosts && <section data-testid="package-commercial-summary" className="rounded-xl border border-slate-200 bg-white p-4 shadow-2xs">
+          <div className="grid gap-5 lg:grid-cols-2">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-wider text-slate-500">Package cost</p>
+              <div className="mt-2 space-y-2 text-xs">
+                {([
+                  ['Accommodation', activeTrip.supplierCostBreakdown?.accommodation],
+                  ['Transport', activeTrip.supplierCostBreakdown?.transport],
+                  ['Activities', activeTrip.supplierCostBreakdown?.activities],
+                  ['Other services', activeTrip.supplierCostBreakdown?.other],
+                ] as const).map(([label, category]) => <details key={label} className="rounded-lg bg-slate-50 px-3 py-2" open={Boolean(category?.items.length)}>
+                  <summary className="flex cursor-pointer list-none justify-between font-bold text-slate-700"><span>{label}</span><span>₹{Number(category?.total || 0).toLocaleString('en-IN')}</span></summary>
+                  {category?.items.map((item, index) => <div key={`${label}-${index}`} className="mt-1 flex justify-between pl-2 text-[11px] text-slate-500"><span>{item.label}</span><span>₹{item.amount.toLocaleString('en-IN')}</span></div>)}
+                </details>)}
+                <div className="flex justify-between border-t border-slate-200 pt-2 font-black text-slate-900"><span>Total supplier cost</span><span data-testid="package-cost-total">{costingIsFresh ? `₹${activeTrip.totalSupplierCost.toLocaleString('en-IN')}` : 'Needs update'}</span></div>
+              </div>
+            </div>
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-wider text-slate-500">Selling</p>
+              {canEditCommercials ? <div className="mt-2 space-y-3">
+                <label className="block text-xs font-bold text-slate-700">Set by
+                  <select data-testid="pricing-mode" value={pricingMode} onChange={event => handlePricingModeChange(event.target.value as PackagePricingMode)} className="mt-1 w-full rounded-lg border border-slate-200 p-2 font-medium">
+                    <option value="SELLING_PRICE">Selling Price</option>
+                    <option value="TARGET_PROFIT" disabled={!costingIsFresh}>Target Profit</option>
+                    <option value="TARGET_MARGIN" disabled={!costingIsFresh}>Target Margin</option>
+                  </select>
+                </label>
+                <label className="block text-xs font-bold text-slate-700">{pricingMode === 'SELLING_PRICE' ? 'Selling Price (₹)' : pricingMode === 'TARGET_PROFIT' ? 'Target Profit (₹)' : 'Target Margin (%)'}
+                  <input data-testid="pricing-input" type="number" min="0" max={pricingMode === 'TARGET_MARGIN' ? 99.99 : undefined} step={pricingMode === 'TARGET_MARGIN' ? '0.1' : '1'} value={pricingInput} onChange={event => setPricingInput(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 p-2 font-medium" />
+                </label>
+                <button data-testid="save-package-pricing" type="button" onClick={() => void handleSavePricing()} disabled={isSavingPricing || (pricingMode !== 'SELLING_PRICE' && !costingIsFresh)} className="rounded-lg bg-[#7056EE] px-3 py-2 text-xs font-bold text-white disabled:opacity-50">{isSavingPricing ? 'Saving…' : 'Apply pricing'}</button>
+              </div> : <p className="mt-2 text-xs text-slate-500">Selling controls are limited to the authorized Sales scope.</p>}
+              <div className="mt-3 grid grid-cols-3 gap-2 rounded-lg bg-slate-50 p-3 text-xs">
+                <div><p className="text-[10px] text-slate-500">Selling price</p><p data-testid="commercial-selling-price" className="font-black">₹{activeTrip.totalSellingPrice.toLocaleString('en-IN')}</p></div>
+                <div><p className="text-[10px] text-slate-500">Profit</p><p data-testid="commercial-profit" className="font-black">{costingIsFresh && canSeeMargins ? `₹${activeTrip.grossProfit.toLocaleString('en-IN')}` : '—'}</p></div>
+                <div><p className="text-[10px] text-slate-500">Margin</p><p data-testid="commercial-margin" className="font-black">{costingIsFresh && canSeeMargins ? `${activeTrip.grossMargin}%` : '—'}</p></div>
+              </div>
+              {activeTrip.commercialApproval?.required && activeTrip.commercialApproval.state === 'APPROVED' && <p data-testid="low-margin-approved" className="mt-3 rounded-lg border border-emerald-300 bg-emerald-50 p-2 text-xs font-bold text-emerald-900">Commercial exception approved{activeTrip.commercialApproval.currentDecision?.reviewerName ? ` by ${activeTrip.commercialApproval.currentDecision.reviewerName}` : ''}. This approval applies only to the current package economics.</p>}
+              {activeTrip.commercialApproval?.required && activeTrip.commercialApproval.state === 'REJECTED' && <p data-testid="low-margin-rejected" className="mt-3 rounded-lg border border-rose-300 bg-rose-50 p-2 text-xs font-bold text-rose-900">Commercial approval was not granted. Adjust package pricing and resubmit for approval.{activeTrip.commercialApproval.currentDecision?.note ? ` ${activeTrip.commercialApproval.currentDecision.note}` : ''}</p>}
+              {activeTrip.commercialApproval?.required && !['APPROVED', 'REJECTED'].includes(activeTrip.commercialApproval.state) && <p data-testid="low-margin-review-required" className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs font-bold text-amber-900">Commercial approval required. This package is below the configured margin threshold. Waiting for Sales Manager approval.</p>}
+            </div>
+          </div>
+        </section>}
 
         {/* Builder Main Work Area */}
         <div className="flex flex-col lg:flex-row gap-4 flex-1 min-h-[460px]">
@@ -1008,10 +1106,24 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
                           <div>
                             <p className="text-sm font-bold text-slate-900">{item.title}</p>
                             <p className="text-xs text-slate-500 mt-0.5">{item.description}</p>
+                            {item.metadata?.serviceDays?.length ? (
+                              <div className="mt-2 space-y-1" data-testid={`transport-service-summary-${item.id}`}>
+                                {item.metadata.serviceDays.map((serviceDay, serviceIndex) => (
+                                  <p key={`${serviceDay.date}-${serviceIndex}`} className="text-[10px] text-slate-500">
+                                    <span className="font-bold text-slate-700">Day {serviceDay.dayNumber}</span>
+                                    {' · '}{serviceDay.title || serviceDay.route || serviceDay.serviceType.replaceAll('_', ' ').toLowerCase()}
+                                    {serviceDay.route && serviceDay.title ? ` · ${serviceDay.route}` : ''}
+                                    {serviceDay.overnightLocation ? ` · Overnight: ${serviceDay.overnightLocation}` : ''}
+                                    {!serviceDay.chargeableTransportDay ? ' · Non-chargeable action' : ''}
+                                  </p>
+                                ))}
+                              </div>
+                            ) : null}
                           </div>
                           <div className="flex items-center gap-4">
                             <div className="text-right">
-                              <p className="text-xs font-bold text-slate-500">{item.metadata?.rateId ? 'Inventory linked' : 'Legacy item'}</p>
+                              <p className="text-xs font-bold text-slate-500">{item.metadata?.packageSupplierRate ? 'Package supplier rate' : item.metadata?.rateId ? 'Inventory linked' : 'Rate pending'}</p>
+                              <p className="text-[10px] text-slate-400">{item.metadata?.vehicleCount || 1} vehicle(s) · {item.metadata?.chargeableDays || item.metadata?.vehicleDays || 1} chargeable day(s)</p>
                               {canSeeSupplierCosts && (
                                 <p className="text-[10px] text-slate-400">Cost: ₹{item.supplierCost?.toLocaleString('en-IN')}</p>
                               )}
@@ -1079,7 +1191,8 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
                           </div>
                           <div className="flex items-center gap-4">
                             <div className="text-right">
-                              <p className="text-xs font-bold text-slate-500">{item.metadata?.rateId ? 'Inventory linked' : item.sellingPrice !== undefined ? `₹${item.sellingPrice.toLocaleString('en-IN')}` : 'Legacy item'}</p>
+                              <p className="text-xs font-bold text-slate-500">{item.metadata?.packageSupplierRate ? 'Package supplier rate' : item.metadata?.rateId ? 'Inventory linked' : item.sellingPrice !== undefined ? `₹${item.sellingPrice.toLocaleString('en-IN')}` : 'Rate pending'}</p>
+                              {item.type === 'ACTIVITY' && <p className="text-[10px] font-semibold text-amber-700">{item.metadata?.inclusionStatus === 'OPTIONAL' ? 'Optional add-on' : item.metadata?.inclusionStatus === 'NOT_INCLUDED' ? 'Not included' : 'Included in package'}</p>}
                               {canSeeSupplierCosts && item.supplierCost ? (
                                 <p className="text-[10px] text-slate-400">Cost: ₹{item.supplierCost?.toLocaleString('en-IN')}</p>
                               ) : null}
@@ -1146,6 +1259,7 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
             <div className="animate-in fade-in zoom-in duration-150 w-full max-w-2xl">
               <TransportInventoryPicker
+                tripId={activeTrip!.id}
                 startDate={activeDay?.date || new Date().toISOString().split('T')[0]}
                 initialMetadata={editingItem?.type === 'TRANSPORT' && editingItem.metadata?.inventoryType === 'TRANSPORT' ? editingItem.metadata as TransportItineraryMetadata : undefined}
                 onConfirm={handleAddTransport}
@@ -1160,6 +1274,7 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
             <div className="animate-in fade-in zoom-in duration-150 w-full max-w-2xl">
               <ActivityInventoryPicker
+                tripId={activeTrip!.id}
                 date={activeDay?.date || new Date().toISOString().split('T')[0]}
                 defaultAdults={activeTrip?.adults || 2}
                 defaultChildren={activeTrip?.children || 0}

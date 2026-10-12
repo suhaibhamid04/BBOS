@@ -10,6 +10,8 @@ export interface TransportCalculationRequest {
   supplements: TransportSupplement[];
   serviceParams: {
     vehicleDays?: number;
+    vehicleCount?: number;
+    chargeableDays?: number;
     nightHalts?: number;
     distanceKm?: number;
     hours?: number;
@@ -21,6 +23,8 @@ export function calculateTransportCost(
   request: TransportCalculationRequest
 ): TransportCostCalculation {
   const { ratePeriod, supplements, serviceParams } = request;
+  const vehicleCount = Math.max(1, Math.floor(serviceParams.vehicleCount || 1));
+  const chargeableDays = Math.max(1, Math.floor(serviceParams.chargeableDays || serviceParams.vehicleDays || 1));
 
   if (ratePeriod.availabilityStatus === 'UNAVAILABLE') {
     return {
@@ -40,25 +44,25 @@ export function calculateTransportCost(
   // 1. Base Cost Calculation
   switch (ratePeriod.pricingUnit) {
     case 'PER_DAY':
-      baseCost = ratePeriod.baseRate * (serviceParams.vehicleDays || 1);
+      baseCost = ratePeriod.baseRate * chargeableDays * vehicleCount;
       break;
     case 'PER_TRIP':
     case 'PER_ROUTE':
     case 'FIXED_MULTI_DAY':
     case 'PER_JOURNEY':
-      baseCost = ratePeriod.baseRate; // Fixed cost regardless of days
+      baseCost = ratePeriod.baseRate * vehicleCount; // Fixed per vehicle/group regardless of days
       break;
     case 'PER_TRANSFER':
-      baseCost = ratePeriod.baseRate * (serviceParams.occurrences || 1);
+      baseCost = ratePeriod.baseRate * (serviceParams.occurrences || 1) * vehicleCount;
       break;
     case 'PER_KM':
-      baseCost = ratePeriod.baseRate * (serviceParams.distanceKm || 0);
+      baseCost = ratePeriod.baseRate * (serviceParams.distanceKm || 0) * vehicleCount;
       break;
     case 'PER_HOUR':
-      baseCost = ratePeriod.baseRate * (serviceParams.hours || 1);
+      baseCost = ratePeriod.baseRate * (serviceParams.hours || 1) * vehicleCount;
       break;
     case 'CUSTOM':
-      baseCost = ratePeriod.baseRate;
+      baseCost = ratePeriod.baseRate * vehicleCount;
       break;
   }
 
@@ -81,10 +85,10 @@ export function calculateTransportCost(
       const supplement = supplements.find(s => s.type === supplementType);
       if (supplement) {
         let supplementCost = 0;
-        if (supplement.unit === 'per_day') supplementCost = supplement.amount * (serviceParams.vehicleDays || 1);
-        else if (supplement.unit === 'per_night') supplementCost = supplement.amount * (serviceParams.nightHalts || 0);
-        else if (supplement.unit === 'per_occurrence') supplementCost = supplement.amount * (serviceParams.occurrences || 1);
-        else supplementCost = supplement.amount; // flat
+        if (supplement.unit === 'per_day') supplementCost = supplement.amount * chargeableDays * vehicleCount;
+        else if (supplement.unit === 'per_night') supplementCost = supplement.amount * (serviceParams.nightHalts || 0) * vehicleCount;
+        else if (supplement.unit === 'per_occurrence') supplementCost = supplement.amount * (serviceParams.occurrences || 1) * vehicleCount;
+        else supplementCost = supplement.amount * vehicleCount; // flat per vehicle/group
 
         if (supplementCost > 0) {
           additionalChargesTotal += supplementCost;

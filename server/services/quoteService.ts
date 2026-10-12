@@ -8,6 +8,8 @@ import {
 import { assertAuthorizedResource, ResourceAuthorizationError } from '../authorization/assertAuthorizedResource.js';
 import { quoteResourceContext, tripResourceContext } from '../authorization/resourceContext.js';
 import type { AuthorizationPrincipal } from '../authorization/policyTypes.js';
+import { isTripCostingFresh } from '../../src/utils/costingFreshness.js';
+import { isLowMarginApprovalCurrent } from '../../src/utils/packageCommercials.js';
 
 type UnknownRecord = Record<string, any>;
 
@@ -44,8 +46,10 @@ const SERVER_CONTROLLED_FIELDS = new Set([
   'updatedByEmployeeId', 'createdAt', 'updatedAt', 'version', 'versionHistory',
   'totalSupplierCost', 'grossProfit', 'grossMargin', 'profit', 'finalAmount',
   'supplierCostSource', 'requiresLowMarginApproval', 'approval', 'convertedBookingId',
+  'supplierCostBreakdown', 'pricingMode', 'pricingInput',
   'convertedAt', 'convertedBy', 'isDemo',
   'sharedAt', 'sharedByEmployeeId', 'shareChannel',
+  'customerPackageSnapshot',
 ]);
 
 const NESTED_FINANCIAL_FIELDS = new Set([
@@ -64,12 +68,14 @@ const TRANSPORT_FIELDS = new Set([
   'id', 'sourceTripItemId', 'transportId', 'vehicleCategoryId', 'transportRouteId', 'ratePeriodId',
   'vehicleType', 'route', 'serviceDate', 'days', 'passengerCount', 'pickupLocation',
   'dropoffLocation', 'rate', 'isFoc', 'focReason', 'specialRequests',
+  'vehicleCount', 'chargeableDays', 'serviceDays', 'costSource', 'packageSupplierRate', 'originalContractedTotal',
 ]);
 
 const ACTIVITY_FIELDS = new Set([
   'id', 'sourceTripItemId', 'activityId', 'activityMasterId', 'activityRatePeriodId', 'name',
   'activityName', 'destinationId', 'destinationName', 'serviceDate', 'date', 'pax',
-  'rate', 'isFoc', 'focReason', 'specialRequests',
+  'rate', 'isFoc', 'focReason', 'specialRequests', 'pricingModel', 'inclusionStatus',
+  'costSource', 'packageSupplierRate', 'originalContractedTotal',
 ]);
 
 const BACKUP_ACCOMMODATION_FIELDS = new Set([
@@ -301,11 +307,29 @@ function versionSnapshot(quote: Quote, actor: QuoteMutationActor): QuoteVersion 
     totalSupplierCost: quote.totalSupplierCost,
     grossProfit: quote.grossProfit,
     grossMargin: quote.grossMargin,
+    supplierCostBreakdown: quote.supplierCostBreakdown,
+    pricingMode: quote.pricingMode,
+    pricingInput: quote.pricingInput,
+    ...(quote.sharedAt ? { sharedAt: quote.sharedAt } : {}),
+    ...(quote.sharedByEmployeeId ? { sharedByEmployeeId: quote.sharedByEmployeeId } : {}),
+    ...(quote.shareChannel ? { shareChannel: quote.shareChannel } : {}),
+    ...(quote.customerPackageSnapshot ? { customerPackageSnapshot: quote.customerPackageSnapshot } : {}),
     ...(quote.notes !== undefined ? { notes: quote.notes } : {}),
     ...(quote.inclusions !== undefined ? { inclusions: quote.inclusions } : {}),
     ...(quote.exclusions !== undefined ? { exclusions: quote.exclusions } : {}),
     ...(quote.termsAndConditions !== undefined ? { termsAndConditions: quote.termsAndConditions } : {}),
   };
+}
+
+function assertTripCostingFresh(trip: UnknownRecord, operation: string): void {
+  if (!isTripCostingFresh(trip)) {
+    throw new QuoteDomainError(
+      409,
+      'TRIP_COSTING_PENDING',
+      `Package pricing needs updating before you can ${operation}.`,
+      { updateCostsRequired: true, packageReviewRequired: trip.packageReview?.required === true },
+    );
+  }
 }
 
 function auditEvent(
@@ -340,6 +364,14 @@ async function buildStoredCustomerPackage(
   quote: Quote,
   generatedAt: string,
 ): Promise<CustomerPackageDocument> {
+  if (quote.sharedAt && quote.customerPackageSnapshot) {
+    return quote.customerPackageSnapshot;
+  }
+  if (quote.sharedAt) {
+    // Compatibility for Quotes shared before immutable package snapshots were
+    // introduced. Use Quote-owned fields only; never rehydrate from a changed Trip.
+    return buildCustomerPackageProjection(quote, [], null, quote.sharedAt);
+  }
   if (!quote.tripId) {
     throw new QuoteDomainError(422, 'TRIP_LINK_REQUIRED', 'A customer package requires a persisted Trip-linked Quote.');
   }
@@ -351,13 +383,13 @@ async function buildStoredCustomerPackage(
   }
   const trip = await tx.get('trips', quote.tripId);
   if (!trip) throw new QuoteDomainError(404, 'TRIP_NOT_FOUND', 'The Quote Trip no longer exists.');
-  if (trip.packageReview?.required === true) {
-    throw new QuoteDomainError(409, 'PACKAGE_REVIEW_REQUIRED', 'Review the latest Lead travel changes before sharing this package.');
-  }
-  if (trip.costingStatus !== 'CALCULATED') {
-    throw new QuoteDomainError(422, 'TRIP_COSTING_INCOMPLETE', 'Recalculate the Trip before generating or sharing the package.');
-  }
-  if (quote.supplierCostSource?.asOf && trip.updatedAt && quote.supplierCostSource.asOf !== trip.updatedAt) {
+  assertTripCostingFresh(trip, 'preview or share this Quote');
+  const sourceRevision = quote.supplierCostSource?.costingRevision;
+  const tripRevision = Number(trip.costingRevision || 0);
+  const staleSource = sourceRevision !== undefined
+    ? sourceRevision !== tripRevision
+    : Boolean(quote.supplierCostSource?.asOf && trip.updatedAt && quote.supplierCostSource.asOf !== trip.updatedAt);
+  if (staleSource) {
     throw new QuoteDomainError(409, 'QUOTE_TRIP_VERSION_STALE', 'Save a new Quote revision after the latest Trip changes before sharing.');
   }
   const days = await tx.findByField('itinerary_days', 'tripId', quote.tripId, 60);
@@ -389,12 +421,7 @@ export class QuoteService {
       } catch (error) {
         translateAuthorizationError(error);
       }
-      if (trip.packageReview?.required === true) {
-        throw new QuoteDomainError(409, 'PACKAGE_REVIEW_REQUIRED', 'Review the latest Lead travel changes before selecting Quote alternatives.');
-      }
-      if (trip.costingStatus !== 'CALCULATED') {
-        throw new QuoteDomainError(422, 'TRIP_COSTING_INCOMPLETE', 'Recalculate the Trip before selecting Quote alternatives.');
-      }
+      assertTripCostingFresh(trip, 'select Quote alternatives');
       const days = await tx.findByField('itinerary_days', 'tripId', tripId, 60) as UnknownRecord[];
       const source = days.flatMap(day => Array.isArray(day.items) ? day.items : [])
         .find(item => item?.id === sourceTripItemId && item?.type === 'HOTEL');
@@ -476,24 +503,40 @@ export class QuoteService {
       if (!['DRAFT', 'PENDING_APPROVAL', 'SENT'].includes(stored.status)) {
         throw new QuoteDomainError(409, 'QUOTE_SHARE_WORKFLOW_DENIED', `A ${stored.status} Quote cannot enter the share workflow.`);
       }
+      if (stored.approval?.required === true && !isLowMarginApprovalCurrent(stored.approval, stored)) {
+        throw new QuoteDomainError(409, 'COMMERCIAL_APPROVAL_REQUIRED', 'This low-margin Quote requires commercial approval before sharing.');
+      }
+      if (stored.tripId) {
+        const trip = await tx.get('trips', stored.tripId) as UnknownRecord | null;
+        if (!trip) throw new QuoteDomainError(404, 'TRIP_NOT_FOUND', 'The Quote Trip no longer exists.');
+        assertTripCostingFresh(trip, 'share this Quote');
+        const sourceRevision = stored.supplierCostSource?.costingRevision;
+        const tripRevision = Number(trip.costingRevision || 0);
+        const sourceIsStale = sourceRevision !== undefined
+          ? sourceRevision !== tripRevision
+          : Boolean(stored.supplierCostSource?.asOf && trip.updatedAt && stored.supplierCostSource.asOf !== trip.updatedAt);
+        if (sourceIsStale) {
+          throw new QuoteDomainError(409, 'QUOTE_TRIP_VERSION_STALE', 'Save a fresh Quote revision using the updated package costs before sharing.');
+        }
+      }
       const now = new Date().toISOString();
-      await buildStoredCustomerPackage(tx, stored, now);
+      const customerPackage = await buildStoredCustomerPackage(tx, stored, now);
       const updated: Quote = {
         ...stored,
         status: 'SENT',
         sharedAt: now,
         sharedByEmployeeId: actor.employeeId,
         shareChannel: channel,
+        customerPackageSnapshot: { ...customerPackage, generatedAt: now },
         version: (stored.version || 1) + 1,
         versionHistory: [...(stored.versionHistory || []), versionSnapshot(stored, actor)],
         updatedAt: now,
         updatedByEmployeeId: actor.employeeId,
       };
-      const customerPackage = await buildStoredCustomerPackage(tx, updated, now);
       const audit = auditEvent('QUOTE_SHARED', quoteId, actor, stored as UnknownRecord, updated as UnknownRecord, now);
       tx.update('quotes', quoteId, updated);
       tx.set('audit_logs', audit.id, audit);
-      return { quote: updated, customerPackage };
+      return { quote: updated, customerPackage: updated.customerPackageSnapshot! };
     });
   }
 
@@ -525,11 +568,19 @@ export class QuoteService {
           } catch (error) {
             translateAuthorizationError(error);
           }
+          await this.resolveSupplierCostAndLinks(tx, existing as unknown as UnknownRecord, actor);
           return existing;
         }
       }
       const linkage = await this.resolveSupplierCostAndLinks(tx, input, actor);
-      const financials = calculateFinancials(input.totalAmount, input.discountAmount, linkage.cost);
+      // Validate legacy client proposal fields even though a Trip-backed Quote
+      // always freezes the authoritative Trip selling economics below.
+      calculateFinancials(input.totalAmount, input.discountAmount, linkage.cost);
+      const financials = calculateFinancials(
+        linkage.sellingPrice ?? input.totalAmount,
+        linkage.sellingPrice !== undefined ? 0 : input.discountAmount,
+        linkage.cost,
+      );
       const quote: Quote = {
         ...input,
         ...(linkage.quoteFields || {}),
@@ -600,11 +651,26 @@ export class QuoteService {
           'Changing Quote linkage cannot transfer its Sales owner or team.',
         );
       }
-      const financials = calculateFinancials(
+      calculateFinancials(
         finiteNonNegative(merged.totalAmount, 'totalAmount'),
         finiteNonNegative(merged.discountAmount, 'discountAmount'),
         supplier.cost,
       );
+      const financials = calculateFinancials(
+        supplier.sellingPrice ?? finiteNonNegative(merged.totalAmount, 'totalAmount'),
+        supplier.sellingPrice !== undefined ? 0 : finiteNonNegative(merged.discountAmount, 'discountAmount'),
+        supplier.cost,
+      );
+
+      const proposedApproval = supplier.quoteFields?.approval as Quote['approval'] | undefined;
+      const proposedCommercials = {
+        ...merged,
+        ...financials,
+        ...(supplier.source ? { supplierCostSource: supplier.source } : {}),
+      };
+      if (nextStatus === 'SENT' && proposedApproval?.required === true && !isLowMarginApprovalCurrent(proposedApproval, proposedCommercials)) {
+        throw new QuoteDomainError(409, 'COMMERCIAL_APPROVAL_REQUIRED', 'This low-margin Quote requires commercial approval before sending.');
+      }
 
       if (['SENT', 'VIEWED', 'ACCEPTED'].includes(nextStatus)) {
         if (supplier.cost === undefined || financials.finalAmount <= 0) {
@@ -618,10 +684,30 @@ export class QuoteService {
 
       const now = new Date().toISOString();
       const history = [...(stored.versionHistory || []), versionSnapshot(stored, actor)];
+      const incomingApproval = supplier.quoteFields?.approval as Quote['approval'] | undefined;
+      const priorHistory = stored.approval?.history || [];
+      const incomingHistory = incomingApproval?.history || [];
+      const approvalHistory = [...priorHistory];
+      for (const entry of incomingHistory) {
+        if (!approvalHistory.some(existing => existing.decidedAt === entry.decidedAt && existing.reviewerEmployeeId === entry.reviewerEmployeeId)) {
+          approvalHistory.push(entry);
+        }
+      }
+      const quoteFields = supplier.quoteFields
+        ? {
+            ...supplier.quoteFields,
+            ...(incomingApproval ? {
+              approval: {
+                ...incomingApproval,
+                ...(approvalHistory.length ? { history: approvalHistory } : {}),
+              },
+            } : {}),
+          }
+        : undefined;
       const updated: Quote = {
         ...stored,
         ...input,
-        ...(supplier.quoteFields || {}),
+        ...(quoteFields || {}),
         ...financials,
         status: nextStatus,
         version: (stored.version || 1) + 1,
@@ -630,6 +716,10 @@ export class QuoteService {
         updatedByEmployeeId: actor.employeeId,
         ...(supplier.source ? { supplierCostSource: supplier.source } : {}),
       };
+      delete updated.sharedAt;
+      delete updated.sharedByEmployeeId;
+      delete updated.shareChannel;
+      delete updated.customerPackageSnapshot;
       if (supplier.cost === undefined) {
         delete updated.totalSupplierCost;
         delete updated.grossProfit;
@@ -650,7 +740,8 @@ export class QuoteService {
     actor: QuoteMutationActor,
   ): Promise<{
     cost?: number;
-    source?: { type: 'TRIP'; sourceId: string; asOf: string };
+    sellingPrice?: number;
+    source?: { type: 'TRIP'; sourceId: string; asOf: string; costingRevision?: number };
     ownerEmployeeId: string;
     ownerEmployeeName: string;
     salesTeamId: string;
@@ -703,30 +794,19 @@ export class QuoteService {
 
     // UX3: Trip-backed Quotes are commercial documents and may only be created
     // or revised from a fresh, authoritative Trip costing result.
-    if (trip.packageReview?.required === true) {
-      throw new QuoteDomainError(
-        409,
-        'PACKAGE_REVIEW_REQUIRED',
-        'Review and apply the latest Lead travel changes before creating or updating its Quote.',
-      );
-    }
-    if (trip.costingStatus !== 'CALCULATED') {
-      throw new QuoteDomainError(
-        422,
-        'TRIP_COSTING_INCOMPLETE',
-        'Recalculate the Trip before creating or updating its Quote.',
-      );
-    }
+    assertTripCostingFresh(trip, 'create or revise a Quote');
     const cost = finiteNonNegative(trip.totalSupplierCost, 'authoritative Trip totalSupplierCost');
     const quoteFields = await this.resolveTripQuoteFields(tx, tripId, trip, customer, quote);
     return {
       ...attribution,
       cost,
+      sellingPrice: finiteNonNegative(trip.totalSellingPrice, 'authoritative Trip totalSellingPrice'),
       quoteFields,
       source: {
         type: 'TRIP',
         sourceId: tripId,
         asOf: typeof trip.updatedAt === 'string' ? trip.updatedAt : new Date().toISOString(),
+        costingRevision: Number(trip.costingRevision || 0),
       },
     };
   }
@@ -786,25 +866,36 @@ export class QuoteService {
             ...(item.description ? { specialRequests: String(item.description) } : {}),
           });
         } else if (item.type === 'TRANSPORT') {
-          const ratePeriodId = requireNonEmptyString(metadata.rateId, `${sourceTripItemId}.metadata.rateId`);
+          const costSource = typeof metadata.costSource === 'string' ? metadata.costSource : 'INVENTORY_CONTRACTED';
+          const ratePeriodId = typeof metadata.rateId === 'string' && metadata.rateId.trim() ? metadata.rateId.trim() : undefined;
+          if (!ratePeriodId && costSource !== 'MANUAL_SUPPLIER_QUOTE') throw new QuoteDomainError(422, 'TRIP_SERVICE_LINKAGE_INCOMPLETE', `${sourceTripItemId} has no transport rate or approved manual supplier quote.`);
           transports.push({
             id: sourceTripItemId,
             sourceTripItemId,
             transportId: requireNonEmptyString(metadata.vehicleCategoryId, `${sourceTripItemId}.metadata.vehicleCategoryId`),
             vehicleCategoryId: metadata.vehicleCategoryId,
-            ratePeriodId,
+            ...(ratePeriodId ? { ratePeriodId } : {}),
             ...(metadata.routeId ? { transportRouteId: metadata.routeId } : {}),
             vehicleType: requireNonEmptyString(metadata.vehicleName, `${sourceTripItemId}.metadata.vehicleName`),
             route: String(metadata.routeName || item.description || metadata.serviceType || 'Trip itinerary service'),
             serviceDate: requireNonEmptyString(metadata.startDate, `${sourceTripItemId}.metadata.startDate`),
             days: positiveInteger(metadata.vehicleDays ?? 1, `${sourceTripItemId}.metadata.vehicleDays`, true),
+            vehicleCount: positiveInteger(metadata.vehicleCount ?? 1, `${sourceTripItemId}.metadata.vehicleCount`, true),
+            chargeableDays: positiveInteger(metadata.chargeableDays ?? metadata.vehicleDays ?? 1, `${sourceTripItemId}.metadata.chargeableDays`, true),
+            ...(Array.isArray(metadata.serviceDays) ? { serviceDays: metadata.serviceDays } : {}),
             passengerCount: positiveInteger(trip.travelerCount ?? 1, 'Trip travelerCount', true),
+            ...(typeof item.supplierCost === 'number' ? { supplierCost: finiteNonNegative(item.supplierCost, `${sourceTripItemId}.supplierCost`) } : {}),
+            costSource,
+            ...(isRecord(metadata.packageSupplierRate) ? { packageSupplierRate: metadata.packageSupplierRate } : {}),
+            ...(typeof metadata.contractedTotalSupplierCost === 'number' ? { originalContractedTotal: metadata.contractedTotalSupplierCost } : {}),
             ...(metadata.pickupLocation ? { pickupLocation: metadata.pickupLocation } : {}),
             ...(metadata.dropoffLocation ? { dropoffLocation: metadata.dropoffLocation } : {}),
             ...(item.description ? { specialRequests: String(item.description) } : {}),
           });
         } else {
-          const ratePeriodId = requireNonEmptyString(metadata.rateId, `${sourceTripItemId}.metadata.rateId`);
+          const costSource = typeof metadata.costSource === 'string' ? metadata.costSource : 'INVENTORY_CONTRACTED';
+          const ratePeriodId = typeof metadata.rateId === 'string' && metadata.rateId.trim() ? metadata.rateId.trim() : undefined;
+          if (!ratePeriodId && costSource !== 'MANUAL_SUPPLIER_QUOTE') throw new QuoteDomainError(422, 'TRIP_SERVICE_LINKAGE_INCOMPLETE', `${sourceTripItemId} has no activity rate or approved manual supplier quote.`);
           const participants = Number(metadata.tickets || 0) ||
             (Number(metadata.adults || 0) + Number(metadata.children || 0)) ||
             Number(trip.travelerCount || 1);
@@ -813,12 +904,18 @@ export class QuoteService {
             sourceTripItemId,
             activityId: requireNonEmptyString(metadata.activityId, `${sourceTripItemId}.metadata.activityId`),
             activityMasterId: metadata.activityId,
-            activityRatePeriodId: ratePeriodId,
+            ...(ratePeriodId ? { activityRatePeriodId: ratePeriodId } : {}),
             name: requireNonEmptyString(metadata.activityName, `${sourceTripItemId}.metadata.activityName`),
             activityName: metadata.activityName,
             serviceDate: requireNonEmptyString(metadata.date, `${sourceTripItemId}.metadata.date`),
             date: metadata.date,
             pax: positiveInteger(participants, `${sourceTripItemId}.participants`, true),
+            pricingModel: metadata.pricingModel,
+            inclusionStatus: metadata.inclusionStatus || 'INCLUDED',
+            ...(typeof item.supplierCost === 'number' ? { supplierCost: finiteNonNegative(item.supplierCost, `${sourceTripItemId}.supplierCost`) } : {}),
+            costSource,
+            ...(isRecord(metadata.packageSupplierRate) ? { packageSupplierRate: metadata.packageSupplierRate } : {}),
+            ...(typeof metadata.contractedTotalSupplierCost === 'number' ? { originalContractedTotal: metadata.contractedTotalSupplierCost } : {}),
             ...(item.description ? { specialRequests: String(item.description) } : {}),
           });
         }
@@ -857,6 +954,13 @@ export class QuoteService {
       transports,
       activities,
       backupAccommodations,
+      ...(trip.supplierCostBreakdown ? { supplierCostBreakdown: trip.supplierCostBreakdown } : {}),
+      pricingMode: trip.pricingMode || 'SELLING_PRICE',
+      pricingInput: trip.pricingInput ?? trip.totalSellingPrice,
+      requiresLowMarginApproval: trip.commercialApproval?.required === true,
+      approval: trip.commercialApproval
+        ? { ...trip.commercialApproval }
+        : { required: false, state: 'NOT_REQUIRED' },
     };
   }
 

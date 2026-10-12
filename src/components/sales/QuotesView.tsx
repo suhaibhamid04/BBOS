@@ -7,6 +7,7 @@ import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import type { CustomerPackageDocument, Quote, QuoteBackupAccommodation, QuoteStatus, Trip } from '../../types';
 import { CustomerPackagePreview } from './CustomerPackagePreview';
+import { isTripCostingFresh } from '../../utils/costingFreshness';
 
 interface QuotesViewProps {
   initialQuoteId?: string;
@@ -23,7 +24,7 @@ const tomorrowPlus = (days: number) => {
 export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNavigate }) => {
   const {
     quotes, trips, customers, createQuote, updateQuote, convertQuoteToBooking,
-    loadTripItinerary, getQuoteBackupAccommodationOptions, getCustomerPackage, shareQuotePackage,
+    loadTripItinerary, recalculateTripCost, getQuoteBackupAccommodationOptions, getCustomerPackage, shareQuotePackage,
   } = useData();
   const { currentUser } = useAuth();
   const [selectedQuoteId, setSelectedQuoteIdState] = useState<string | null>(() =>
@@ -44,10 +45,11 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
   const [customerPackage, setCustomerPackage] = useState<CustomerPackageDocument | null>(null);
   const [packageError, setPackageError] = useState<string | null>(null);
   const [isSharing, setIsSharing] = useState(false);
+  const [isUpdatingCosts, setIsUpdatingCosts] = useState(false);
 
   const canMutate = ['Founder', 'Admin', 'Sales Manager', 'Sales Executive'].includes(currentUser.role);
   const canSeeFinancials = ['Founder', 'Admin', 'Sales Manager', 'Sales Executive'].includes(currentUser.role);
-  const costedTrips = trips.filter(trip => trip.costingStatus === 'CALCULATED');
+  const costedTrips = trips.filter(isTripCostingFresh);
   const selectedTrip = trips.find(trip => trip.id === newTripId);
 
   const setSelectedQuoteId = (id: string | null) => {
@@ -85,7 +87,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
   const createFromTrip = async () => {
     const trip = trips.find(item => item.id === newTripId);
     if (!trip) return notify('Choose a Trip first.');
-    if (trip.costingStatus !== 'CALCULATED') return notify('Recalculate Trip costing before creating a Quote.');
+    if (!isTripCostingFresh(trip)) return notify('Recalculate Trip costing before creating a Quote.');
     try {
       await loadTripItinerary(trip.id);
       const customer = customers.find(item => item.id === trip.customerId);
@@ -185,6 +187,12 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
 
   const shareCustomerPackage = async () => {
     if (!editForm) return;
+    const linkedTrip = editForm.tripId ? trips.find(trip => trip.id === editForm.tripId) : undefined;
+    if (linkedTrip && !isTripCostingFresh(linkedTrip)) {
+      const message = 'Package pricing needs updating before you can share this Quote.';
+      setPackageError(message);
+      throw new Error(message);
+    }
     setPackageError(null);
     setIsSharing(true);
     try {
@@ -201,15 +209,36 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
     }
   };
 
+  const updateLinkedTripCosts = async (trip: Trip) => {
+    if (trip.packageReview?.required) {
+      notify('Apply the latest Lead changes in the Package before updating costs.');
+      if (onNavigate) onNavigate('trips', trip.id);
+      return;
+    }
+    setIsUpdatingCosts(true);
+    try {
+      await recalculateTripCost(trip.id);
+      notify('Package costs updated. You can now save a fresh Quote revision.');
+    } catch (error: any) {
+      notify(error.message || 'We could not update package costs. Review the supplier pricing and try again.');
+    } finally {
+      setIsUpdatingCosts(false);
+    }
+  };
+
   if (editForm) {
+    const linkedTrip = editForm.tripId ? trips.find(trip => trip.id === editForm.tripId) : undefined;
+    const quoteTripStale = Boolean(linkedTrip && !isTripCostingFresh(linkedTrip));
+    const historicalSharedQuote = Boolean(editForm.sharedAt);
+    const quoteFinancialsAreCurrent = !quoteTripStale || historicalSharedQuote;
     const previewFinal = Math.max(0, Number(editForm.totalAmount || 0) - Number(editForm.discountAmount || 0));
-    const previewProfit = editForm.totalSupplierCost === undefined ? undefined : previewFinal - editForm.totalSupplierCost;
+    const previewProfit = !quoteFinancialsAreCurrent || editForm.totalSupplierCost === undefined ? undefined : previewFinal - editForm.totalSupplierCost;
     const previewMargin = previewProfit === undefined || previewFinal <= 0 ? undefined : Number(((previewProfit / previewFinal) * 100).toFixed(1));
     const legacy = !editForm.tripId;
     return (
       <div id="quote-builder-editor" className="space-y-5">
         {toast && <Toast message={toast} />}
-        {customerPackage && <CustomerPackagePreview value={customerPackage} onClose={() => setCustomerPackage(null)} onShare={shareCustomerPackage} isSharing={isSharing} error={packageError} />}
+        {customerPackage && <CustomerPackagePreview value={customerPackage} onClose={() => setCustomerPackage(null)} onShare={shareCustomerPackage} isSharing={isSharing} shareDisabled={quoteTripStale} shareDisabledMessage={quoteTripStale ? 'Package pricing needs updating before this Quote can be shared again.' : undefined} error={packageError} />}
         <div className="bg-white rounded-2xl border border-slate-200 p-4 flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <button type="button" onClick={() => setSelectedQuoteId(null)} className="p-2 rounded-xl hover:bg-slate-100" aria-label="Back to Quotes"><ArrowLeft className="w-5 h-5" /></button>
@@ -225,14 +254,17 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
           <div className="flex items-center gap-2">
             {editForm.leadId && onNavigate && <button data-testid="quote-return-to-lead" type="button" onClick={() => onNavigate('lead-detail', editForm.leadId)} className="px-3 py-2 text-xs font-bold rounded-xl border border-slate-200 bg-white">Return to Lead</button>}
             {(editForm.versionHistory?.length || 0) > 0 && <button type="button" onClick={() => setShowHistory(true)} className="px-3 py-2 text-xs font-bold rounded-xl bg-slate-100"><History className="inline w-4 h-4 mr-1" />History</button>}
-            <button data-testid="open-customer-package" type="button" onClick={openCustomerPackage} className="px-3 py-2 text-xs font-bold rounded-xl border border-slate-200 bg-white"><Eye className="inline w-4 h-4 mr-1" />Customer Package</button>
-            {canMutate && <button data-testid="save-quote" type="button" onClick={saveQuote} className="px-4 py-2 text-xs font-bold rounded-xl bg-[#7056EE] text-white">Save revision</button>}
+            <button data-testid="open-customer-package" type="button" disabled={quoteTripStale && !historicalSharedQuote} onClick={openCustomerPackage} className="px-3 py-2 text-xs font-bold rounded-xl border border-slate-200 bg-white disabled:cursor-not-allowed disabled:opacity-50"><Eye className="inline w-4 h-4 mr-1" />Customer Package</button>
+            {canMutate && <button data-testid="save-quote" type="button" disabled={quoteTripStale} onClick={saveQuote} className="px-4 py-2 text-xs font-bold rounded-xl bg-[#7056EE] text-white disabled:cursor-not-allowed disabled:bg-slate-300">Save revision</button>}
             {canMutate && editForm.status === 'SENT' && <button data-testid="convert-quote" type="button" onClick={convert} className="px-4 py-2 text-xs font-bold rounded-xl bg-emerald-600 text-white"><Check className="inline w-4 h-4 mr-1" />Convert</button>}
           </div>
         </div>
 
-        {editForm.requiresLowMarginApproval && <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs font-semibold text-amber-900">Low-margin approval is required: {editForm.approval?.state || 'PENDING'}.</div>}
+        {editForm.requiresLowMarginApproval && editForm.approval?.state === 'APPROVED' && <div data-testid="quote-low-margin-approved" className="rounded-xl border border-emerald-300 bg-emerald-50 p-3 text-xs font-semibold text-emerald-900">Commercial exception approved{editForm.approval.currentDecision?.reviewerName ? ` by ${editForm.approval.currentDecision.reviewerName}` : ''}. Sharing is available while these economics remain unchanged.</div>}
+        {editForm.requiresLowMarginApproval && editForm.approval?.state === 'REJECTED' && <div data-testid="quote-low-margin-rejected" className="rounded-xl border border-rose-300 bg-rose-50 p-3 text-xs font-semibold text-rose-900">Commercial approval was not granted. Adjust package pricing and resubmit for approval.{editForm.approval.currentDecision?.note ? ` ${editForm.approval.currentDecision.note}` : ''}</div>}
+        {editForm.requiresLowMarginApproval && !['APPROVED', 'REJECTED'].includes(editForm.approval?.state || '') && <div data-testid="quote-low-margin-review-required" className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs font-semibold text-amber-900">Commercial approval required. Waiting for Sales Manager approval before this Quote can be shared.</div>}
         {editForm.sharedAt && <div data-testid="quote-share-status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-semibold text-emerald-900">Shared via {editForm.shareChannel || 'DOCUMENT'} on {new Date(editForm.sharedAt).toLocaleString('en-IN')} by {editForm.sharedByEmployeeId}.</div>}
+        {quoteTripStale && linkedTrip && <div data-testid="quote-costing-warning" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="font-black">Package pricing needs updating before you can share this Quote.</p><p className="mt-1 text-xs">{historicalSharedQuote ? 'This previously shared Quote remains available as a historical snapshot. A new revision requires current costs.' : 'Supplier cost, profit, and margin are not current.'}</p></div><button data-testid="quote-update-costs" type="button" disabled={isUpdatingCosts} onClick={() => void updateLinkedTripCosts(linkedTrip)} className="rounded-lg bg-amber-900 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{isUpdatingCosts ? 'Updating…' : linkedTrip.packageReview?.required ? 'Review Package' : 'Update Costs'}</button></div></div>}
 
         <div className="grid xl:grid-cols-[1fr_340px] gap-5">
           <div className="space-y-4">
@@ -282,12 +314,12 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
             <MoneyInput testId="quote-discount" label="Discount" value={editForm.discountAmount} disabled={!canMutate} onChange={value => setEditForm({ ...editForm, discountAmount: value })} />
             <label className="block text-xs font-semibold text-slate-600">Valid until<input data-testid="quote-valid-until" type="date" value={editForm.validUntil} disabled={!canMutate} onChange={event => setEditForm({ ...editForm, validUntil: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 p-2" /></label>
             <div className="border-t border-slate-200 pt-3 space-y-2 text-xs">
-              {canSeeFinancials && <Row label="Supplier cost" value={editForm.totalSupplierCost === undefined ? 'Pending' : money(editForm.totalSupplierCost)} testId="quote-supplier-cost" />}
+              {canSeeFinancials && <Row label={quoteTripStale && historicalSharedQuote ? 'Historical supplier cost' : 'Supplier cost'} value={!quoteFinancialsAreCurrent ? 'Needs update' : editForm.totalSupplierCost === undefined ? 'Pending' : money(editForm.totalSupplierCost)} testId="quote-supplier-cost" />}
               <Row label="Selling price" value={money(editForm.totalAmount)} />
               <Row label="Discount" value={`-${money(editForm.discountAmount)}`} />
               <Row label="Final selling price" value={money(previewFinal)} testId="quote-final-price" strong />
-              {canSeeFinancials && <Row label="Profit" value={previewProfit === undefined ? 'Pending' : money(previewProfit)} testId="quote-profit" />}
-              {canSeeFinancials && <Row label="Margin" value={previewMargin === undefined ? 'Pending' : `${previewMargin}%`} testId="quote-margin" />}
+              {canSeeFinancials && <Row label={quoteTripStale && historicalSharedQuote ? 'Historical profit' : 'Profit'} value={previewProfit === undefined ? '—' : money(previewProfit)} testId="quote-profit" />}
+              {canSeeFinancials && <Row label={quoteTripStale && historicalSharedQuote ? 'Historical margin' : 'Margin'} value={previewMargin === undefined ? '—' : `${previewMargin}%`} testId="quote-margin" />}
             </div>
             {canMutate && <label className="block text-xs font-semibold text-slate-600">Workflow status<select data-testid="quote-status" value={editForm.status} onChange={event => setEditForm({ ...editForm, status: event.target.value as QuoteStatus })} className="mt-1 w-full rounded-lg border border-slate-200 p-2"><option value="DRAFT">DRAFT</option><option value="PENDING_APPROVAL">PENDING_APPROVAL</option><option value="SENT">SENT</option><option value="VIEWED">VIEWED</option><option value="REJECTED">REJECTED</option><option value="EXPIRED">EXPIRED</option></select></label>}
           </aside>

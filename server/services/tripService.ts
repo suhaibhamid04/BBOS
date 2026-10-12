@@ -1,4 +1,5 @@
-import type { AuditLog, ItineraryDay, ItineraryItem, Trip } from '../../src/types/index.js';
+import type { AuditLog, ItineraryDay, ItineraryItem, PackagePricingMode, Trip } from '../../src/types/index.js';
+import { assessLowMarginPolicy, calculatePackageEconomics, MAX_PACKAGE_AMOUNT } from '../../src/utils/packageCommercials.js';
 import {
   FirestoreConversionStorageProvider,
   type ConversionStorageProvider,
@@ -13,6 +14,10 @@ import {
   validateRoomAllocationsForCategories,
 } from '../../src/services/accommodationEngine.js';
 import type { PackageSupplierRate, PackageSupplierRateInput, RoomAllocation, RoomCategory, RatePeriod, TaxTreatment } from '../../src/types/accommodation.js';
+import { calculateTransportCost } from '../../src/services/transportEngine.js';
+import { calculateActivityCost } from '../../src/services/activityEngine.js';
+import type { TransportServiceDay } from '../../src/types/transport.js';
+import { APP_CONFIG } from '../../src/config.js';
 
 type UnknownRecord = Record<string, any>;
 
@@ -45,14 +50,15 @@ const MUTATION_ROLES = new Set(['Founder', 'Admin', 'Sales Manager', 'Sales Exec
 const WRITABLE_FIELDS = new Set([
   'customerId', 'leadId', 'title', 'destination', 'startDate', 'endDate',
   'travelerCount', 'adults', 'children', 'tripType', 'currency', 'budget',
-  'childAges', 'totalSellingPrice',
+  'childAges', 'totalSellingPrice', 'pricingMode', 'pricingInput', 'expectedCostingRevision',
 ]);
 const SERVER_CONTROLLED_FIELDS = new Set([
   'id', 'status', 'totalSupplierCost', 'totalCost', 'grossProfit', 'grossMargin',
   'profit', 'margin', 'assignedSalesEmployeeId', 'salesTeamId',
   'assignedReservationsEmployeeId', 'assignedOperationsEmployeeId',
   'createdByEmployeeId', 'updatedByEmployeeId', 'createdAt', 'updatedAt',
-  'isDemo', 'schemaVersion', 'costingStatus', 'packageReview',
+  'isDemo', 'schemaVersion', 'costingStatus', 'costingRevision',
+  'costingCalculatedRevision', 'packageReview', 'supplierCostBreakdown', 'commercialApproval',
 ]);
 const ITINERARY_DAY_FIELDS = new Set(['date', 'title', 'description', 'location', 'notes']);
 const ITINERARY_ITEM_FIELDS = new Set([
@@ -72,6 +78,7 @@ const NESTED_PROTECTED_ITINERARY_FIELDS = new Set([
 ]);
 const PACKAGE_RATE_MAX = 100_000_000;
 const PACKAGE_RATE_INPUT_FIELDS = new Set(['entryMode', 'amount', 'taxTreatment', 'supplierQuoteReference', 'overrideReason']);
+const SERVICE_PACKAGE_RATE_INPUT_FIELDS = new Set([...PACKAGE_RATE_INPUT_FIELDS, 'childAmount']);
 const PACKAGE_RATE_TAXES = new Set<TaxTreatment>(['NET', 'INCLUSIVE', 'GST_5', 'GST_18', 'CUSTOM_TAX', 'NEEDS_CONFIRMATION']);
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -172,15 +179,187 @@ function validatePackageRateProposal(value: unknown): PackageSupplierRateInput |
   return { entryMode: value.entryMode, amount: value.amount, taxTreatment: value.taxTreatment as TaxTreatment, ...(supplierQuoteReference ? { supplierQuoteReference } : {}), ...(overrideReason ? { overrideReason } : {}) };
 }
 
+function validateServicePackageRateProposal(
+  value: unknown,
+  modes: readonly PackageSupplierRateInput['entryMode'][],
+  allowChildAmount = false,
+): PackageSupplierRateInput | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) throw new TripDomainError(400, 'INVALID_PACKAGE_RATE', 'Package supplier rate must be an object.');
+  const unsupported = Object.keys(value).find(key => !SERVICE_PACKAGE_RATE_INPUT_FIELDS.has(key));
+  if (unsupported) throw new TripDomainError(400, 'SERVER_CONTROLLED_PACKAGE_RATE_FIELD', `${unsupported} is not accepted from the client.`);
+  if (!modes.includes(value.entryMode as PackageSupplierRateInput['entryMode'])) {
+    throw new TripDomainError(400, 'INVALID_PACKAGE_RATE_MODE', 'The package supplier-rate unit is not valid for this service.');
+  }
+  if (typeof value.amount !== 'number' || !Number.isFinite(value.amount) || value.amount <= 0 || value.amount > PACKAGE_RATE_MAX) {
+    throw new TripDomainError(400, 'INVALID_PACKAGE_RATE_AMOUNT', `Package supplier rate must be greater than zero and no more than ${PACKAGE_RATE_MAX}.`);
+  }
+  if (value.childAmount !== undefined && (!allowChildAmount || typeof value.childAmount !== 'number' || !Number.isFinite(value.childAmount) || value.childAmount < 0 || value.childAmount > PACKAGE_RATE_MAX)) {
+    throw new TripDomainError(400, 'INVALID_PACKAGE_RATE_AMOUNT', 'Child supplier rate must be a finite, non-negative amount.');
+  }
+  if (!PACKAGE_RATE_TAXES.has(value.taxTreatment as TaxTreatment)) throw new TripDomainError(400, 'INVALID_PACKAGE_RATE_TAX', 'Package supplier rate tax treatment is invalid.');
+  const optionalText = (key: 'supplierQuoteReference' | 'overrideReason') => {
+    if (value[key] === undefined) return undefined;
+    if (typeof value[key] !== 'string') throw new TripDomainError(400, 'INVALID_PACKAGE_RATE_REFERENCE', `${key} must be text.`);
+    return value[key].trim().slice(0, 500) || undefined;
+  };
+  return {
+    entryMode: value.entryMode as PackageSupplierRateInput['entryMode'], amount: value.amount,
+    ...(value.childAmount !== undefined ? { childAmount: value.childAmount } : {}),
+    taxTreatment: value.taxTreatment as TaxTreatment,
+    ...(optionalText('supplierQuoteReference') ? { supplierQuoteReference: optionalText('supplierQuoteReference') } : {}),
+    ...(optionalText('overrideReason') ? { overrideReason: optionalText('overrideReason') } : {}),
+  };
+}
+
 function packageRateSignature(value: unknown): string | null {
   if (!isRecord(value)) return null;
   return JSON.stringify({
     entryMode: value.entryMode,
     amount: value.amount,
+    childAmount: value.childAmount ?? null,
     taxTreatment: value.taxTreatment,
     supplierQuoteReference: value.supplierQuoteReference || null,
     overrideReason: value.overrideReason || null,
   });
+}
+
+const TRIP_COSTING_FIELDS = new Set([
+  'customerId', 'leadId', 'title', 'destination', 'startDate', 'endDate',
+  'travelerCount', 'adults', 'children', 'childAges', 'tripType', 'currency',
+]);
+const ITINERARY_DAY_COMMERCIAL_FIELDS = ['date', 'title', 'description', 'location'] as const;
+
+function canonicalValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalValue);
+  if (!isRecord(value)) return value === undefined ? null : value;
+  return Object.fromEntries(
+    Object.keys(value).sort().map(key => [key, canonicalValue(value[key])]),
+  );
+}
+
+function valuesEqual(left: unknown, right: unknown): boolean {
+  return JSON.stringify(canonicalValue(left)) === JSON.stringify(canonicalValue(right));
+}
+
+function tripCostingChanged(before: UnknownRecord, input: UnknownRecord): boolean {
+  return Object.keys(input).some(field =>
+    TRIP_COSTING_FIELDS.has(field) && !valuesEqual(before[field], input[field]),
+  );
+}
+
+function itineraryDayCostingChanged(before: ItineraryDay, after: ItineraryDay): boolean {
+  return ITINERARY_DAY_COMMERCIAL_FIELDS.some(field => !valuesEqual(before[field], after[field]));
+}
+
+function packageRateEconomicValue(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  return {
+    entryMode: value.entryMode,
+    amount: value.amount,
+    childAmount: value.childAmount ?? null,
+    taxTreatment: value.taxTreatment,
+  };
+}
+
+function itineraryItemCommercialValue(item: ItineraryItem | UnknownRecord): UnknownRecord {
+  const metadata = isRecord(item.metadata) ? { ...item.metadata } : item.metadata;
+  if (isRecord(metadata) && 'packageSupplierRate' in metadata) {
+    metadata.packageSupplierRate = packageRateEconomicValue(metadata.packageSupplierRate);
+  }
+  if (item.type === 'TRANSPORT' && isRecord(metadata)) {
+    return {
+      type: item.type, inventoryId: item.inventoryId, sellingPrice: item.sellingPrice,
+      metadata: {
+        vehicleCategoryId: metadata.vehicleCategoryId, rateId: metadata.rateId,
+        serviceType: metadata.serviceType, pricingUnit: metadata.pricingUnit,
+        startDate: metadata.startDate, vehicleCount: metadata.vehicleCount,
+        chargeableDays: metadata.chargeableDays, nightHalts: metadata.nightHalts,
+        occurrences: metadata.occurrences, distanceKm: metadata.distanceKm, hours: metadata.hours,
+        packageSupplierRate: metadata.packageSupplierRate,
+        serviceDays: Array.isArray(metadata.serviceDays) ? metadata.serviceDays.map(day => isRecord(day) ? {
+          dayNumber: day.dayNumber, date: day.date, serviceType: day.serviceType,
+          chargeableTransportDay: day.chargeableTransportDay,
+        } : day) : undefined,
+      },
+    };
+  }
+  if (item.type === 'ACTIVITY' && isRecord(metadata)) {
+    return {
+      type: item.type, inventoryId: item.inventoryId, sellingPrice: item.sellingPrice,
+      metadata: {
+        activityId: metadata.activityId, rateId: metadata.rateId, pricingModel: metadata.pricingModel,
+        date: metadata.date, adults: metadata.adults, children: metadata.children, infants: metadata.infants,
+        vehicles: metadata.vehicles, groups: metadata.groups, tickets: metadata.tickets,
+        hours: metadata.hours, days: metadata.days, sessions: metadata.sessions, units: metadata.units,
+        inclusionStatus: metadata.inclusionStatus, packageSupplierRate: metadata.packageSupplierRate,
+      },
+    };
+  }
+  return {
+    type: item.type,
+    title: item.title,
+    description: item.description,
+    startTime: item.startTime,
+    endTime: item.endTime,
+    referenceId: item.referenceId,
+    inventoryId: item.inventoryId,
+    sellingPrice: item.sellingPrice,
+    metadata,
+  };
+}
+
+function itineraryItemCostingChanged(before: ItineraryItem, after: ItineraryItem): boolean {
+  return !valuesEqual(itineraryItemCommercialValue(before), itineraryItemCommercialValue(after));
+}
+
+function normalizeTransportServiceDays(
+  value: unknown,
+  startDate: string,
+  fallbackDays: number,
+  serviceType: string,
+  routeName: string,
+): { serviceDays: TransportServiceDay[]; chargeableDays: number } {
+  const rawDays = Array.isArray(value) && value.length
+    ? value
+    : Array.from({ length: fallbackDays }, (_, index) => {
+        const date = new Date(`${startDate}T00:00:00Z`);
+        date.setUTCDate(date.getUTCDate() + index);
+        return { dayNumber: index + 1, date: date.toISOString().slice(0, 10), serviceType, route: routeName, chargeableTransportDay: true };
+      });
+  if (rawDays.length > 120) throw new TripDomainError(400, 'INVALID_TRANSPORT_SERVICE_DAYS', 'Transport service days cannot exceed 120 records.');
+  const serviceDays = rawDays.map((raw, index) => {
+    if (!isRecord(raw)) throw new TripDomainError(400, 'INVALID_TRANSPORT_SERVICE_DAYS', `Transport service day ${index + 1} must be an object.`);
+    const dayNumber = nonNegativeInteger(raw.dayNumber, `serviceDays[${index}].dayNumber`);
+    if (dayNumber < 1) throw new TripDomainError(400, 'INVALID_TRANSPORT_SERVICE_DAYS', 'Transport day numbers must start at 1.');
+    const places = raw.places === undefined ? undefined : Array.isArray(raw.places) && raw.places.every(item => typeof item === 'string')
+      ? raw.places.map(item => item.trim()).filter(Boolean).slice(0, 30)
+      : (() => { throw new TripDomainError(400, 'INVALID_TRANSPORT_SERVICE_DAYS', 'Transport places must be text values.'); })();
+    const optionalText = (key: 'from' | 'to' | 'route' | 'title' | 'overnightLocation' | 'notes') => raw[key] === undefined ? undefined : optionalNonEmptyString(raw[key], `serviceDays[${index}].${key}`);
+    return withoutUndefined({
+      dayNumber,
+      date: validateDate(raw.date, `serviceDays[${index}].date`),
+      serviceType: optionalNonEmptyString(raw.serviceType, `serviceDays[${index}].serviceType`) || serviceType,
+      from: optionalText('from'), to: optionalText('to'), route: optionalText('route'), places,
+      title: optionalText('title'), overnightLocation: optionalText('overnightLocation'), notes: optionalText('notes'),
+      chargeableTransportDay: raw.chargeableTransportDay !== false,
+    }) as TransportServiceDay;
+  });
+  const chargeableDays = new Set(serviceDays.filter(day => day.chargeableTransportDay).map(day => day.date)).size;
+  if (chargeableDays < 1) throw new TripDomainError(400, 'INVALID_TRANSPORT_SERVICE_DAYS', 'At least one transport service date must be chargeable.');
+  return { serviceDays, chargeableDays };
+}
+
+function packageRateSnapshot(
+  proposal: PackageSupplierRateInput | undefined,
+  actor: TripMutationActor,
+  now: string,
+  originalContractedTotal?: number,
+): PackageSupplierRate | undefined {
+  return proposal ? {
+    ...proposal, enteredByEmployeeId: actor.employeeId, enteredAt: now,
+    ...(originalContractedTotal !== undefined ? { originalContractedTotal } : {}),
+  } : undefined;
 }
 
 async function resolveInventoryItem(tx: ConversionTransaction, input: UnknownRecord, trip: Trip, actor: TripMutationActor, now: string): Promise<UnknownRecord> {
@@ -312,55 +491,95 @@ async function resolveInventoryItem(tx: ConversionTransaction, input: UnknownRec
   }
 
   if (input.type === 'TRANSPORT') {
-    const rateId = nonEmptyString(metadata.rateId, 'metadata.rateId');
     const vehicleCategoryId = nonEmptyString(metadata.vehicleCategoryId, 'metadata.vehicleCategoryId');
     const startDate = validateDate(metadata.startDate, 'metadata.startDate');
     const serviceType = nonEmptyString(metadata.serviceType, 'metadata.serviceType');
+    const vehicleCount = metadata.vehicleCount === undefined ? 1 : nonNegativeInteger(metadata.vehicleCount, 'metadata.vehicleCount');
+    const fallbackDays = metadata.vehicleDays === undefined ? 1 : nonNegativeInteger(metadata.vehicleDays, 'metadata.vehicleDays');
+    if (vehicleCount < 1 || fallbackDays < 1) throw new TripDomainError(400, 'INVALID_ITINERARY_FIELD', 'Transport vehicle count and days must be at least 1.');
+    const routeName = optionalNonEmptyString(metadata.routeName, 'metadata.routeName') || `${fallbackDays} day transport`;
+    const { serviceDays, chargeableDays } = normalizeTransportServiceDays(metadata.serviceDays, startDate, fallbackDays, serviceType, routeName);
+    if (serviceDays.some(day => day.date < trip.startDate || day.date > trip.endDate)) {
+      throw new TripDomainError(422, 'TRANSPORT_DAY_OUTSIDE_TRIP', 'Every transport service day must fall within the Trip travel dates.');
+    }
+    const packageRateProposal = validateServicePackageRateProposal(metadata.packageRateRequest, ['PER_VEHICLE_DAY', 'TOTAL_SERVICE']);
+    const rateId = optionalNonEmptyString(metadata.rateId, 'metadata.rateId');
     const [vehicle, rate] = await Promise.all([
       tx.get('vehicle_categories', vehicleCategoryId),
-      tx.get('transport_rate_periods', rateId),
+      rateId ? tx.get('transport_rate_periods', rateId) : Promise.resolve(null),
     ]);
-    if (!vehicle || !rate) throw new TripDomainError(422, 'INVENTORY_REFERENCE_NOT_FOUND', 'Selected transport inventory or rate no longer exists.');
-    if (!vehicle.active || rate.status !== 'ACTIVE') throw new TripDomainError(409, 'INVENTORY_INACTIVE', 'Only active transport inventory may be newly selected.');
-    if (rate.vehicleCategoryId !== vehicleCategoryId || rate.serviceType !== serviceType || !dateIsWithin(startDate, rate.validFrom, rate.validTo)) {
+    if (!vehicle || (!rate && !packageRateProposal)) throw new TripDomainError(422, rateId ? 'INVENTORY_REFERENCE_NOT_FOUND' : 'PACKAGE_RATE_REQUIRED', rateId ? 'Selected transport inventory or rate no longer exists.' : 'No contracted transport rate is available. Enter a package supplier rate to continue.');
+    if (!vehicle.active || (rate && rate.status !== 'ACTIVE')) throw new TripDomainError(409, 'INVENTORY_INACTIVE', 'Only active transport inventory may be newly selected.');
+    if (rate && (rate.vehicleCategoryId !== vehicleCategoryId || rate.serviceType !== serviceType || !dateIsWithin(startDate, rate.validFrom, rate.validTo))) {
       throw new TripDomainError(422, 'INVENTORY_RATE_MISMATCH', 'The selected transport rate does not match the vehicle, service type, or service date.');
     }
-    const supplier = await tx.get('suppliers', rate.supplierId);
+    const supplements = rate ? await tx.findByField('transport_supplements', 'ratePeriodId', rate.id, 100) : [];
+    const contracted = rate ? calculateTransportCost({ ratePeriod: rate, supplements, serviceParams: {
+      vehicleDays: chargeableDays, chargeableDays, vehicleCount,
+      nightHalts: Number(metadata.nightHalts || 0), occurrences: Number(metadata.occurrences || 1),
+      distanceKm: Number(metadata.distanceKm || 0), hours: Number(metadata.hours || 0),
+    } }) : null;
+    const contractedTotalSupplierCost = contracted?.available ? contracted.totalAmount : undefined;
+    const packageSupplierRate = packageRateSnapshot(packageRateProposal, actor, now, contractedTotalSupplierCost);
+    const supplier = rate?.supplierId ? await tx.get('suppliers', rate.supplierId) : null;
+    const { packageRateRequest: _packageRateRequest, ...safeMetadata } = metadata;
     return {
       ...input,
       referenceId: vehicleCategoryId,
       inventoryId: vehicleCategoryId,
-      title: `${vehicle.displayName || vehicle.name} — ${supplier?.name || 'Contracted supplier'} — ${rate.pricingUnit}`,
+      title: `${vehicle.displayName || vehicle.name} — ${vehicleCount} vehicle${vehicleCount === 1 ? '' : 's'} — ${chargeableDays} chargeable day${chargeableDays === 1 ? '' : 's'}`,
       metadata: {
-        ...metadata, inventoryType: 'TRANSPORT', vehicleCategoryId,
-        vehicleName: vehicle.displayName || vehicle.name, rateId, supplierId: rate.supplierId,
-        supplierName: supplier?.name, serviceType, pricingUnit: rate.pricingUnit, startDate,
+        ...safeMetadata, inventoryType: 'TRANSPORT', vehicleCategoryId,
+        vehicleName: vehicle.displayName || vehicle.name,
+        ...(rate ? { rateId: rate.id, supplierId: rate.supplierId } : {}),
+        supplierName: supplier?.name, serviceType, pricingUnit: rate?.pricingUnit || 'PER_DAY', startDate,
+        vehicleDays: chargeableDays, vehicleCount, chargeableDays,
+        packagePricingBasis: 'PER_VEHICLE_PER_DAY', serviceDays,
+        costSource: packageSupplierRate ? (rate ? 'PACKAGE_RATE_OVERRIDE' : 'MANUAL_SUPPLIER_QUOTE') : 'INVENTORY_CONTRACTED',
+        ...(packageSupplierRate ? { packageSupplierRate } : {}),
+        ...(contractedTotalSupplierCost !== undefined ? { contractedTotalSupplierCost } : {}),
       },
     };
   }
 
   const activityId = nonEmptyString(metadata.activityId, 'metadata.activityId');
-  const rateId = nonEmptyString(metadata.rateId, 'metadata.rateId');
   const date = validateDate(metadata.date, 'metadata.date');
+  if (date < trip.startDate || date > trip.endDate) throw new TripDomainError(422, 'ACTIVITY_DAY_OUTSIDE_TRIP', 'Activity date must fall within the Trip travel dates.');
+  const inclusionStatus = metadata.inclusionStatus === undefined ? 'INCLUDED' : metadata.inclusionStatus;
+  if (!['INCLUDED', 'OPTIONAL', 'NOT_INCLUDED'].includes(inclusionStatus)) throw new TripDomainError(400, 'INVALID_ACTIVITY_INCLUSION', 'Activity inclusion must be INCLUDED, OPTIONAL, or NOT_INCLUDED.');
+  const packageRateProposal = validateServicePackageRateProposal(metadata.packageRateRequest, ['PER_PERSON', 'PER_CHILD', 'PER_GROUP', 'PER_UNIT', 'FLAT_TOTAL', 'TOTAL_SERVICE'], true);
+  const rateId = optionalNonEmptyString(metadata.rateId, 'metadata.rateId');
   const [activity, rate] = await Promise.all([
     tx.get('activity_masters', activityId),
-    tx.get('activity_rate_periods', rateId),
+    rateId ? tx.get('activity_rate_periods', rateId) : Promise.resolve(null),
   ]);
-  if (!activity || !rate) throw new TripDomainError(422, 'INVENTORY_REFERENCE_NOT_FOUND', 'Selected activity inventory or rate no longer exists.');
-  if (!activity.active || rate.status !== 'ACTIVE') throw new TripDomainError(409, 'INVENTORY_INACTIVE', 'Only active activity inventory may be newly selected.');
-  if (rate.activityId !== activityId || !dateIsWithin(date, rate.validFrom, rate.validTo)) {
+  if (!activity || (!rate && !packageRateProposal)) throw new TripDomainError(422, rateId ? 'INVENTORY_REFERENCE_NOT_FOUND' : 'PACKAGE_RATE_REQUIRED', rateId ? 'Selected activity inventory or rate no longer exists.' : 'No contracted activity rate is available. Enter a package supplier rate to continue.');
+  if (!activity.active || (rate && rate.status !== 'ACTIVE')) throw new TripDomainError(409, 'INVENTORY_INACTIVE', 'Only active activity inventory may be newly selected.');
+  if (rate && (rate.activityId !== activityId || !dateIsWithin(date, rate.validFrom, rate.validTo))) {
     throw new TripDomainError(422, 'INVENTORY_RATE_MISMATCH', 'The selected activity rate does not match the activity or service date.');
   }
-  const supplier = await tx.get('suppliers', rate.supplierId);
+  const contracted = rate ? calculateActivityCost({ ratePeriod: rate, params: {
+    adults: Number(metadata.adults || 0), children: Number(metadata.children || 0), infants: Number(metadata.infants || 0),
+    vehicles: Number(metadata.vehicles || 1), groups: Number(metadata.groups || 1), tickets: Number(metadata.tickets || 1),
+    hours: Number(metadata.hours || 1), days: Number(metadata.days || 1), sessions: Number(metadata.sessions || 1), units: Number(metadata.units || 1),
+  } }) : null;
+  const contractedTotalSupplierCost = contracted?.available ? contracted.totalAmount : undefined;
+  const packageSupplierRate = packageRateSnapshot(packageRateProposal, actor, now, contractedTotalSupplierCost);
+  const supplier = rate?.supplierId ? await tx.get('suppliers', rate.supplierId) : null;
+  const { packageRateRequest: _packageRateRequest, ...safeMetadata } = metadata;
   return {
     ...input,
     referenceId: activityId,
     inventoryId: activityId,
     title: `${activity.name}${activity.duration ? ` — ${activity.duration}` : ''}`,
     metadata: {
-      ...metadata, inventoryType: 'ACTIVITY', activityId, activityName: activity.name,
-      rateId, supplierId: rate.supplierId, supplierName: supplier?.name,
-      pricingModel: rate.pricingModel, date, duration: activity.duration,
+      ...safeMetadata, inventoryType: 'ACTIVITY', activityId, activityName: activity.name,
+      ...(rate ? { rateId: rate.id, supplierId: rate.supplierId } : { ...(activity.supplierId ? { supplierId: activity.supplierId } : {}) }), supplierName: supplier?.name,
+      pricingModel: rate?.pricingModel || packageRateProposal?.entryMode || 'FLAT_TOTAL', date, duration: activity.duration,
+      inclusionStatus,
+      costSource: packageSupplierRate ? (rate ? 'PACKAGE_RATE_OVERRIDE' : 'MANUAL_SUPPLIER_QUOTE') : 'INVENTORY_CONTRACTED',
+      ...(packageSupplierRate ? { packageSupplierRate } : {}),
+      ...(contractedTotalSupplierCost !== undefined ? { contractedTotalSupplierCost } : {}),
     },
   };
 }
@@ -389,6 +608,24 @@ function validateTripFields(value: UnknownRecord): UnknownRecord {
   }
 
   const totalSellingPrice = finiteNonNegative(value.totalSellingPrice, 'totalSellingPrice');
+  if (totalSellingPrice > MAX_PACKAGE_AMOUNT) {
+    throw new TripDomainError(400, 'INVALID_TRIP_FIELD', `totalSellingPrice cannot exceed ${MAX_PACKAGE_AMOUNT}.`);
+  }
+  const pricingMode: PackagePricingMode = value.pricingMode === undefined
+    ? 'SELLING_PRICE'
+    : value.pricingMode;
+  if (!['SELLING_PRICE', 'TARGET_PROFIT', 'TARGET_MARGIN'].includes(pricingMode)) {
+    throw new TripDomainError(400, 'INVALID_PRICING_MODE', 'Pricing mode is not recognized.');
+  }
+  const pricingInput = finiteNonNegative(
+    value.pricingInput === undefined ? totalSellingPrice : value.pricingInput,
+    'pricingInput',
+  );
+  if (pricingInput > MAX_PACKAGE_AMOUNT || (pricingMode === 'TARGET_MARGIN' && pricingInput >= 100)) {
+    throw new TripDomainError(400, 'INVALID_PRICING_INPUT', pricingMode === 'TARGET_MARGIN'
+      ? 'Target margin must be between 0 and less than 100%.'
+      : `Pricing input cannot exceed ${MAX_PACKAGE_AMOUNT}.`);
+  }
   const budget = value.budget === undefined ? undefined : finiteNonNegative(value.budget, 'budget');
   const currency = nonEmptyString(value.currency, 'currency').toUpperCase();
   if (!/^[A-Z]{3}$/.test(currency)) {
@@ -410,19 +647,13 @@ function validateTripFields(value: UnknownRecord): UnknownRecord {
     currency,
     ...(budget !== undefined ? { budget } : {}),
     totalSellingPrice,
+    pricingMode,
+    pricingInput,
   };
 }
 
 function calculateFinancials(totalSellingPrice: number, totalSupplierCost: number) {
-  const grossProfit = totalSellingPrice - totalSupplierCost;
-  return {
-    totalSupplierCost,
-    totalSellingPrice,
-    grossProfit,
-    grossMargin: totalSellingPrice > 0
-      ? Number(((grossProfit / totalSellingPrice) * 100).toFixed(1))
-      : 0,
-  };
+  return calculatePackageEconomics(totalSupplierCost, 'SELLING_PRICE', totalSellingPrice);
 }
 
 function sanitizeItineraryDayInput(rawInput: unknown, mode: 'CREATE' | 'UPDATE'): UnknownRecord {
@@ -654,6 +885,7 @@ export class TripService {
         ...financials,
         status: 'DRAFT',
         costingStatus: 'PENDING',
+        costingRevision: 0,
         assignedSalesEmployeeId: attribution.ownerEmployeeId,
         salesTeamId: attribution.salesTeamId,
         createdByEmployeeId: actor.employeeId,
@@ -711,6 +943,7 @@ export class TripService {
         id: tripId,
         status: 'DRAFT',
         costingStatus: 'PENDING',
+        costingRevision: 0,
         assignedSalesEmployeeId: attribution.ownerEmployeeId,
         salesTeamId: attribution.salesTeamId,
         createdByEmployeeId: actor.employeeId,
@@ -739,6 +972,16 @@ export class TripService {
       throw new TripDomainError(403, 'ROLE_DENIED', 'This role cannot update commercial Trip data.');
     }
     const input = sanitizeInput(rawInput);
+    const expectedCostingRevision = input.expectedCostingRevision;
+    delete input.expectedCostingRevision;
+    const pricingWasSubmitted = input.totalSellingPrice !== undefined || input.pricingMode !== undefined || input.pricingInput !== undefined;
+    if (input.totalSellingPrice !== undefined && input.pricingMode === undefined) {
+      input.pricingMode = 'SELLING_PRICE';
+      input.pricingInput = input.totalSellingPrice;
+    }
+    if (input.pricingMode === 'SELLING_PRICE' && input.pricingInput !== undefined) {
+      input.totalSellingPrice = input.pricingInput;
+    }
     if (Object.keys(input).length === 0) {
       throw new TripDomainError(400, 'EMPTY_TRIP_UPDATE', 'No permitted Trip fields were supplied.');
     }
@@ -746,6 +989,12 @@ export class TripService {
     return this.storage.runTransaction(async tx => {
       const stored = await tx.get('trips', tripId) as UnknownRecord | null;
       if (!stored) throw new TripDomainError(404, 'TRIP_NOT_FOUND', 'Trip not found.');
+      if (expectedCostingRevision !== undefined) {
+        const parsedRevision = nonNegativeInteger(expectedCostingRevision, 'expectedCostingRevision');
+        if (parsedRevision !== Number(stored.costingRevision || 0)) {
+          throw new TripDomainError(409, 'TRIP_VERSION_CONFLICT', 'Package economics changed. Reload before saving pricing.');
+        }
+      }
 
       try {
         assertAuthorizedResource(actor, 'TRIP', 'UPDATE_COMMERCIAL', tripResourceContext(stored));
@@ -775,12 +1024,55 @@ export class TripService {
 
       const authoritativeCost = finiteNonNegative(normalizedStored.totalSupplierCost, 'authoritative Trip totalSupplierCost');
       const now = new Date().toISOString();
+      const invalidatesCosting = tripCostingChanged(stored, input);
+      if (pricingWasSubmitted && validated.pricingMode !== 'SELLING_PRICE' && stored.costingStatus !== 'CALCULATED') {
+        throw new TripDomainError(409, 'TRIP_COSTING_PENDING', 'Update package costs before using a target profit or target margin.');
+      }
+      let economics;
+      try {
+        economics = calculatePackageEconomics(authoritativeCost, validated.pricingMode, validated.pricingInput);
+      } catch (error) {
+        throw new TripDomainError(400, 'INVALID_PRICING_INPUT', error instanceof Error ? error.message : 'Pricing input is invalid.');
+      }
+      const commercialSettings = await tx.get('commercial_settings', 'package-pricing') as UnknownRecord | null;
+      const configuredThreshold = typeof commercialSettings?.lowMarginThresholdPercent === 'number'
+        ? commercialSettings.lowMarginThresholdPercent
+        : APP_CONFIG.LOW_MARGIN_THRESHOLD_PERCENT;
+      let commercialApproval = stored.commercialApproval;
+      if (!invalidatesCosting && stored.costingStatus === 'CALCULATED') {
+        try {
+          commercialApproval = assessLowMarginPolicy(economics.grossMargin, configuredThreshold, now);
+        } catch (error) {
+          throw new TripDomainError(500, 'INVALID_COMMERCIAL_POLICY', error instanceof Error ? error.message : 'Commercial policy is invalid.');
+        }
+      }
+      const pricingChanged = pricingWasSubmitted && (
+        (stored.pricingMode || 'SELLING_PRICE') !== economics.pricingMode
+        || Number(stored.pricingInput ?? stored.totalSellingPrice ?? 0) !== economics.pricingInput
+        || Number(stored.totalSellingPrice || 0) !== economics.totalSellingPrice
+      );
+      const nextRevision = Number(stored.costingRevision || 0) + (invalidatesCosting || pricingChanged ? 1 : 0);
       const updated: Trip = {
         ...stored,
         ...validated,
-        ...calculateFinancials(validated.totalSellingPrice, authoritativeCost),
+        ...(invalidatesCosting
+          ? {
+            totalSupplierCost: authoritativeCost,
+            totalSellingPrice: economics.totalSellingPrice,
+            pricingMode: economics.pricingMode,
+            pricingInput: economics.pricingInput,
+          }
+          : economics),
+        ...(commercialApproval ? { commercialApproval } : {}),
         id: tripId,
         status: stored.status,
+        ...(invalidatesCosting ? {
+          costingStatus: 'PENDING' as const,
+          costingRevision: nextRevision,
+        } : pricingChanged ? {
+          costingRevision: nextRevision,
+          ...(stored.costingStatus === 'CALCULATED' ? { costingCalculatedRevision: nextRevision } : {}),
+        } : {}),
         assignedSalesEmployeeId: stored.assignedSalesEmployeeId,
         salesTeamId: stored.salesTeamId,
         createdAt: stored.createdAt,
@@ -792,6 +1084,33 @@ export class TripService {
       const audit = auditEvent('TRIP_UPDATED', 'TRIP', tripId, actor, stored, updated as UnknownRecord, now);
       tx.update('trips', tripId, updated);
       tx.set('audit_logs', audit.id, audit);
+      if (stored.pricingMode !== updated.pricingMode) {
+        const modeAudit = auditEvent('PRICING_MODE_CHANGED', 'TRIP', tripId, actor, {
+          pricingMode: stored.pricingMode || 'SELLING_PRICE', pricingInput: stored.pricingInput ?? stored.totalSellingPrice,
+        }, {
+          pricingMode: updated.pricingMode, pricingInput: updated.pricingInput,
+        }, now);
+        tx.set('audit_logs', modeAudit.id, modeAudit);
+      }
+      if (stored.totalSellingPrice !== updated.totalSellingPrice) {
+        const priceAudit = auditEvent(
+          stored.totalSellingPrice === undefined ? 'SELLING_PRICE_SET' : 'SELLING_PRICE_CHANGED',
+          'TRIP', tripId, actor,
+          { totalSellingPrice: stored.totalSellingPrice, pricingMode: stored.pricingMode || 'SELLING_PRICE' },
+          { totalSellingPrice: updated.totalSellingPrice, pricingMode: updated.pricingMode }, now,
+        );
+        tx.set('audit_logs', priceAudit.id, priceAudit);
+      }
+      if (invalidatesCosting && stored.costingStatus !== 'PENDING') {
+        const costingAudit = auditEvent('COSTING_INVALIDATED', 'TRIP', tripId, actor, {
+          costingStatus: stored.costingStatus,
+          costingRevision: stored.costingRevision || 0,
+        }, {
+          costingStatus: 'PENDING',
+          costingRevision: updated.costingRevision,
+        }, now);
+        tx.set('audit_logs', costingAudit.id, costingAudit);
+      }
       return updated;
     });
   }
@@ -849,6 +1168,7 @@ export class TripService {
           : '',
         specialRequirements: typeof lead.specialRequirements === 'string' ? lead.specialRequirements.trim() : '',
         costingStatus: 'PENDING',
+        costingRevision: Number(stored.costingRevision || 0) + 1,
         packageReview: {
           ...stored.packageReview,
           required: false,
@@ -884,7 +1204,7 @@ export class TripService {
         ...(typeof input.notes === 'string' ? { notes: input.notes } : {}),
         items: [],
       };
-      const updatedTrip = this.markCostingPending(trip, actor, now);
+      const updatedTrip = this.markCostingPending(tx, trip, actor, now, 'Itinerary day added.');
       tx.set('itinerary_days', day.id, day);
       tx.update('trips', tripId, updatedTrip);
       const audit = auditEvent('ITINERARY_DAY_CREATED', 'ITINERARY_DAY', day.id, actor, null, day as UnknownRecord, now);
@@ -905,9 +1225,12 @@ export class TripService {
       const trip = await this.loadAuthorizedCommercialTrip(tx, storedDay.tripId, actor);
       const now = new Date().toISOString();
       const day = { ...storedDay, ...input, id: storedDay.id, tripId: storedDay.tripId, dayNumber: storedDay.dayNumber, items: storedDay.items || [] } as ItineraryDay;
-      const updatedTrip = this.markCostingPending(trip, actor, now);
+      const invalidatesCosting = itineraryDayCostingChanged(storedDay, day);
+      const updatedTrip = invalidatesCosting
+        ? this.markCostingPending(tx, trip, actor, now, 'Commercial itinerary day details changed.')
+        : trip;
       tx.update('itinerary_days', dayId, day);
-      tx.update('trips', trip.id, updatedTrip);
+      if (invalidatesCosting) tx.update('trips', trip.id, updatedTrip);
       const audit = auditEvent('ITINERARY_DAY_UPDATED', 'ITINERARY_DAY', dayId, actor, storedDay as UnknownRecord, day as UnknownRecord, now);
       tx.set('audit_logs', audit.id, audit);
       return { day, trip: updatedTrip as Trip };
@@ -921,7 +1244,7 @@ export class TripService {
       if (!storedDay) throw new TripDomainError(404, 'ITINERARY_DAY_NOT_FOUND', 'Itinerary day not found.');
       const trip = await this.loadAuthorizedCommercialTrip(tx, storedDay.tripId, actor);
       const now = new Date().toISOString();
-      const updatedTrip = this.markCostingPending(trip, actor, now);
+      const updatedTrip = this.markCostingPending(tx, trip, actor, now, 'Itinerary day removed.');
       tx.delete('itinerary_days', dayId);
       tx.update('trips', trip.id, updatedTrip);
       const audit = auditEvent('ITINERARY_DAY_DELETED', 'ITINERARY_DAY', dayId, actor, storedDay as UnknownRecord, {}, now);
@@ -946,7 +1269,7 @@ export class TripService {
         tripId: storedDay.tripId,
       }) as ItineraryItem;
       const day: ItineraryDay = { ...storedDay, items: [...(storedDay.items || []), item] };
-      const updatedTrip = this.markCostingPending(trip, actor, now);
+      const updatedTrip = this.markCostingPending(tx, trip, actor, now, 'Commercial itinerary service added.');
       tx.update('itinerary_days', dayId, day);
       tx.update('trips', trip.id, updatedTrip);
       const audit = auditEvent('ITINERARY_ITEM_CREATED', 'ITINERARY_ITEM', item.id, actor, null, item as UnknownRecord, now);
@@ -954,7 +1277,9 @@ export class TripService {
       const packageRate = isRecord(item.metadata) && isRecord(item.metadata.packageSupplierRate) ? item.metadata.packageSupplierRate : null;
       if (packageRate) {
         const rateAudit = auditEvent('PACKAGE_SUPPLIER_RATE_ENTERED', 'ITINERARY_ITEM', item.id, actor, null, {
-          tripId: storedDay.tripId, propertyId: item.metadata?.propertyId, roomCategoryId: item.metadata?.roomCategoryId,
+          tripId: storedDay.tripId, serviceType: item.type,
+          propertyId: item.metadata?.propertyId, roomCategoryId: item.metadata?.roomCategoryId,
+          vehicleCategoryId: item.metadata?.vehicleCategoryId, activityId: item.metadata?.activityId,
           packageSupplierRate: packageRate, contractedTotalSupplierCost: item.metadata?.contractedTotalSupplierCost,
         }, now);
         tx.set('audit_logs', rateAudit.id, rateAudit);
@@ -982,15 +1307,21 @@ export class TripService {
       }
       const item = withoutUndefined({ ...resolvedInput, id: existing.id, dayId, tripId: storedDay.tripId }) as ItineraryItem;
       const day = { ...storedDay, items: (storedDay.items || []).map(candidate => candidate.id === itemId ? item : candidate) } as ItineraryDay;
-      const updatedTrip = this.markCostingPending(trip, actor, now);
-      tx.update('itinerary_days', dayId, day); tx.update('trips', trip.id, updatedTrip);
+      const invalidatesCosting = itineraryItemCostingChanged(existing, item);
+      const updatedTrip = invalidatesCosting
+        ? this.markCostingPending(tx, trip, actor, now, 'Commercial itinerary service changed.')
+        : trip;
+      tx.update('itinerary_days', dayId, day);
+      if (invalidatesCosting) tx.update('trips', trip.id, updatedTrip);
       const audit = auditEvent('ITINERARY_ITEM_UPDATED', 'ITINERARY_ITEM', itemId, actor, existing as UnknownRecord, item as UnknownRecord, now);
       tx.set('audit_logs', audit.id, audit);
       const beforeRate = isRecord(existing.metadata) && isRecord(existing.metadata.packageSupplierRate) ? existing.metadata.packageSupplierRate : null;
       const afterRate = isRecord(item.metadata) && isRecord(item.metadata.packageSupplierRate) ? item.metadata.packageSupplierRate : null;
       if (JSON.stringify(beforeRate) !== JSON.stringify(afterRate)) {
         const rateAudit = auditEvent(afterRate && !beforeRate ? 'PACKAGE_SUPPLIER_RATE_ENTERED' : 'PACKAGE_SUPPLIER_RATE_CHANGED', 'ITINERARY_ITEM', itemId, actor, beforeRate ? { packageSupplierRate: beforeRate } : null, {
-          tripId: storedDay.tripId, propertyId: item.metadata?.propertyId, roomCategoryId: item.metadata?.roomCategoryId,
+          tripId: storedDay.tripId, serviceType: item.type,
+          propertyId: item.metadata?.propertyId, roomCategoryId: item.metadata?.roomCategoryId,
+          vehicleCategoryId: item.metadata?.vehicleCategoryId, activityId: item.metadata?.activityId,
           ...(afterRate ? { packageSupplierRate: afterRate } : {}), contractedTotalSupplierCost: item.metadata?.contractedTotalSupplierCost,
         }, now);
         tx.set('audit_logs', rateAudit.id, rateAudit);
@@ -1010,7 +1341,7 @@ export class TripService {
       const trip = await this.loadAuthorizedCommercialTrip(tx, storedDay.tripId, actor);
       const now = new Date().toISOString();
       const day: ItineraryDay = { ...storedDay, items: (storedDay.items || []).filter(candidate => candidate.id !== itemId) };
-      const updatedTrip = this.markCostingPending(trip, actor, now);
+      const updatedTrip = this.markCostingPending(tx, trip, actor, now, 'Commercial itinerary service removed.');
       tx.update('itinerary_days', dayId, day);
       tx.update('trips', trip.id, updatedTrip);
       const audit = auditEvent('ITINERARY_ITEM_DELETED', 'ITINERARY_ITEM', itemId, actor, item as UnknownRecord, {}, now);
@@ -1057,13 +1388,32 @@ export class TripService {
     return trip;
   }
 
-  private markCostingPending(trip: UnknownRecord, actor: TripMutationActor, now: string): UnknownRecord {
-    return {
+  private markCostingPending(
+    tx: ConversionTransaction,
+    trip: UnknownRecord,
+    actor: TripMutationActor,
+    now: string,
+    reason: string,
+  ): UnknownRecord {
+    const updated = {
       ...trip,
       costingStatus: 'PENDING',
+      costingRevision: Number(trip.costingRevision || 0) + 1,
       updatedAt: now,
       updatedByEmployeeId: actor.employeeId,
     };
+    if (trip.costingStatus !== 'PENDING') {
+      const audit = auditEvent('COSTING_INVALIDATED', 'TRIP', String(trip.id), actor, {
+        costingStatus: trip.costingStatus,
+        costingRevision: trip.costingRevision || 0,
+      }, {
+        costingStatus: 'PENDING',
+        costingRevision: updated.costingRevision,
+        reason,
+      }, now);
+      tx.set('audit_logs', audit.id, audit);
+    }
+    return updated;
   }
 
   private async resolveAttribution(

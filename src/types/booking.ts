@@ -171,6 +171,7 @@ export interface FinancialSnapshot {
   transportSupplierCost: number;
   activitySupplierCost: number;
   otherSupplierCosts: number;
+  supplierCostBreakdown?: import('./index').PackageSupplierCostBreakdown;
   grossProfit: number;
   grossMargin: number;
   lineItems: LineItemCostSnapshot[];
@@ -250,6 +251,9 @@ export interface BookingTransport {
   dropoffLocation: string;
   pickupTime?: string;
   passengerCount: number;
+  vehicleCount?: number;
+  chargeableDays?: number;
+  serviceDays?: import('./transport').TransportServiceDay[];
   specialRequests?: string;
 
   // [B] Operations / Dispatch Fields (Editable by Operations & Admin)
@@ -287,6 +291,8 @@ export interface BookingActivity {
   serviceDate: string;
   sessionTime?: string;
   participantCount: number;
+  pricingModel?: import('./activity').ActivityPricingModel;
+  inclusionStatus?: import('./activity').ActivityInclusionStatus;
   leadGuestName?: string;
   specialRequests?: string;
 

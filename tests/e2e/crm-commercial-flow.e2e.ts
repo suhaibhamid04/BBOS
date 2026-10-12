@@ -57,19 +57,19 @@ test('CRM Lead follows the real inventory Trip, costing, Quote, and Booking flow
   await page.getByTestId('confirm-trip-transport').click();
   await page.getByTestId('add-trip-activity').click();
   await page.getByTestId('confirm-trip-activity').click();
-  await expect(page.getByTestId('trip-costing-status')).toHaveText('PENDING');
+  await expect(page.getByTestId('trip-costing-status')).toHaveText('Needs update');
 
   await page.getByTestId('calculate-trip-costs').click();
-  await expect(page.getByTestId('trip-costing-status')).toHaveText('CALCULATED');
+  await expect(page.getByTestId('trip-costing-status')).toHaveText('Costs current');
+  await page.getByTestId('pricing-input').fill('135000');
+  await page.getByTestId('save-package-pricing').click();
+  await expect(page.getByTestId('commercial-selling-price')).toContainText('1,35,000');
   await page.getByTestId('create-quote-from-trip').click();
 
   await expect(page.locator('#quote-builder-editor')).toBeVisible();
   await expect(page.getByTestId('quote-hotel-service')).toBeVisible();
   await expect(page.getByTestId('quote-transport-service')).toBeVisible();
   await expect(page.getByTestId('quote-activity-service')).toBeVisible();
-  await page.getByTestId('quote-selling-price').fill('135000');
-  await page.getByTestId('save-quote').click();
-
   await page.getByTestId('quote-return-to-lead').click();
   await page.getByRole('main').getByRole('button', { name: 'Quotes', exact: true }).click();
   await expect(page.getByTestId('lead-linked-trip')).toHaveCount(1);

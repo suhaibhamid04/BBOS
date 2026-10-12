@@ -16,6 +16,7 @@ export interface ActivityCalculationRequest {
     hours?: number;
     days?: number;
     sessions?: number;
+    units?: number;
   };
 }
 
@@ -53,6 +54,10 @@ export function calculateActivityCost(
       const personRate = pricingComponents['person'] || pricingComponents['adult'] || 0;
       const totalPeople = (params.adults || 0) + (params.children || 0);
       addDetail('Per Person', personRate, totalPeople);
+      break;
+
+    case 'PER_CHILD':
+      addDetail('Child', pricingComponents['child'] || pricingComponents['person'] || 0, params.children || 0);
       break;
 
     case 'PER_ADULT_CHILD':
@@ -94,6 +99,11 @@ export function calculateActivityCost(
       addDetail('Session', pricingComponents['session'] || 0, params.sessions || 1);
       break;
 
+    case 'PER_UNIT':
+      addDetail('Unit', pricingComponents['unit'] || 0, params.units || 1);
+      break;
+
+    case 'FLAT_TOTAL':
     case 'FIXED':
     case 'CUSTOM':
       addDetail('Fixed/Custom', pricingComponents['fixed'] || pricingComponents['custom'] || 0, 1);

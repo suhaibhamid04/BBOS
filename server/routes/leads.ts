@@ -605,6 +605,7 @@ leadsRouter.patch('/:id', requireRole(crmRoles), async (req, res) => {
           if (!reviewableTripStatuses.has(String(trip.status))) continue;
           const tripUpdates = {
             costingStatus: 'PENDING',
+            costingRevision: Number(trip.costingRevision || 0) + 1,
             packageReview: {
               required: true,
               reason: 'LEAD_COMMERCIAL_DETAILS_CHANGED',

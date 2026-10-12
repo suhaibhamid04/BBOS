@@ -1,19 +1,48 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { Car, AlertTriangle, ShieldAlert } from 'lucide-react';
-import { TransportServiceType } from '../../types/transport';
+import { TransportServiceType, type TransportServiceDay } from '../../types/transport';
 import { TransportItineraryMetadata } from '../../types';
+import type { PackageSupplierRateInput, TaxTreatment } from '../../types/accommodation';
 import { authenticatedMutationHeaders } from '../../services/auth/authenticatedApi';
 
 interface TransportInventoryPickerProps {
+  tripId: string;
   startDate: string;
   initialMetadata?: TransportItineraryMetadata;
   onConfirm: (metadata: TransportItineraryMetadata) => void;
   onCancel: () => void;
 }
 
+const DAY_SERVICE_OPTIONS: Array<{ value: TransportServiceType; label: string }> = [
+  { value: 'AIRPORT_PICKUP', label: 'Airport Pickup' },
+  { value: 'AIRPORT_DROP', label: 'Airport Drop' },
+  { value: 'TRANSFER', label: 'Transfer' },
+  { value: 'DAY_EXCURSION', label: 'Day Excursion' },
+  { value: 'LOCAL_SIGHTSEEING', label: 'Local Sightseeing' },
+  { value: 'INTERCITY_TRANSFER', label: 'Intercity Transfer' },
+  { value: 'OTHER', label: 'Other' },
+];
+
+function dateAtOffset(startDate: string, offset: number): string {
+  const date = new Date(`${startDate}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + offset);
+  return date.toISOString().slice(0, 10);
+}
+
+function newServiceDay(startDate: string, index: number): TransportServiceDay {
+  return {
+    dayNumber: index + 1,
+    date: dateAtOffset(startDate, index),
+    serviceType: index === 0 ? 'AIRPORT_PICKUP' : 'DAY_EXCURSION',
+    title: index === 0 ? 'Airport Pickup' : `Transport Day ${index + 1}`,
+    chargeableTransportDay: true,
+  };
+}
+
 export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> = ({ 
+  tripId,
   startDate, 
   initialMetadata,
   onConfirm,
@@ -26,19 +55,60 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
   const [selectedVehicleId, setSelectedVehicleId] = useState<string>(initialMetadata?.vehicleCategoryId || '');
   
   // Specific params based on service type
-  const [vehicleDays, setVehicleDays] = useState(initialMetadata?.vehicleDays || 1);
+  const [serviceDays, setServiceDays] = useState<TransportServiceDay[]>(() =>
+    initialMetadata?.serviceDays?.length
+      ? initialMetadata.serviceDays.map(day => ({ ...day, places: day.places ? [...day.places] : undefined }))
+      : Array.from({ length: initialMetadata?.chargeableDays || initialMetadata?.vehicleDays || 1 }, (_, index) => newServiceDay(startDate, index))
+  );
+  const [vehicleCount, setVehicleCount] = useState(initialMetadata?.vehicleCount || 1);
   const [nightHalts, setNightHalts] = useState(initialMetadata?.nightHalts || 0);
   const [occurrences, setOccurrences] = useState(initialMetadata?.occurrences || 1);
   const [distanceKm, setDistanceKm] = useState(initialMetadata?.distanceKm || 0);
   const [hours, setHours] = useState(initialMetadata?.hours || 0);
 
-  const [pickupLocation, setPickupLocation] = useState('');
-  const [dropoffLocation, setDropoffLocation] = useState('');
+  const [pickupLocation, setPickupLocation] = useState(initialMetadata?.serviceDays?.[0]?.from || '');
+  const [dropoffLocation, setDropoffLocation] = useState(initialMetadata?.serviceDays?.[0]?.to || '');
   const [selectedRouteId, setSelectedRouteId] = useState(initialMetadata?.routeId || '');
 
   const [isCalculating, setIsCalculating] = useState(false);
+  const calculationRequestId = useRef(0);
   const [calculatedRate, setCalculatedRate] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const initialPackageRate = initialMetadata?.packageSupplierRate;
+  const [rateMode, setRateMode] = useState<'CONTRACTED' | 'PER_VEHICLE_DAY' | 'TOTAL_SERVICE'>(initialPackageRate?.entryMode === 'PER_VEHICLE_DAY' || initialPackageRate?.entryMode === 'TOTAL_SERVICE' ? initialPackageRate.entryMode : 'CONTRACTED');
+  const [packageRateAmount, setPackageRateAmount] = useState(initialPackageRate ? String(initialPackageRate.amount) : '');
+  const [packageTaxTreatment, setPackageTaxTreatment] = useState<TaxTreatment>(initialPackageRate?.taxTreatment || 'NET');
+  const [supplierReference, setSupplierReference] = useState(initialPackageRate?.supplierQuoteReference || '');
+  const packageRate: PackageSupplierRateInput | undefined = rateMode === 'CONTRACTED' || !Number.isFinite(Number(packageRateAmount)) || Number(packageRateAmount) <= 0 ? undefined : {
+    entryMode: rateMode, amount: Number(packageRateAmount), taxTreatment: packageTaxTreatment,
+    ...(supplierReference.trim() ? { supplierQuoteReference: supplierReference.trim() } : {}),
+  };
+  const chargeableDays = useMemo(
+    () => new Set(serviceDays.filter(day => day.chargeableTransportDay).map(day => day.date)).size,
+    [serviceDays],
+  );
+  const vehicleDays = serviceDays.length;
+
+  const resizeServiceDays = (count: number) => {
+    const nextCount = Math.max(1, Math.min(120, count || 1));
+    setServiceDays(current => Array.from({ length: nextCount }, (_, index) => current[index] || newServiceDay(startDate, index)));
+  };
+
+  const updateServiceDay = (index: number, patch: Partial<TransportServiceDay>) => {
+    setServiceDays(current => current.map((day, dayIndex) => dayIndex === index ? { ...day, ...patch } : day));
+  };
+
+  const addServiceAction = () => {
+    setServiceDays(current => {
+      const last = current[current.length - 1];
+      return [...current, {
+        ...newServiceDay(startDate, current.length),
+        dayNumber: last?.dayNumber || current.length + 1,
+        date: last?.date || dateAtOffset(startDate, current.length),
+        chargeableTransportDay: false,
+      }];
+    });
+  };
 
   const activeVehicles = useMemo(
     () => vehicleCategories.filter(v => v.active),
@@ -53,6 +123,7 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
 
   const calculateRate = useCallback(async () => {
     if (!selectedVehicleId || !serviceType || !startDate) return;
+    const requestId = ++calculationRequestId.current;
     
     setIsCalculating(true);
     setError(null);
@@ -63,10 +134,13 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
         method: 'POST',
         headers: await authenticatedMutationHeaders(currentUser.employeeId),
         body: JSON.stringify({
+          tripId,
           vehicleCategoryId: selectedVehicleId,
           startDate,
           serviceType,
           vehicleDays,
+          vehicleCount,
+          chargeableDays,
           nightHalts,
           occurrences,
           distanceKm,
@@ -80,13 +154,19 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
       if (!data.success) throw new Error(data.error || 'Failed to calculate rate');
       if (data.data.available === false) throw new Error(data.data.error || 'Rate unavailable');
       
+      if (requestId !== calculationRequestId.current) return;
       setCalculatedRate(data.data);
     } catch (err: any) {
-      setError(err.message);
+      if (requestId !== calculationRequestId.current) return;
+      if (packageRate) {
+        const supplierCost = rateMode === 'TOTAL_SERVICE' ? packageRate.amount : packageRate.amount * vehicleCount * Math.max(1, chargeableDays);
+        setCalculatedRate({ available: true, needsConfirmation: true, pricingUnit: 'PER_DAY', taxDescription: packageTaxTreatment, supplierCost, baseSupplierCost: supplierCost, supplementCost: 0 });
+      }
+      else setError(err.message);
     } finally {
-      setIsCalculating(false);
+      if (requestId === calculationRequestId.current) setIsCalculating(false);
     }
-  }, [selectedVehicleId, serviceType, startDate, vehicleDays, nightHalts, occurrences, distanceKm, hours, currentUser.employeeId]);
+  }, [tripId, selectedVehicleId, serviceType, startDate, vehicleDays, vehicleCount, chargeableDays, nightHalts, occurrences, distanceKm, hours, currentUser.employeeId, rateMode, packageRateAmount, packageTaxTreatment, supplierReference]);
 
   useEffect(() => {
     if (selectedVehicleId && serviceType) {
@@ -95,7 +175,7 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
   }, [calculateRate]);
 
   const handleConfirm = () => {
-    if (!calculatedRate?.available || !calculatedRate.rateId || !calculatedRate.supplierId) return;
+    if (!calculatedRate?.available || (!calculatedRate.rateId && !packageRate)) return;
 
     const vehicle = vehicleCategories.find(v => v.id === selectedVehicleId);
     let routeName = '';
@@ -108,28 +188,32 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
          routeName = `${pickupLocation} to ${dropoffLocation}`;
        }
     } else {
-      routeName = `${vehicleDays} Days Journey`;
+      routeName = serviceDays.find(day => day.route)?.route || `${chargeableDays} Chargeable Day${chargeableDays === 1 ? '' : 's'}`;
     }
-
     onConfirm({
       inventoryType: 'TRANSPORT',
       vehicleCategoryId: selectedVehicleId,
       vehicleName: vehicle?.displayName || 'Vehicle',
-      rateId: calculatedRate.rateId,
-      supplierId: calculatedRate.supplierId,
+      ...(calculatedRate.rateId ? { rateId: calculatedRate.rateId } : {}),
+      ...(calculatedRate.supplierId ? { supplierId: calculatedRate.supplierId } : {}),
       supplierName: calculatedRate.supplierName,
       serviceType,
       pricingUnit: calculatedRate.pricingUnit,
       ...(selectedRouteId ? { routeId: selectedRouteId } : {}),
       routeName,
       startDate,
-      vehicleDays,
+      vehicleDays: chargeableDays,
+      vehicleCount,
+      chargeableDays,
+      packagePricingBasis: 'PER_VEHICLE_PER_DAY',
+      serviceDays,
       nightHalts,
       occurrences,
       distanceKm,
       hours,
       needsConfirmation: calculatedRate.needsConfirmation,
-      taxDescription: calculatedRate.taxDescription
+      taxDescription: calculatedRate.taxDescription,
+      ...(packageRate ? { packageRateRequest: packageRate } : {}),
     });
   };
 
@@ -224,10 +308,11 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Chargeable Vehicle Days</label>
                 <input
+                  data-testid="trip-transport-chargeable-days"
                   type="number"
                   min="1"
                   value={vehicleDays}
-                  onChange={(e) => setVehicleDays(parseInt(e.target.value) || 1)}
+                  onChange={(e) => resizeServiceDays(parseInt(e.target.value) || 1)}
                   className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
                 />
               </div>
@@ -289,6 +374,56 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
 
         </div>
 
+        {serviceType === 'MULTI_DAY_JOURNEY' && (
+          <section className="space-y-3 border-t border-slate-100 pt-4" data-testid="transport-day-services">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h4 className="text-sm font-bold uppercase tracking-wider text-slate-800">Day Services</h4>
+                <p className="mt-1 text-xs text-slate-500">Describe the itinerary separately from supplier charging. Repeated actions on the same date count once.</p>
+              </div>
+              <button type="button" data-testid="add-transport-service-action" onClick={addServiceAction} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-700">Add service action</button>
+            </div>
+            <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700" data-testid="transport-chargeable-day-summary">
+              {chargeableDays} distinct chargeable day{chargeableDays === 1 ? '' : 's'}
+            </div>
+            {serviceDays.map((day, index) => (
+              <div key={`${index}-${day.date}`} className="space-y-3 rounded-xl border border-slate-200 bg-white p-4" data-testid={`transport-service-day-${index}`}>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs font-black uppercase tracking-wider text-slate-700">Day service {index + 1}</span>
+                  {serviceDays.length > 1 && <button type="button" onClick={() => setServiceDays(current => current.filter((_, dayIndex) => dayIndex !== index))} className="text-xs font-bold text-rose-600">Remove</button>}
+                </div>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <label className="text-xs font-semibold text-slate-700">Trip day<input data-testid={`transport-service-day-number-${index}`} type="number" min="1" value={day.dayNumber} onChange={event => updateServiceDay(index, { dayNumber: Math.max(1, Number(event.target.value) || 1) })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" /></label>
+                  <label className="text-xs font-semibold text-slate-700">Date<input data-testid={`transport-service-date-${index}`} type="date" value={day.date} onChange={event => updateServiceDay(index, { date: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" /></label>
+                  <label className="text-xs font-semibold text-slate-700">Service<select data-testid={`transport-service-type-${index}`} value={day.serviceType} onChange={event => updateServiceDay(index, { serviceType: event.target.value as TransportServiceType })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2">{DAY_SERVICE_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+                  <label className="text-xs font-semibold text-slate-700 sm:col-span-2">Customer-facing title<input data-testid={`transport-service-title-${index}`} value={day.title || ''} onChange={event => updateServiceDay(index, { title: event.target.value || undefined })} placeholder="Gulmarg Day Excursion" className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" /></label>
+                  <label className="flex items-end gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700"><input data-testid={`transport-service-chargeable-${index}`} type="checkbox" checked={day.chargeableTransportDay} onChange={event => updateServiceDay(index, { chargeableTransportDay: event.target.checked })} />Chargeable cab day</label>
+                  <label className="text-xs font-semibold text-slate-700">From<input value={day.from || ''} onChange={event => updateServiceDay(index, { from: event.target.value || undefined })} placeholder="Srinagar" className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" /></label>
+                  <label className="text-xs font-semibold text-slate-700">To<input value={day.to || ''} onChange={event => updateServiceDay(index, { to: event.target.value || undefined })} placeholder="Gulmarg" className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" /></label>
+                  <label className="text-xs font-semibold text-slate-700">Overnight<input value={day.overnightLocation || ''} onChange={event => updateServiceDay(index, { overnightLocation: event.target.value || undefined })} placeholder="Srinagar" className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" /></label>
+                  <label className="text-xs font-semibold text-slate-700 sm:col-span-2">Route<input data-testid={`transport-service-route-${index}`} value={day.route || ''} onChange={event => updateServiceDay(index, { route: event.target.value || undefined })} placeholder="Srinagar → Gulmarg → Srinagar" className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" /></label>
+                  <label className="text-xs font-semibold text-slate-700">Places covered<input value={(day.places || []).join(', ')} onChange={event => updateServiceDay(index, { places: event.target.value.split(',').map(value => value.trim()).filter(Boolean) })} placeholder="Gulmarg" className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" /></label>
+                  <label className="text-xs font-semibold text-slate-700 sm:col-span-3">Notes<textarea value={day.notes || ''} onChange={event => updateServiceDay(index, { notes: event.target.value || undefined })} rows={2} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" /></label>
+                </div>
+              </div>
+            ))}
+          </section>
+        )}
+
+        <section className="space-y-3 rounded-xl border border-violet-200 bg-violet-50 p-4" data-testid="transport-package-rate">
+          <div className="grid grid-cols-2 gap-3">
+            <label className="text-xs font-semibold text-slate-700">Number of vehicles<input data-testid="trip-transport-vehicle-count" type="number" min="1" value={vehicleCount} onChange={event => setVehicleCount(Math.max(1, Number(event.target.value) || 1))} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2" /></label>
+            <div className="text-xs text-slate-600"><span className="block font-semibold text-slate-700">Package pricing basis</span><span className="mt-1 block rounded-lg border border-violet-100 bg-white px-3 py-2">Per vehicle per chargeable day</span></div>
+          </div>
+          <p className="text-[11px] text-slate-600">The master transport rate is never changed. Multiple services described on one date count as one chargeable transport day.</p>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <button type="button" onClick={() => setRateMode('CONTRACTED')} className={`rounded-lg border bg-white px-3 py-2 text-xs font-bold ${rateMode === 'CONTRACTED' ? 'border-violet-600 text-violet-700' : 'border-slate-200 text-slate-600'}`}>Use contracted rate</button>
+            <button data-testid="transport-package-per-day" type="button" onClick={() => setRateMode('PER_VEHICLE_DAY')} className={`rounded-lg border bg-white px-3 py-2 text-xs font-bold ${rateMode === 'PER_VEHICLE_DAY' ? 'border-violet-600 text-violet-700' : 'border-slate-200 text-slate-600'}`}>Package rate / vehicle / day</button>
+            <button data-testid="transport-package-total" type="button" onClick={() => setRateMode('TOTAL_SERVICE')} className={`rounded-lg border bg-white px-3 py-2 text-xs font-bold ${rateMode === 'TOTAL_SERVICE' ? 'border-violet-600 text-violet-700' : 'border-slate-200 text-slate-600'}`}>Total transport quote</button>
+          </div>
+          {rateMode !== 'CONTRACTED' && <div className="grid grid-cols-2 gap-3"><label className="text-xs font-semibold text-slate-700">Supplier amount<input data-testid="transport-package-rate-amount" type="number" min="1" value={packageRateAmount} onChange={event => setPackageRateAmount(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2" /></label><label className="text-xs font-semibold text-slate-700">Tax treatment<select value={packageTaxTreatment} onChange={event => setPackageTaxTreatment(event.target.value as TaxTreatment)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"><option value="NET">Net / taxes extra</option><option value="INCLUSIVE">Taxes included</option><option value="GST_5">Add 5% GST</option><option value="GST_18">Add 18% GST</option></select></label><label className="col-span-2 text-xs font-semibold text-slate-700">Supplier reference (optional)<input value={supplierReference} onChange={event => setSupplierReference(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2" /></label></div>}
+        </section>
+
         {/* Step 3: Calculation Result */}
         <div className="pt-4 border-t border-slate-100">
           <h4 className="text-sm font-bold text-slate-800 uppercase tracking-wider mb-4">3. Availability & Cost</h4>
@@ -303,7 +438,7 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
               <div>
                 <h5 className="text-sm font-bold text-rose-800">Rate Unavailable</h5>
                 <p className="text-xs text-rose-600 mt-1">{error}</p>
-                <p className="text-xs font-bold text-rose-700 mt-2">To proceed, choose a different vehicle, service type, or contact procurement to add rates for this date.</p>
+                <p className="text-xs font-bold text-rose-700 mt-2">No contracted transport rate is available. Enter a package supplier rate above, or choose another vehicle.</p>
               </div>
             </div>
           ) : calculatedRate ? (
@@ -360,7 +495,7 @@ export const TransportInventoryPicker: React.FC<TransportInventoryPickerProps> =
         <button
           data-testid="confirm-trip-transport"
           onClick={handleConfirm}
-          disabled={!calculatedRate || !!error || isCalculating}
+          disabled={!calculatedRate || !!error || isCalculating || chargeableDays < 1}
           className="px-6 py-2 text-sm font-bold text-white bg-[#7056EE] hover:bg-[#5b43d6] rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
         >
           Add to Trip

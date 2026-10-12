@@ -2,10 +2,14 @@ import { describe, expect, it } from 'bun:test';
 import {
   ApprovalInboxService,
   InMemoryApprovalInboxStorage,
+  LowMarginQuoteApprovalService,
   type ApprovalInboxActor,
   type ApprovalInboxSources,
   type EmergencySpendDecisionService,
 } from '../../server/services/approvalInboxService';
+import { InMemoryConversionStorageProvider } from '../../src/services/conversion/conversionStorageProvider';
+import { authorizeResource } from '../../server/authorization/policyEngine';
+import { quoteResourceContext } from '../../server/authorization/resourceContext';
 import {
   InMemoryLiveOperationsStorage,
   LiveOperationsService,
@@ -27,6 +31,8 @@ const admin = actor('Admin', 'employee-admin');
 const accounts = actor('Accounts', 'employee-accounts');
 const operations = actor('Operations', 'employee-ops');
 const reservations = actor('Reservations', 'employee-reservations');
+const salesExecutive = { ...actor('Sales Executive', 'employee-sales'), salesTeamId: 'team-kashmir' };
+const salesManager = { ...actor('Sales Manager', 'employee-manager'), salesTeamId: 'team-kashmir' };
 
 function booking(): Booking {
   return {
@@ -80,8 +86,26 @@ function quote(owner = 'employee-sales'): Quote {
     id: 'quote-1', leadId: 'lead-1', customerId: 'customer-1', customerName: 'Guest One', destination: 'Kashmir',
     travelerCount: 2, totalAmount: 200_000, discountAmount: 0, finalAmount: 200_000, totalSupplierCost: 150_000,
     grossProfit: 50_000, grossMargin: 25, status: 'DRAFT', validUntil: '2026-10-01', createdAt: CREATED,
-    updatedAt: UPDATED, salesEmployeeId: owner, createdByEmployeeId: owner,
-    requiresLowMarginApproval: true, approval: { required: true, state: 'PENDING' }, version: 1,
+    updatedAt: UPDATED, salesEmployeeId: owner, salesEmployeeName: 'Sales Person', salesTeamId: 'team-kashmir',
+    createdByEmployeeId: owner, tripId: 'trip-1', supplierCostSource: {
+      type: 'TRIP', sourceId: 'trip-1', asOf: UPDATED, costingRevision: 4,
+    },
+    requiresLowMarginApproval: true, approval: {
+      required: true, state: 'REVIEW_REQUIRED', thresholdPercent: 30, assessedAt: UPDATED,
+    }, version: 1,
+  };
+}
+
+function approvalTrip(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'trip-1', customerId: 'customer-1', title: 'Kashmir Package', destination: 'Kashmir',
+    startDate: '2026-10-10', endDate: '2026-10-15', travelerCount: 2, adults: 2, children: 0,
+    tripType: 'LEISURE', status: 'QUOTE_READY', currency: 'INR', totalSupplierCost: 150_000,
+    totalSellingPrice: 200_000, grossProfit: 50_000, grossMargin: 25, costingStatus: 'CALCULATED',
+    costingRevision: 4, costingCalculatedRevision: 4, assignedSalesEmployeeId: 'employee-sales',
+    salesTeamId: 'team-kashmir', createdAt: CREATED, updatedAt: UPDATED,
+    commercialApproval: { required: true, state: 'REVIEW_REQUIRED', thresholdPercent: 30, assessedAt: UPDATED },
+    ...overrides,
   };
 }
 
@@ -109,7 +133,7 @@ describe('Unified Approval Inbox visibility', () => {
       expect(new Set(inbox.allPending?.map((item) => item.type))).toEqual(new Set([
         'EMERGENCY_SPEND', 'SUPPLIER_RATE_DISCREPANCY', 'OPERATIONAL_COMMERCIAL_CHANGE', 'QUOTE_APPROVAL',
       ]));
-      expect(inbox.awaitingMyDecision.map((item) => item.type)).toEqual(['EMERGENCY_SPEND']);
+      expect(new Set(inbox.awaitingMyDecision.map((item) => item.type))).toEqual(new Set(['EMERGENCY_SPEND', 'QUOTE_APPROVAL']));
     }
   });
 
@@ -152,11 +176,23 @@ describe('Unified Approval Inbox visibility', () => {
     expect(operationsInbox.summary).toMatchObject({ pendingCount: 2, highPriorityCount: 2 });
   });
 
-  it('does not expose Quote supplier cost/profit through the normalized projection', async () => {
+  it('shows authorized Quote reviewers the decision economics without technical inventory fields', async () => {
     const quoteItem = (await setup().getInbox(founder)).allPending?.find((item) => item.type === 'QUOTE_APPROVAL');
     expect(quoteItem).toBeDefined();
-    expect(JSON.stringify(quoteItem)).not.toContain('150000');
-    expect(JSON.stringify(quoteItem)).not.toContain('grossProfit');
+    expect(quoteItem?.context).toMatchObject({
+      customerName: 'Guest One', salespersonName: 'Sales Person', supplierCost: 150_000,
+      sellingPrice: 200_000, profit: 50_000, marginPercent: 25, thresholdPercent: 30,
+    });
+    expect(JSON.stringify(quoteItem)).not.toContain('supplierCostSource');
+  });
+
+  it('makes TEAM low-margin Quotes actionable for the Sales Manager but not the Sales Executive', async () => {
+    const managerInbox = await setup().getInbox(salesManager);
+    expect(managerInbox.awaitingMyDecision).toHaveLength(1);
+    expect(managerInbox.awaitingMyDecision[0]).toMatchObject({ type: 'QUOTE_APPROVAL', actionable: true });
+    const executiveInbox = await setup().getInbox(salesExecutive);
+    expect(executiveInbox.awaitingMyDecision).toEqual([]);
+    expect(executiveInbox.submittedByMe[0]).toMatchObject({ type: 'QUOTE_APPROVAL', actionable: false });
   });
 });
 
@@ -203,5 +239,87 @@ describe('Unified Approval Inbox decision routing', () => {
     expect(approved.status).toBe('APPROVED');
     await expect(service.decide('EMERGENCY_SPEND:spend-1', { decision: 'REJECTED', expectedUpdatedAt: approved.updatedAt, rejectionReason: 'No' }, founder))
       .rejects.toMatchObject({ code: 'SPEND_ALREADY_DECIDED' });
+  });
+
+  it('approves a TEAM Quote atomically and captures immutable reviewer/economics audit data', async () => {
+    const q = quote();
+    const storage = new InMemoryConversionStorageProvider({ quotes: [q], trips: [approvalTrip()] });
+    const decisionService = new LowMarginQuoteApprovalService(storage, () => new Date('2026-09-28T00:00:00.000Z'));
+    const service = new ApprovalInboxService(new InMemoryApprovalInboxStorage(sources()), undefined, decisionService);
+    const decisionResponse = await service.decide('QUOTE_APPROVAL:quote-1', {
+      decision: 'APPROVED', expectedUpdatedAt: `1:${UPDATED}`, decisionNote: 'Approved for strategic account.',
+    }, salesManager) as Pick<Quote, 'id' | 'version' | 'updatedAt' | 'approval'>;
+    expect(decisionResponse.approval).toMatchObject({
+      required: true, state: 'APPROVED', currentDecision: {
+        reviewerEmployeeId: salesManager.employeeId, totalSupplierCost: 150_000,
+        totalSellingPrice: 200_000, grossProfit: 50_000, grossMargin: 25,
+        thresholdPercent: 30, note: 'Approved for strategic account.',
+      },
+    });
+    const approved = storage.rawGet('quotes', 'quote-1') as Quote;
+    expect(storage.rawGet('trips', 'trip-1').commercialApproval.state).toBe('APPROVED');
+    expect(authorizeResource(salesExecutive, 'QUOTE', 'CONVERT_TO_BOOKING', quoteResourceContext({ ...approved, status: 'SENT' })).allowed).toBe(true);
+    const audit = storage.getAllAuditLogs().find(item => item.action === 'LOW_MARGIN_APPROVED');
+    expect(audit).toMatchObject({ actorId: salesManager.employeeId, entityId: 'quote-1' });
+    expect(audit?.after).toMatchObject({
+      tripId: 'trip-1', quoteId: 'quote-1', reviewerEmployeeId: salesManager.employeeId,
+      totalSupplierCost: 150_000, totalSellingPrice: 200_000, thresholdPercent: 30,
+    });
+  });
+
+  it('keeps rejected Quotes blocked and records the optional reason', async () => {
+    const storage = new InMemoryConversionStorageProvider({ quotes: [quote()], trips: [approvalTrip()] });
+    const service = new LowMarginQuoteApprovalService(storage, () => new Date('2026-09-28T00:00:00.000Z'));
+    const rejected = await service.decideQuote('quote-1', {
+      decision: 'REJECTED', expectedUpdatedAt: `1:${UPDATED}`, decisionNote: 'Margin is not supportable.',
+    }, founder);
+    expect(rejected.approval).toMatchObject({ state: 'REJECTED', currentDecision: { note: 'Margin is not supportable.' } });
+    expect(authorizeResource(salesExecutive, 'QUOTE', 'CONVERT_TO_BOOKING', quoteResourceContext({ ...rejected, status: 'SENT' }))).toMatchObject({
+      allowed: false, code: 'APPROVAL_REQUIRED',
+    });
+    expect(storage.getAllAuditLogs().some(item => item.action === 'LOW_MARGIN_REJECTED')).toBe(true);
+  });
+
+  it('denies Sales self-approval and wrong-team managers with zero writes', async () => {
+    for (const deniedActor of [salesExecutive, { ...salesManager, employeeId: 'manager-other', salesTeamId: 'team-ladakh' }]) {
+      const storage = new InMemoryConversionStorageProvider({ quotes: [quote()], trips: [approvalTrip()] });
+      const service = new LowMarginQuoteApprovalService(storage);
+      await expect(service.decideQuote('quote-1', {
+        decision: 'APPROVED', expectedUpdatedAt: `1:${UPDATED}`,
+      }, deniedActor)).rejects.toMatchObject({ statusCode: 403 });
+      expect(storage.rawGet('quotes', 'quote-1').approval.state).toBe('REVIEW_REQUIRED');
+      expect(storage.getAllAuditLogs()).toHaveLength(0);
+    }
+  });
+
+  it('rejects a forged reviewer identity instead of accepting client-authored approval metadata', async () => {
+    const storage = new InMemoryConversionStorageProvider({ quotes: [quote()], trips: [approvalTrip()] });
+    const service = new LowMarginQuoteApprovalService(storage);
+    await expect(service.decideQuote('quote-1', {
+      decision: 'APPROVED', expectedUpdatedAt: `1:${UPDATED}`, reviewerEmployeeId: 'employee-founder',
+    } as any, salesManager)).rejects.toMatchObject({ statusCode: 400, code: 'INVALID_APPROVAL_DECISION' });
+    expect(storage.rawGet('quotes', 'quote-1').approval.state).toBe('REVIEW_REQUIRED');
+    expect(storage.getAllAuditLogs()).toHaveLength(0);
+  });
+
+  it('allows Founder/Admin ALL scope and rejects stale-screen or changed-economics decisions', async () => {
+    for (const leader of [founder, admin]) {
+      const storage = new InMemoryConversionStorageProvider({ quotes: [quote()], trips: [approvalTrip()] });
+      const approved = await new LowMarginQuoteApprovalService(storage).decideQuote('quote-1', {
+        decision: 'APPROVED', expectedUpdatedAt: `1:${UPDATED}`,
+      }, leader);
+      expect(approved.approval?.state).toBe('APPROVED');
+    }
+
+    const staleStorage = new InMemoryConversionStorageProvider({ quotes: [quote()], trips: [approvalTrip()] });
+    const staleService = new LowMarginQuoteApprovalService(staleStorage);
+    await expect(staleService.decideQuote('quote-1', {
+      decision: 'APPROVED', expectedUpdatedAt: `0:${CREATED}`,
+    }, salesManager)).rejects.toMatchObject({ code: 'QUOTE_APPROVAL_CONFLICT' });
+    staleStorage.rawUpdate('trips', 'trip-1', { totalSellingPrice: 190_000, grossProfit: 40_000, grossMargin: 21.1 });
+    await expect(staleService.decideQuote('quote-1', {
+      decision: 'APPROVED', expectedUpdatedAt: `1:${UPDATED}`,
+    }, salesManager)).rejects.toMatchObject({ code: 'QUOTE_APPROVAL_CONFLICT' });
+    expect(staleStorage.getAllAuditLogs()).toHaveLength(0);
   });
 });

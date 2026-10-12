@@ -74,9 +74,9 @@ test('Trip-backed Quote persists services, backups, pricing, versions, and conve
   await expect(page.getByTestId('quote-hotel-service')).toContainText('Regal Palace');
   await expect(page.getByTestId('quote-transport-service')).toContainText('Toyota Innova Crysta');
   await expect(page.getByTestId('quote-activity-service')).toContainText('Gulmarg Gondola Phase 1');
-  await expect(page.getByTestId('quote-final-price')).toHaveText('₹95,000');
-  await expect(page.getByTestId('quote-profit')).toHaveText('₹75,000');
-  await expect(page.getByTestId('quote-margin')).toHaveText('78.9%');
+  await expect(page.getByTestId('quote-final-price')).toHaveText('₹80,000');
+  await expect(page.getByTestId('quote-profit')).toHaveText('₹60,000');
+  await expect(page.getByTestId('quote-margin')).toHaveText('75%');
 
   await page.getByTestId('load-backups-hotel-ux3').click();
   await page.getByTestId('backup-option-rate-backup').check();
@@ -88,13 +88,14 @@ test('Trip-backed Quote persists services, backups, pricing, versions, and conve
   await page.locator('#nav-item-quotes').click();
   await expect(page.getByTestId('quote-hotel-service')).toContainText('Regal Palace');
   await expect(page.getByTestId('selected-backup-hotel')).toContainText('Lakeview Retreat');
-  await expect(page.getByTestId('quote-selling-price')).toHaveValue('100000');
-  await expect(page.getByTestId('quote-discount')).toHaveValue('5000');
+  await expect(page.getByTestId('quote-selling-price')).toHaveValue('80000');
+  await expect(page.getByTestId('quote-discount')).toHaveValue('0');
   await expect(page.getByTestId('quote-version')).toHaveText('V2');
 
   await page.getByTestId('quote-selling-price').fill('110000');
   await page.getByTestId('save-quote').click();
   await expect(page.getByTestId('quote-version')).toHaveText('V3');
+  await expect(page.getByTestId('quote-selling-price')).toHaveValue('80000');
   await page.getByRole('button', { name: /History/ }).click();
   await expect(page.getByTestId('quote-history-version')).toHaveCount(2);
   await page.getByTestId('close-quote-history').click();

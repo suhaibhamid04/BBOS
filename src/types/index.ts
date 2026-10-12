@@ -1,5 +1,5 @@
 import { BookingComponentStatus, VoucherStatus } from './booking';
-import type { QuoteShareChannel } from './customerPackage';
+import type { CustomerPackageDocument, QuoteShareChannel } from './customerPackage';
 export * from './lead';
 export * from './leadDistribution';
 export * from './leadFollowUp';
@@ -302,6 +302,40 @@ export interface QuoteVersion {
   totalSupplierCost?: number;
   grossProfit?: number;
   grossMargin?: number;
+  supplierCostBreakdown?: PackageSupplierCostBreakdown;
+  pricingMode?: PackagePricingMode;
+  pricingInput?: number;
+  sharedAt?: string;
+  sharedByEmployeeId?: string;
+  shareChannel?: QuoteShareChannel;
+  customerPackageSnapshot?: CustomerPackageDocument;
+}
+
+export interface LowMarginApprovalDecision {
+  decision: 'APPROVED' | 'REJECTED';
+  /** Quote revision presented to the reviewer. */
+  quoteVersion: number;
+  /** Authoritative Trip costing revision behind the reviewed Quote. */
+  costingRevision?: number;
+  totalSupplierCost: number;
+  totalSellingPrice: number;
+  grossProfit: number;
+  grossMargin: number;
+  thresholdPercent: number;
+  reviewerEmployeeId: string;
+  reviewerName?: string;
+  decidedAt: string;
+  note?: string;
+}
+
+export interface QuoteCommercialApproval {
+  required: boolean;
+  state?: 'NOT_REQUIRED' | 'PENDING' | 'REVIEW_REQUIRED' | 'APPROVED' | 'REJECTED' | string;
+  thresholdPercent?: number;
+  assessedAt?: string;
+  currentDecision?: LowMarginApprovalDecision;
+  /** Append-only decision history retained when a current decision is superseded. */
+  history?: LowMarginApprovalDecision[];
 }
 
 export type QuoteStatus = 'DRAFT' | 'PENDING_APPROVAL' | 'SENT' | 'VIEWED' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED';
@@ -358,6 +392,12 @@ export interface QuoteTransportItem {
   isFoc?: boolean;
   focReason?: string;
   specialRequests?: string;
+  vehicleCount?: number;
+  chargeableDays?: number;
+  serviceDays?: import('./transport').TransportServiceDay[];
+  costSource?: import('./accommodation').AccommodationCostSource;
+  packageSupplierRate?: import('./accommodation').PackageSupplierRate;
+  originalContractedTotal?: number;
 }
 
 export interface QuoteActivityItem {
@@ -379,6 +419,11 @@ export interface QuoteActivityItem {
   isFoc?: boolean;
   focReason?: string;
   specialRequests?: string;
+  pricingModel?: import('./activity').ActivityPricingModel;
+  inclusionStatus?: import('./activity').ActivityInclusionStatus;
+  costSource?: import('./accommodation').AccommodationCostSource;
+  packageSupplierRate?: import('./accommodation').PackageSupplierRate;
+  originalContractedTotal?: number;
 }
 
 export interface QuoteBackupAccommodation {
@@ -428,6 +473,10 @@ export interface Quote {
   totalSupplierCost?: number;
   grossProfit?: number;
   grossMargin?: number;
+  /** Frozen authoritative package-cost categories from the source Trip. */
+  supplierCostBreakdown?: PackageSupplierCostBreakdown;
+  pricingMode?: PackagePricingMode;
+  pricingInput?: number;
   status: QuoteStatus;
   validUntil: string;
   createdAt: string;
@@ -448,18 +497,18 @@ export interface Quote {
   sharedAt?: string;
   sharedByEmployeeId?: string;
   shareChannel?: QuoteShareChannel;
+  /** Immutable customer-facing artifact captured when this Quote was shared. */
+  customerPackageSnapshot?: CustomerPackageDocument;
   /** Server-issued provenance for the authoritative supplier-cost aggregate. */
   supplierCostSource?: {
     type: 'TRIP';
     sourceId: string;
     asOf: string;
+    costingRevision?: number;
   };
   /** Future low-margin approval hook. D1 does not choose a threshold. */
   requiresLowMarginApproval?: boolean;
-  approval?: {
-    required: boolean;
-    state?: string;
-  };
+  approval?: QuoteCommercialApproval;
   convertedBookingId?: string;
   version: number;
   versionHistory?: QuoteVersion[];
@@ -487,6 +536,40 @@ export type TripStatus =
  * `CALCULATED` may legitimately have a zero supplier cost.
  */
 export type TripCostingStatus = 'PENDING' | 'CALCULATED';
+
+export type PackagePricingMode = 'SELLING_PRICE' | 'TARGET_PROFIT' | 'TARGET_MARGIN';
+
+export type PackageSupplierCostCategory = 'ACCOMMODATION' | 'TRANSPORT' | 'ACTIVITIES' | 'OTHER';
+
+export interface PackageSupplierCostItem {
+  /** Customer-safe label; internal inventory/document identifiers are intentionally omitted. */
+  label: string;
+  amount: number;
+}
+
+export interface PackageSupplierCostCategoryBreakdown {
+  total: number;
+  items: PackageSupplierCostItem[];
+}
+
+export interface PackageSupplierCostBreakdown {
+  accommodation: PackageSupplierCostCategoryBreakdown;
+  transport: PackageSupplierCostCategoryBreakdown;
+  activities: PackageSupplierCostCategoryBreakdown;
+  other: PackageSupplierCostCategoryBreakdown;
+  total: number;
+}
+
+export interface PackageCommercialApproval {
+  required: boolean;
+  state: 'NOT_REQUIRED' | 'REVIEW_REQUIRED' | 'APPROVED' | 'REJECTED';
+  /** Snapshot of the configured policy used for the assessment. */
+  thresholdPercent?: number;
+  assessedAt: string;
+  currentDecision?: LowMarginApprovalDecision;
+  /** Append-only decision history; it is not an authorization grant by itself. */
+  history?: LowMarginApprovalDecision[];
+}
 
 export interface TripPackageReview {
   required: boolean;
@@ -516,8 +599,17 @@ export interface Trip {
   currency: string;
   totalSupplierCost: number;
   costingStatus?: TripCostingStatus;
+  /** Server-controlled commercial-input revision used to reject stale calculations. */
+  costingRevision?: number;
+  /** Revision whose supplier costs are currently authoritative. */
+  costingCalculatedRevision?: number;
   packageReview?: TripPackageReview;
   totalSellingPrice: number;
+  /** Exactly one server-authoritative pricing input drives the derived economics. */
+  pricingMode?: PackagePricingMode;
+  pricingInput?: number;
+  supplierCostBreakdown?: PackageSupplierCostBreakdown;
+  commercialApproval?: PackageCommercialApproval;
   grossProfit: number;
   grossMargin: number;
   budget?: number;
@@ -574,8 +666,8 @@ export interface TransportItineraryMetadata {
   inventoryType: 'TRANSPORT';
   vehicleCategoryId: string;
   vehicleName: string;
-  rateId: string;
-  supplierId: string;
+  rateId?: string;
+  supplierId?: string;
   supplierName?: string;
   serviceType: string;
   pricingUnit: string;
@@ -583,20 +675,28 @@ export interface TransportItineraryMetadata {
   routeName: string;
   startDate: string;
   vehicleDays: number;
+  vehicleCount?: number;
+  chargeableDays?: number;
+  packagePricingBasis?: import('./transport').TransportPackagePricingBasis;
+  serviceDays?: import('./transport').TransportServiceDay[];
   nightHalts: number;
   occurrences: number;
   distanceKm: number;
   hours: number;
   needsConfirmation: boolean;
   taxDescription: string;
+  costSource?: import('./accommodation').AccommodationCostSource;
+  packageRateRequest?: import('./accommodation').PackageSupplierRateInput;
+  packageSupplierRate?: import('./accommodation').PackageSupplierRate;
+  contractedTotalSupplierCost?: number;
 }
 
 export interface ActivityItineraryMetadata {
   inventoryType: 'ACTIVITY';
   activityId: string;
   activityName: string;
-  rateId: string;
-  supplierId: string;
+  rateId?: string;
+  supplierId?: string;
   supplierName?: string;
   pricingModel: string;
   date: string;
@@ -609,9 +709,15 @@ export interface ActivityItineraryMetadata {
   hours: number;
   days: number;
   sessions: number;
+  units?: number;
+  inclusionStatus?: import('./activity').ActivityInclusionStatus;
   duration?: string;
   needsConfirmation: boolean;
   taxDescription: string;
+  costSource?: import('./accommodation').AccommodationCostSource;
+  packageRateRequest?: import('./accommodation').PackageSupplierRateInput;
+  packageSupplierRate?: import('./accommodation').PackageSupplierRate;
+  contractedTotalSupplierCost?: number;
 }
 
 export type InventoryItineraryMetadata =

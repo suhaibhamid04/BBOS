@@ -58,7 +58,7 @@ test('Scenario A: 4 adults receive a 2 + 2 room suggestion and cost without a ca
   await expect(page.getByTestId('confirm-trip-hotel')).toBeEnabled();
   await page.getByTestId('confirm-trip-hotel').click();
   await page.getByTestId('calculate-trip-costs').click();
-  await expect(page.getByTestId('trip-costing-status')).toHaveText('CALCULATED');
+  await expect(page.getByTestId('trip-costing-status')).toHaveText('Costs current');
   await expect(page.getByText(/capacity/i)).toHaveCount(0);
   await expect(page.getByText('[Protected by RBAC]')).toHaveCount(0);
   await expect(page.getByText('[Restricted]')).toHaveCount(0);
@@ -99,7 +99,7 @@ test('Scenario D: 6 adults receive and can save a 3-room allocation', async ({ p
   await expect(page.getByTestId('room-2-adults')).toHaveValue('2');
   await expect(page.getByTestId('room-3-adults')).toHaveValue('2');
   await page.getByTestId('confirm-trip-hotel').click();
-  await expect(page.getByTestId('trip-costing-status')).toHaveText('PENDING');
+  await expect(page.getByTestId('trip-costing-status')).toHaveText('Needs update');
 });
 
 test('Scenario E: category rules control three-adult guidance in the Sales picker', async ({ page }) => {

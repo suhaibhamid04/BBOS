@@ -424,6 +424,31 @@ describe('BBOS Phase 2B-5 Stage 4 — Quote-to-Booking Conversion Engine', () =>
     expect(snapshot?.lineItems.length).toBe(3);
   });
 
+  it('13c. Booking uses the frozen M4.3 Quote category snapshot instead of repricing aggregate economics', async () => {
+    const quote = createBaseQuote({
+      totalSupplierCost: 15_000,
+      grossProfit: 40_000,
+      grossMargin: 72.7,
+      supplierCostSource: { type: 'TRIP', sourceId: 'trip-stage4-01', asOf: '2026-09-01T10:00:00Z', costingRevision: 3 },
+      supplierCostBreakdown: {
+        accommodation: { total: 8_000, items: [{ label: 'Hotel Kareem', amount: 8_000 }] },
+        transport: { total: 4_000, items: [{ label: 'Innova', amount: 4_000 }] },
+        activities: { total: 800, items: [{ label: 'Shikara', amount: 800 }] },
+        other: { total: 2_200, items: [{ label: 'Guide', amount: 2_200 }] },
+        total: 15_000,
+      },
+    });
+    storage.rawSet('quotes', quote.id, quote);
+    storage.rawUpdate('trips', 'trip-stage4-01', { costingStatus: 'CALCULATED', costingRevision: 3, costingCalculatedRevision: 3 });
+    const result = await service.convertQuoteToBooking(quote.id, salesExecActor, { currentDate: '2026-09-15' });
+    const snapshot = await storage.getFinancialSnapshot(result.booking.id);
+    expect(snapshot).toMatchObject({
+      totalSupplierCost: 15_000, accommodationSupplierCost: 8_000,
+      transportSupplierCost: 4_000, activitySupplierCost: 800,
+      otherSupplierCosts: 2_200, grossProfit: 40_000, grossMargin: 72.7,
+    });
+  });
+
   it('13b. package supplier rate and source are frozen without repricing from master inventory', async () => {
     const packageRate = {
       entryMode: 'PER_ROOM_NIGHT' as const, amount: 3_800, taxTreatment: 'NET' as const,
@@ -888,5 +913,44 @@ describe('BBOS Phase 2B-5 Stage 4 — Quote-to-Booking Conversion Engine', () =>
     expect(storage.getAllBookings()).toHaveLength(0);
     expect(storage.getAllConversions()).toHaveLength(0);
     expect(storage.getAllAuditLogs()).toHaveLength(0);
+  });
+
+  it('35. a valid approval for the exact commercial snapshot allows conversion', async () => {
+    const quote = createBaseQuote({
+      totalSupplierCost: 12_800, grossProfit: 42_200, grossMargin: 76.7,
+      requiresLowMarginApproval: true,
+      approval: {
+        required: true, state: 'APPROVED', thresholdPercent: 80, assessedAt: '2026-09-01T10:00:00Z',
+        currentDecision: {
+          decision: 'APPROVED', quoteVersion: 1, totalSupplierCost: 12_800,
+          totalSellingPrice: 55_000, grossProfit: 42_200, grossMargin: 76.7,
+          thresholdPercent: 80, reviewerEmployeeId: 'emp-manager-01', decidedAt: '2026-09-02T10:00:00Z',
+        },
+      },
+    });
+    storage.rawSet('quotes', quote.id, quote);
+    const result = await service.convertQuoteToBooking(quote.id, salesExecActor, { currentDate: '2026-09-15' });
+    expect(result.success).toBe(true);
+    expect(storage.getAllBookings()).toHaveLength(1);
+  });
+
+  it('36. an approval snapshot cannot authorize changed Quote economics', async () => {
+    const quote = createBaseQuote({
+      totalSupplierCost: 12_800, grossProfit: 42_200, grossMargin: 76.7,
+      requiresLowMarginApproval: true,
+      approval: {
+        required: true, state: 'APPROVED', thresholdPercent: 80, assessedAt: '2026-09-01T10:00:00Z',
+        currentDecision: {
+          decision: 'APPROVED', quoteVersion: 1, totalSupplierCost: 12_800,
+          totalSellingPrice: 55_000, grossProfit: 42_200, grossMargin: 76.7,
+          thresholdPercent: 80, reviewerEmployeeId: 'emp-manager-01', decidedAt: '2026-09-02T10:00:00Z',
+        },
+      },
+      finalAmount: 50_000,
+    });
+    storage.rawSet('quotes', quote.id, quote);
+    await expect(service.convertQuoteToBooking(quote.id, salesExecActor, { currentDate: '2026-09-15' }))
+      .rejects.toMatchObject({ statusCode: 403, code: 'RESOURCE_ACCESS_DENIED' });
+    expect(storage.getAllBookings()).toHaveLength(0);
   });
 });

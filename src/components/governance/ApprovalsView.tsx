@@ -17,6 +17,10 @@ function money(amountMinor: number, currency = 'INR') {
   return new Intl.NumberFormat('en-IN', { style: 'currency', currency }).format(amountMinor / 100);
 }
 
+function moneyAmount(amount: number, currency = 'INR') {
+  return new Intl.NumberFormat('en-IN', { style: 'currency', currency, maximumFractionDigits: 0 }).format(amount);
+}
+
 const statusClass: Record<ApprovalInboxItem['status'], string> = {
   PENDING: 'bg-amber-100 text-amber-900',
   REVIEW_REQUIRED: 'bg-violet-100 text-violet-800',
@@ -33,7 +37,7 @@ function ApprovalCard({ item, deciding, onApprove, onReject, onOpen }: {
   onOpen: () => void;
 }) {
   return (
-    <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-xs">
+    <article data-testid={`approval-item-${item.id}`} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-xs">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
@@ -58,14 +62,23 @@ function ApprovalCard({ item, deciding, onApprove, onReject, onOpen }: {
               {item.context.confirmedSupplierUnitRate !== undefined && <span>Confirmed rate: <strong>{item.context.confirmedSupplierUnitRate}</strong></span>}
               {item.context.difference !== undefined && <span>Difference: <strong>{item.context.difference}</strong></span>}
               {item.context.changeType && <span>Change: <strong>{item.context.changeType.replaceAll('_', ' ')}</strong></span>}
+              {item.context.salespersonName && <span>Salesperson: <strong>{item.context.salespersonName}</strong></span>}
+              {item.context.supplierCost !== undefined && <span>Supplier cost: <strong>{moneyAmount(item.context.supplierCost, item.currency)}</strong></span>}
+              {item.context.sellingPrice !== undefined && <span>Selling price: <strong>{moneyAmount(item.context.sellingPrice, item.currency)}</strong></span>}
+              {item.context.profit !== undefined && <span>Profit: <strong>{moneyAmount(item.context.profit, item.currency)}</strong></span>}
+              {item.context.marginPercent !== undefined && <span>Margin: <strong>{item.context.marginPercent}%</strong></span>}
+              {item.context.thresholdPercent !== undefined && <span>Required threshold: <strong>{item.context.thresholdPercent}%</strong></span>}
+              {item.context.salesNote && <span className="sm:col-span-2">Sales note: <strong>{item.context.salesNote}</strong></span>}
+              {item.context.decidedByName && <span>Decision by: <strong>{item.context.decidedByName}</strong></span>}
+              {item.context.decisionNote && <span className="sm:col-span-2">Decision note: <strong>{item.context.decisionNote}</strong></span>}
             </div>
           )}
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
           <button type="button" onClick={onOpen} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"><ExternalLink className="h-3.5 w-3.5" /> Open record</button>
           {item.actionable ? <>
-            <button type="button" disabled={deciding} onClick={onReject} className="inline-flex items-center gap-1 rounded-lg bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 disabled:opacity-50"><X className="h-3.5 w-3.5" /> Reject</button>
-            <button type="button" disabled={deciding} onClick={onApprove} className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">{deciding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Approve</button>
+            <button data-testid="reject-approval" type="button" disabled={deciding} onClick={onReject} className="inline-flex items-center gap-1 rounded-lg bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 disabled:opacity-50"><X className="h-3.5 w-3.5" /> Reject</button>
+            <button data-testid="approve-approval" type="button" disabled={deciding} onClick={onApprove} className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">{deciding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Approve</button>
           </> : item.status === 'PENDING' || item.status === 'REVIEW_REQUIRED' ? (
             <span className="inline-flex items-center rounded-lg bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">Review in source workflow</span>
           ) : null}
@@ -81,8 +94,9 @@ export const ApprovalsView: React.FC<ApprovalsViewProps> = ({ onNavigate }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [decidingId, setDecidingId] = useState<string | null>(null);
-  const [rejectingItem, setRejectingItem] = useState<ApprovalInboxItem | null>(null);
-  const [rejectionReason, setRejectionReason] = useState('');
+  const [decisionItem, setDecisionItem] = useState<ApprovalInboxItem | null>(null);
+  const [decisionType, setDecisionType] = useState<'APPROVED' | 'REJECTED'>('APPROVED');
+  const [decisionNote, setDecisionNote] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -101,10 +115,14 @@ export const ApprovalsView: React.FC<ApprovalsViewProps> = ({ onNavigate }) => {
       await decideApprovalInboxItem(item.id, {
         decision,
         expectedUpdatedAt: item.sourceVersion,
-        ...(reason?.trim() ? { rejectionReason: reason.trim() } : {}),
+        ...(reason?.trim()
+          ? item.type === 'EMERGENCY_SPEND' && decision === 'REJECTED'
+            ? { rejectionReason: reason.trim() }
+            : { decisionNote: reason.trim() }
+          : {}),
       }, currentUser.employeeId);
-      setRejectingItem(null);
-      setRejectionReason('');
+      setDecisionItem(null);
+      setDecisionNote('');
       await load();
     } catch (decisionError: any) {
       setError(decisionError?.message || 'Unable to record the decision. Reload and try again.');
@@ -135,14 +153,14 @@ export const ApprovalsView: React.FC<ApprovalsViewProps> = ({ onNavigate }) => {
       {loading && !inbox ? <div className="flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white p-10 text-sm text-slate-500"><Loader2 className="h-5 w-5 animate-spin" /> Loading scoped approvals…</div> : (
         <div className="space-y-7">{sections.map((section) => <section key={section.title} className="space-y-3">
           <div><h3 className="text-sm font-bold text-slate-900">{section.title}</h3><p className="text-xs text-slate-500">{section.description}</p></div>
-          {section.items.length ? section.items.map((item) => <ApprovalCard key={`${section.title}-${item.id}`} item={item} deciding={decidingId === item.id} onApprove={() => void decide(item, 'APPROVED')} onReject={() => setRejectingItem(item)} onOpen={() => onNavigate?.(item.route.section, item.route.entityId)} />) : <div className="rounded-xl border border-dashed border-slate-200 bg-white p-5 text-center text-xs text-slate-400">Nothing in this section.</div>}
+          {section.items.length ? section.items.map((item) => <ApprovalCard key={`${section.title}-${item.id}`} item={item} deciding={decidingId === item.id} onApprove={() => { setDecisionItem(item); setDecisionType('APPROVED'); setDecisionNote(''); }} onReject={() => { setDecisionItem(item); setDecisionType('REJECTED'); setDecisionNote(''); }} onOpen={() => onNavigate?.(item.route.section, item.route.entityId)} />) : <div className="rounded-xl border border-dashed border-slate-200 bg-white p-5 text-center text-xs text-slate-400">Nothing in this section.</div>}
         </section>)}</div>
       )}
 
-      {rejectingItem && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4"><div className="w-full max-w-md space-y-4 rounded-2xl bg-white p-5 shadow-2xl">
-        <div><h3 className="text-sm font-bold text-slate-900">Reject emergency spend</h3><p className="mt-1 text-xs text-slate-500">A reason is required and will be recorded by the domain workflow.</p></div>
-        <textarea value={rejectionReason} onChange={(event) => setRejectionReason(event.target.value)} rows={4} maxLength={1000} className="w-full rounded-xl border border-slate-300 p-3 text-xs" placeholder="Reason for rejection" />
-        <div className="flex justify-end gap-2"><button type="button" onClick={() => setRejectingItem(null)} className="rounded-lg px-3 py-2 text-xs font-bold text-slate-600">Cancel</button><button type="button" disabled={!rejectionReason.trim() || decidingId === rejectingItem.id} onClick={() => void decide(rejectingItem, 'REJECTED', rejectionReason)} className="inline-flex items-center gap-1 rounded-lg bg-rose-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-50"><X className="h-3.5 w-3.5" /> Reject</button></div>
+      {decisionItem && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4"><div className="w-full max-w-md space-y-4 rounded-2xl bg-white p-5 shadow-2xl">
+        <div><h3 className="text-sm font-bold text-slate-900">{decisionType === 'APPROVED' ? 'Approve commercial exception' : 'Reject commercial exception'}</h3><p className="mt-1 text-xs text-slate-500">Your identity, the reviewed economics, and this optional note will be recorded in the audit trail.</p></div>
+        <textarea data-testid="approval-decision-note" value={decisionNote} onChange={(event) => setDecisionNote(event.target.value)} rows={4} maxLength={1000} className="w-full rounded-xl border border-slate-300 p-3 text-xs" placeholder="Optional decision note" />
+        <div className="flex justify-end gap-2"><button type="button" onClick={() => setDecisionItem(null)} className="rounded-lg px-3 py-2 text-xs font-bold text-slate-600">Cancel</button><button data-testid="confirm-approval-decision" type="button" disabled={decidingId === decisionItem.id} onClick={() => void decide(decisionItem, decisionType, decisionNote)} className={`inline-flex items-center gap-1 rounded-lg px-3 py-2 text-xs font-bold text-white disabled:opacity-50 ${decisionType === 'APPROVED' ? 'bg-emerald-600' : 'bg-rose-600'}`}>{decisionType === 'APPROVED' ? <Check className="h-3.5 w-3.5" /> : <X className="h-3.5 w-3.5" />} {decisionType === 'APPROVED' ? 'Approve' : 'Reject'}</button></div>
       </div></div>}
     </div>
   );

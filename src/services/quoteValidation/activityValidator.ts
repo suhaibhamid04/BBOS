@@ -129,6 +129,48 @@ export class ActivityQuoteValidator {
       };
     }
 
+    const frozenPackageRate = item.packageSupplierRate;
+    if (item.inclusionStatus === 'OPTIONAL' || item.inclusionStatus === 'NOT_INCLUDED') {
+      return {
+        serviceType: 'ACTIVITY', serviceId, serviceName: activity.name,
+        outcome: 'AVAILABLE', isValid: errors.length === 0, canProceedToBooking: errors.length === 0,
+        rateVerified: true, ...(item.activityRatePeriodId ? { ratePeriodId: item.activityRatePeriodId } : {}),
+        authoritativeSupplierCost: 0, quotedSupplierCost: 0, availabilityStatus: 'AVAILABLE',
+        lineItemSnapshot: {
+          serviceId, serviceType: 'ACTIVITY', supplierId: activity.supplierId || activity.id,
+          supplierName: activity.name, inventoryMasterId: activity.id,
+          ...(item.activityRatePeriodId ? { ratePeriodId: item.activityRatePeriodId } : {}),
+          rateContractType: frozenPackageRate ? 'PACKAGE' : 'STANDARD', frozenSupplierUnitRate: 0,
+          units: 0, frozenSupplementsCost: 0, frozenTotalSupplierCost: 0,
+          taxTreatment: frozenPackageRate?.taxTreatment || 'INCLUSIVE', taxAmount: 0,
+          rateVerifiedAt: new Date().toISOString(), ...(item.costSource ? { costSource: item.costSource } : {}),
+          ...(frozenPackageRate ? { packageSupplierRate: frozenPackageRate } : {}),
+          ...(item.originalContractedTotal !== undefined ? { originalContractedTotal: item.originalContractedTotal } : {}),
+        }, errors, warnings,
+      };
+    }
+    if (frozenPackageRate && typeof item.supplierCost === 'number' && Number.isFinite(item.supplierCost) && item.supplierCost >= 0) {
+      const units = frozenPackageRate.entryMode === 'FLAT_TOTAL' || frozenPackageRate.entryMode === 'TOTAL_SERVICE' ? 1 : Math.max(1, pax);
+      return {
+        serviceType: 'ACTIVITY', serviceId, serviceName: activity.name,
+        outcome: 'AVAILABLE', isValid: errors.length === 0, canProceedToBooking: errors.length === 0,
+        rateVerified: true, ...(item.activityRatePeriodId ? { ratePeriodId: item.activityRatePeriodId } : {}),
+        authoritativeSupplierCost: item.supplierCost, quotedSupplierCost: item.supplierCost,
+        availabilityStatus: 'AVAILABLE',
+        lineItemSnapshot: {
+          serviceId, serviceType: 'ACTIVITY', supplierId: activity.supplierId || activity.id,
+          supplierName: activity.name, inventoryMasterId: activity.id,
+          ...(item.activityRatePeriodId ? { ratePeriodId: item.activityRatePeriodId } : {}),
+          rateContractType: 'PACKAGE', frozenSupplierUnitRate: frozenPackageRate.amount,
+          units, frozenSupplementsCost: 0, frozenTotalSupplierCost: item.supplierCost,
+          taxTreatment: frozenPackageRate.taxTreatment, taxAmount: 0,
+          rateVerifiedAt: new Date().toISOString(), costSource: item.costSource,
+          packageSupplierRate: frozenPackageRate,
+          ...(item.originalContractedTotal !== undefined ? { originalContractedTotal: item.originalContractedTotal } : {}),
+        }, errors, warnings,
+      };
+    }
+
     // Rate period validation
     const ratePeriodId = item.activityRatePeriodId;
     if (!ratePeriodId) {

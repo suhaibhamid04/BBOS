@@ -58,12 +58,23 @@ export type AccommodationCostSource =
   | 'PACKAGE_RATE_OVERRIDE'
   | 'PENDING';
 
-export type PackageRateEntryMode = 'PER_ROOM_NIGHT' | 'TOTAL_STAY';
+export type PackageRateEntryMode =
+  | 'PER_ROOM_NIGHT'
+  | 'TOTAL_STAY'
+  | 'PER_VEHICLE_DAY'
+  | 'TOTAL_SERVICE'
+  | 'PER_PERSON'
+  | 'PER_CHILD'
+  | 'PER_GROUP'
+  | 'PER_UNIT'
+  | 'FLAT_TOTAL';
 
 /** Allowlisted browser proposal. Actor and timestamp are always supplied by the server. */
 export interface PackageSupplierRateInput {
   entryMode: PackageRateEntryMode;
   amount: number;
+  /** Optional child unit price for activity PER_PERSON package rates. */
+  childAmount?: number;
   taxTreatment: TaxTreatment;
   supplierQuoteReference?: string;
   overrideReason?: string;

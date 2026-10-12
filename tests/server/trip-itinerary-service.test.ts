@@ -50,9 +50,9 @@ function seedInventory(storage: InMemoryConversionStorageProvider) {
   storage.rawSet('room_categories', 'room-2', { id: 'room-2', propertyId: 'property-2', name: 'Lake Suite', maxAdults: 2, maxChildren: 2, active: true });
   storage.rawSet('rate_periods', 'rate-2', { id: 'rate-2', propertyId: 'property-2', roomCategoryId: 'room-2', contractType: 'STANDARD', mealPlan: 'CP', validFrom: '2026-10-01', validTo: '2026-10-31', baseRate: 5_000, currency: 'INR', taxTreatment: 'NET', confirmationStatus: 'CONFIRMED', status: 'ACTIVE', supplements: [{ id: 'cwb', ratePeriodId: 'rate-2', type: 'CWB', amount: 500, unit: 'per_child_night', taxTreatment: 'NET' }] });
   storage.rawSet('vehicle_categories', 'vehicle-1', { id: 'vehicle-1', name: 'Innova', displayName: 'Innova', active: true });
-  storage.rawSet('transport_rate_periods', 'transport-rate-1', { id: 'transport-rate-1', vehicleCategoryId: 'vehicle-1', supplierId: 'supplier-1', serviceType: 'MULTI_DAY_JOURNEY', pricingUnit: 'PER_DAY', validFrom: '2026-10-01', validTo: '2026-10-31', status: 'ACTIVE' });
-  storage.rawSet('activity_masters', 'activity-1', { id: 'activity-1', name: 'Shikara Ride', duration: '1 Hour', active: true });
-  storage.rawSet('activity_rate_periods', 'activity-rate-1', { id: 'activity-rate-1', activityId: 'activity-1', supplierId: 'supplier-1', pricingModel: 'PER_PERSON', validFrom: '2026-10-01', validTo: '2026-10-31', status: 'ACTIVE' });
+  storage.rawSet('transport_rate_periods', 'transport-rate-1', { id: 'transport-rate-1', vehicleCategoryId: 'vehicle-1', supplierId: 'supplier-1', serviceType: 'MULTI_DAY_JOURNEY', pricingUnit: 'PER_DAY', baseRate: 5_000, currency: 'INR', validFrom: '2026-10-01', validTo: '2026-10-31', availabilityStatus: 'AVAILABLE', confirmationStatus: 'CONFIRMED', taxTreatment: 'NET', inclusions: { vehicle: 'INCLUDED', driver: 'INCLUDED', fuel: 'INCLUDED', toll: 'INCLUDED', parking: 'INCLUDED', tax: 'INCLUDED', driverAllowance: 'INCLUDED', nightHalt: 'INCLUDED', permits: 'INCLUDED' }, status: 'ACTIVE' });
+  storage.rawSet('activity_masters', 'activity-1', { id: 'activity-1', name: 'Shikara Ride', supplierId: 'supplier-1', duration: '1 Hour', active: true });
+  storage.rawSet('activity_rate_periods', 'activity-rate-1', { id: 'activity-rate-1', activityId: 'activity-1', supplierId: 'supplier-1', pricingModel: 'PER_PERSON', pricingComponents: { person: 700 }, currency: 'INR', validFrom: '2026-10-01', validTo: '2026-10-31', availabilityStatus: 'AVAILABLE', confirmationStatus: 'CONFIRMED', taxTreatment: 'NET', status: 'ACTIVE' });
 }
 
 async function expectError(promise: Promise<unknown>, code: string, status = 403) {
@@ -96,6 +96,14 @@ describe('Stage D2B server-authoritative Trip itinerary and deletion mutations',
     expect(updated.day.location).toBe('Gulmarg');
     await expectError(service.updateItineraryDay('day-other-team', { location: 'Denied' }, manager), 'RESOURCE_ACCESS_DENIED');
     expect(storage.rawGet('itinerary_days', 'day-other-team')?.location).toBe('Srinagar');
+  });
+
+  test('internal itinerary notes do not invalidate otherwise current costing', async () => {
+    const { storage, service } = harness();
+    const result = await service.updateItineraryDay('day-own', { notes: 'Call supplier after lunch.' }, executive);
+    expect(result.day.notes).toBe('Call supplier after lunch.');
+    expect(result.trip).toMatchObject({ costingStatus: 'CALCULATED' });
+    expect(storage.getAllAuditLogs().filter(log => log.action === 'COSTING_INVALIDATED')).toHaveLength(0);
   });
 
   test('client owner, team, status, and supplier-cost fields are rejected without writes', async () => {
@@ -170,6 +178,41 @@ describe('Stage D2B server-authoritative Trip itinerary and deletion mutations',
     expect(storage.rawList('audit_logs').some(value => value.action === 'PACKAGE_SUPPLIER_RATE_CHANGED')).toBe(true);
   });
 
+  test('supplier reference-only edit preserves current costing but a package amount edit invalidates it', async () => {
+    const { storage, service } = harness(); seedInventory(storage);
+    const payload = (amount: number, supplierQuoteReference: string) => ({
+      type: 'HOTEL', title: 'Hotel', description: 'Stay',
+      metadata: { propertyId: 'property-1', roomCategoryId: 'room-1', rateId: 'rate-1', mealPlan: 'MAP', checkInDate: '2026-10-02', nights: 2, rooms: 1, roomAllocations: [{ roomIndex: 1, roomCategoryId: 'room-1', rateId: 'rate-1', adults: 2, children: 0, childAges: [] }], packageRateRequest: { entryMode: 'PER_ROOM_NIGHT', amount, taxTreatment: 'NET', supplierQuoteReference } },
+    });
+    const created = await service.addItineraryItem('day-own', payload(3_800, 'Phone call'), executive);
+    storage.rawUpdate('trips', 'trip-own', { costingStatus: 'CALCULATED', costingRevision: created.trip.costingRevision, costingCalculatedRevision: created.trip.costingRevision });
+
+    const referenceOnly = await service.updateItineraryItem('day-own', created.item.id, payload(3_800, 'WhatsApp follow-up'), executive);
+    expect(referenceOnly.trip.costingStatus).toBe('CALCULATED');
+    expect(referenceOnly.trip.costingRevision).toBe(created.trip.costingRevision);
+
+    const amountChanged = await service.updateItineraryItem('day-own', created.item.id, payload(4_200, 'WhatsApp follow-up'), executive);
+    expect(amountChanged.trip.costingStatus).toBe('PENDING');
+    expect(amountChanged.trip.costingRevision).toBe(Number(created.trip.costingRevision || 0) + 1);
+    const invalidationCount = storage.rawList('audit_logs').filter(value => value.action === 'COSTING_INVALIDATED').length;
+
+    const changedAgainWhilePending = await service.updateItineraryItem('day-own', created.item.id, payload(4_300, 'Second price change'), executive);
+    expect(changedAgainWhilePending.trip.costingRevision).toBe(Number(amountChanged.trip.costingRevision || 0) + 1);
+    expect(storage.rawList('audit_logs').filter(value => value.action === 'COSTING_INVALIDATED')).toHaveLength(invalidationCount);
+
+    storage.rawUpdate('trips', 'trip-own', {
+      costingStatus: 'CALCULATED',
+      costingRevision: changedAgainWhilePending.trip.costingRevision,
+      costingCalculatedRevision: changedAgainWhilePending.trip.costingRevision,
+    });
+    const removed = await service.updateItineraryItem('day-own', created.item.id, {
+      type: 'HOTEL', title: 'Hotel', description: 'Stay',
+      metadata: { propertyId: 'property-1', roomCategoryId: 'room-1', rateId: 'rate-1', mealPlan: 'MAP', checkInDate: '2026-10-02', nights: 2, rooms: 1, roomAllocations: [{ roomIndex: 1, roomCategoryId: 'room-1', rateId: 'rate-1', adults: 2, children: 0, childAges: [] }] },
+    }, executive);
+    expect(removed.item.metadata?.packageSupplierRate).toBeUndefined();
+    expect(removed.trip.costingStatus).toBe('PENDING');
+  });
+
   test('manual package quote works without contract and hotel replacement clears old package pricing', async () => {
     const { storage, service } = harness(); seedInventory(storage);
     storage.rawSet('rate_periods', 'rate-2', { ...storage.rawGet('rate_periods', 'rate-2'), status: 'ARCHIVED' });
@@ -180,7 +223,19 @@ describe('Stage D2B server-authoritative Trip itinerary and deletion mutations',
     expect(created.item.metadata?.costSource).toBe('MANUAL_SUPPLIER_QUOTE');
     expect(created.item.metadata?.rateId).toBeUndefined();
 
-    const replacement = await service.updateItineraryItem('day-own', created.item.id, {
+    storage.rawUpdate('trips', 'trip-own', {
+      costingStatus: 'CALCULATED',
+      costingRevision: created.trip.costingRevision,
+      costingCalculatedRevision: created.trip.costingRevision,
+    });
+    const manualChanged = await service.updateItineraryItem('day-own', created.item.id, {
+      type: 'HOTEL', title: 'Manual', description: 'Stay',
+      metadata: { propertyId: 'property-2', roomCategoryId: 'room-2', mealPlan: 'CP', checkInDate: '2026-10-02', nights: 2, rooms: 1, roomAllocations: [{ roomIndex: 1, roomCategoryId: 'room-2', adults: 2, children: 0, childAges: [] }], packageRateRequest: { entryMode: 'TOTAL_STAY', amount: 10_000, taxTreatment: 'NET', supplierQuoteReference: 'Requoted' } },
+    }, executive);
+    expect(manualChanged.item.metadata?.packageSupplierRate.amount).toBe(10_000);
+    expect(manualChanged.trip.costingStatus).toBe('PENDING');
+
+    const replacement = await service.updateItineraryItem('day-own', manualChanged.item.id, {
       type: 'HOTEL', title: 'Contracted', description: 'Stay',
       metadata: { propertyId: 'property-1', roomCategoryId: 'room-1', rateId: 'rate-1', mealPlan: 'MAP', checkInDate: '2026-10-02', nights: 2, rooms: 1, roomAllocations: [{ roomIndex: 1, roomCategoryId: 'room-1', rateId: 'rate-1', adults: 2, children: 0, childAges: [] }] },
     }, executive);
@@ -332,7 +387,7 @@ describe('Stage D2B server-authoritative Trip itinerary and deletion mutations',
       leadId: 'lead-1', customerId: 'customer-1', customerName: 'Customer One', destination: 'Kashmir',
       tripId: 'trip-own', travelerCount: 2, totalAmount: 1_000, discountAmount: 0,
       validUntil: '2026-10-31', hotels: [], transports: [], activities: [],
-    }, executive), 'TRIP_COSTING_INCOMPLETE', 422);
+    }, executive), 'TRIP_COSTING_PENDING', 409);
     expect(storage.getAllAuditLogs()).toHaveLength(0);
   });
 
@@ -341,5 +396,95 @@ describe('Stage D2B server-authoritative Trip itinerary and deletion mutations',
     expect(rules).toContain('allow create, update, delete: if false;');
     const tripBlock = rules.match(/match \/trips\/\{tripId\} \{([\s\S]*?)\n    \}/)?.[1] ?? '';
     expect(tripBlock).toContain('allow delete: if false;');
+  });
+});
+
+describe('Sales Core M4.2 transport and activity package persistence', () => {
+  test('deduplicates same-date transport actions into chargeable days and preserves structured day service data', async () => {
+    const { storage, service } = harness(); seedInventory(storage);
+    const created = await service.addItineraryItem('day-own', {
+      type: 'TRANSPORT', title: 'Client transport', description: 'Route wording',
+      metadata: {
+        vehicleCategoryId: 'vehicle-1', rateId: 'transport-rate-1', serviceType: 'MULTI_DAY_JOURNEY', startDate: '2026-10-01',
+        routeName: 'Airport, hotel and Dal Lake', vehicleDays: 3, vehicleCount: 2, nightHalts: 0, occurrences: 1, distanceKm: 0, hours: 0,
+        serviceDays: [
+          { dayNumber: 1, date: '2026-10-01', serviceType: 'AIRPORT_TRANSFER', from: 'Airport', to: 'Hotel', chargeableTransportDay: true },
+          { dayNumber: 1, date: '2026-10-01', serviceType: 'LOCAL_SIGHTSEEING', route: 'Dal Lake', chargeableTransportDay: true },
+          { dayNumber: 2, date: '2026-10-02', serviceType: 'DAY_EXCURSION', route: 'Srinagar → Gulmarg → Srinagar', places: ['Gulmarg'], title: 'Gulmarg Day Excursion', overnightLocation: 'Srinagar', notes: 'Return before dinner', chargeableTransportDay: true },
+        ],
+      },
+    }, executive);
+    expect(created.item.metadata).toMatchObject({ vehicleCount: 2, chargeableDays: 2, vehicleDays: 2, packagePricingBasis: 'PER_VEHICLE_PER_DAY' });
+    expect(created.item.metadata?.serviceDays).toHaveLength(3);
+    expect(created.item.metadata?.serviceDays?.[2]).toMatchObject({ title: 'Gulmarg Day Excursion', places: ['Gulmarg'], overnightLocation: 'Srinagar', notes: 'Return before dinner' });
+    expect(created.item.metadata?.contractedTotalSupplierCost).toBe(20_000);
+  });
+
+  test('authors package-only transport pricing without changing master inventory and audits canonical employeeId', async () => {
+    const { storage, service } = harness(); seedInventory(storage);
+    const created = await service.addItineraryItem('day-own', {
+      type: 'TRANSPORT', title: 'Transport', description: 'Kashmir circuit',
+      metadata: {
+        vehicleCategoryId: 'vehicle-1', rateId: 'transport-rate-1', serviceType: 'MULTI_DAY_JOURNEY', startDate: '2026-10-01', routeName: 'Kashmir circuit',
+        vehicleDays: 3, vehicleCount: 2, nightHalts: 0, occurrences: 1, distanceKm: 0, hours: 0,
+        packageRateRequest: { entryMode: 'PER_VEHICLE_DAY', amount: 4_500, taxTreatment: 'NET', supplierQuoteReference: 'WhatsApp' },
+      },
+    }, executive);
+    expect(created.item.metadata?.packageSupplierRate).toMatchObject({ amount: 4_500, enteredByEmployeeId: 'exec-1', originalContractedTotal: 30_000 });
+    expect(created.item.metadata?.costSource).toBe('PACKAGE_RATE_OVERRIDE');
+    expect(storage.rawGet('transport_rate_periods', 'transport-rate-1')?.baseRate).toBe(5_000);
+    expect(storage.rawList('audit_logs').some(value => value.action === 'PACKAGE_SUPPLIER_RATE_ENTERED' && value.actorId === 'exec-1')).toBe(true);
+  });
+
+  test('route wording alone keeps costing current while vehicle economics invalidate it', async () => {
+    const { storage, service } = harness(); seedInventory(storage);
+    const payload = (routeName: string, vehicleCount: number) => ({
+      type: 'TRANSPORT', title: 'Transport label', description: routeName,
+      metadata: { vehicleCategoryId: 'vehicle-1', rateId: 'transport-rate-1', serviceType: 'MULTI_DAY_JOURNEY', startDate: '2026-10-01', routeName, vehicleDays: 2, vehicleCount, nightHalts: 0, occurrences: 1, distanceKm: 0, hours: 0 },
+    });
+    const created = await service.addItineraryItem('day-own', payload('Airport to Gulmarg', 1), executive);
+    storage.rawUpdate('trips', 'trip-own', { costingStatus: 'CALCULATED', costingRevision: created.trip.costingRevision, costingCalculatedRevision: created.trip.costingRevision });
+    const wording = await service.updateItineraryItem('day-own', created.item.id, payload('Airport → Gulmarg via hotel', 1), executive);
+    expect(wording.trip.costingStatus).toBe('CALCULATED');
+    const commercial = await service.updateItineraryItem('day-own', created.item.id, payload('Airport → Gulmarg via hotel', 2), executive);
+    expect(commercial.trip.costingStatus).toBe('PENDING');
+  });
+
+  test('persists activity pricing, inclusion, and package-rate provenance without mutating its master rate', async () => {
+    const { storage, service } = harness(); seedInventory(storage);
+    const included = await service.addItineraryItem('day-own', {
+      type: 'ACTIVITY', title: 'Ride', description: 'Customer wording',
+      metadata: {
+        activityId: 'activity-1', rateId: 'activity-rate-1', date: '2026-10-01', adults: 2, children: 1, infants: 0,
+        vehicles: 1, groups: 1, tickets: 3, hours: 1, days: 1, sessions: 1, units: 1, inclusionStatus: 'INCLUDED',
+        packageRateRequest: { entryMode: 'PER_PERSON', amount: 650, childAmount: 400, taxTreatment: 'NET' },
+      },
+    }, executive);
+    expect(included.item.metadata).toMatchObject({ pricingModel: 'PER_PERSON', inclusionStatus: 'INCLUDED', costSource: 'PACKAGE_RATE_OVERRIDE' });
+    expect(included.item.metadata?.packageSupplierRate).toMatchObject({ amount: 650, childAmount: 400, enteredByEmployeeId: 'exec-1', originalContractedTotal: 2_100 });
+    expect(storage.rawGet('activity_rate_periods', 'activity-rate-1')?.pricingComponents).toEqual({ person: 700 });
+
+    const optional = await service.addItineraryItem('day-own', {
+      type: 'ACTIVITY', title: 'Optional ride', description: 'Choice',
+      metadata: { activityId: 'activity-1', rateId: 'activity-rate-1', date: '2026-10-02', adults: 2, children: 0, infants: 0, vehicles: 1, groups: 1, tickets: 2, hours: 1, days: 1, sessions: 1, inclusionStatus: 'OPTIONAL' },
+    }, executive);
+    expect(optional.item.metadata?.inclusionStatus).toBe('OPTIONAL');
+  });
+
+  test('manual transport and activity supplier quotes work when no contracted period exists', async () => {
+    const { storage, service } = harness(); seedInventory(storage);
+    const transport = await service.addItineraryItem('day-own', {
+      type: 'TRANSPORT', title: 'Manual transport', description: 'Custom route',
+      metadata: { vehicleCategoryId: 'vehicle-1', serviceType: 'CUSTOM', startDate: '2026-10-01', routeName: 'Custom route', vehicleDays: 2, vehicleCount: 1, nightHalts: 0, occurrences: 1, distanceKm: 0, hours: 0, packageRateRequest: { entryMode: 'TOTAL_SERVICE', amount: 8_500, taxTreatment: 'NET' } },
+    }, executive);
+    expect(transport.item.metadata).toMatchObject({ costSource: 'MANUAL_SUPPLIER_QUOTE' });
+    expect(transport.item.metadata?.rateId).toBeUndefined();
+
+    const activity = await service.addItineraryItem('day-own', {
+      type: 'ACTIVITY', title: 'Manual activity', description: 'Private guide',
+      metadata: { activityId: 'activity-1', date: '2026-10-01', adults: 2, children: 0, infants: 0, vehicles: 1, groups: 1, tickets: 2, hours: 1, days: 1, sessions: 1, inclusionStatus: 'INCLUDED', packageRateRequest: { entryMode: 'FLAT_TOTAL', amount: 3_000, taxTreatment: 'NET' } },
+    }, executive);
+    expect(activity.item.metadata).toMatchObject({ costSource: 'MANUAL_SUPPLIER_QUOTE' });
+    expect(activity.item.metadata?.rateId).toBeUndefined();
   });
 });

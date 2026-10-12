@@ -176,7 +176,7 @@ test('normal Firebase identity persists the complete Sales workflow and enforces
   await expect(page.getByText(/QA3 SUV/)).toBeVisible();
   await expect(page.getByText(/QA3 Gondola/)).toBeVisible();
   await page.getByTestId('calculate-trip-costs').click();
-  await expect(page.getByTestId('trip-costing-status')).toHaveText('CALCULATED');
+  await expect(page.getByTestId('trip-costing-status')).toHaveText('Costs current');
   const costedTrip = (await db.collection('trips').doc(tripId).get()).data()!;
   expect(costedTrip.costingStatus).toBe('CALCULATED');
   expect(costedTrip.totalSupplierCost).toBeGreaterThan(0);

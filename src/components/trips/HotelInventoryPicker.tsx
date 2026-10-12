@@ -125,7 +125,7 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({ trip
     try {
       const response = await fetch('/api/accommodation/calculate-rate', {
         method: 'POST', headers: await authenticatedMutationHeaders(currentUser.employeeId),
-        body: JSON.stringify({ tripId, propertyId: selectedPropertyId, roomCategoryId: selectedRoomId, checkInDate, nights, adults, children: childrenCount, childAges, roomAllocations, mealPlan: selectedMealPlan, ...(selectedRateId ? { rateId: selectedRateId } : {}), ...(packageRate ? { packageRate } : {}) }),
+        body: JSON.stringify({ tripId, propertyId: selectedPropertyId, roomCategoryId: selectedRoomId, checkInDate, nights, adults, children: childrenCount, childAges, roomAllocations, mealPlan: selectedMealPlan, ...(rateMode === 'CONTRACTED' && selectedRateId ? { rateId: selectedRateId } : {}), ...(packageRate ? { packageRate } : {}) }),
       });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error || 'Failed to calculate the accommodation rate.');

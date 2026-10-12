@@ -72,6 +72,12 @@ export interface TransportRoute {
 // --- Transport Services & Rates ---
 
 export type TransportServiceType =
+  | 'AIRPORT_PICKUP'
+  | 'AIRPORT_DROP'
+  | 'TRANSFER'
+  | 'DAY_EXCURSION'
+  | 'INTERCITY_TRANSFER'
+  | 'OTHER'
   | 'AIRPORT_TRANSFER'
   | 'RAILWAY_TRANSFER'
   | 'HOTEL_TRANSFER'
@@ -205,4 +211,21 @@ export interface TransportCostCalculation {
     additionalChargesTotal: number;
     additionalChargesDetails: { name: string; amount: number }[];
   };
+}
+
+export type TransportPackagePricingBasis = 'PER_VEHICLE_PER_DAY';
+
+export interface TransportServiceDay {
+  dayNumber: number;
+  date: string;
+  serviceType: TransportServiceType;
+  from?: string;
+  to?: string;
+  route?: string;
+  places?: string[];
+  title?: string;
+  overnightLocation?: string;
+  notes?: string;
+  /** Multiple actions on the same date still produce only one charged vehicle day. */
+  chargeableTransportDay: boolean;
 }

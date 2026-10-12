@@ -20,6 +20,7 @@ import {
 } from './conversionStorageProvider';
 import { authorizeResource } from '../../../server/authorization/policyEngine.js';
 import { quoteResourceContext } from '../../../server/authorization/resourceContext.js';
+import { isTripCostingFresh } from '../../utils/costingFreshness';
 
 export interface ConversionActor {
   /** Legacy compatibility alias; never use for ownership authorization. */
@@ -304,6 +305,9 @@ export class QuoteConversionService {
             pickupLocation: item.pickupLocation || 'Airport / Hotel',
             dropoffLocation: item.dropoffLocation || 'Hotel / Airport',
             passengerCount: item.passengerCount || 2,
+            vehicleCount: item.vehicleCount || 1,
+            chargeableDays: item.chargeableDays || item.days || 1,
+            ...(item.serviceDays ? { serviceDays: item.serviceDays } : {}),
             specialRequests: item.specialRequests,
             supplierId: valService?.lineItemSnapshot?.supplierId || item.vehicleCategoryId || 'supplier-trans-default',
             confirmationStatus: status,
@@ -323,6 +327,7 @@ export class QuoteConversionService {
       if (freshQuote.activities && freshQuote.activities.length > 0) {
         for (let i = 0; i < freshQuote.activities.length; i++) {
           const item = freshQuote.activities[i];
+          if (item.inclusionStatus === 'OPTIONAL' || item.inclusionStatus === 'NOT_INCLUDED') continue;
           const serviceId = item.id || `act-${i + 1}`;
           const valService = validationResult.services.find(
             s => s.serviceType === 'ACTIVITY' && s.serviceId === serviceId
@@ -343,6 +348,8 @@ export class QuoteConversionService {
             destinationName: item.destinationName || 'Kashmir',
             serviceDate: item.date || item.serviceDate || freshQuote.hotels?.[0]?.checkInDate || currentDate,
             participantCount: item.pax || 2,
+            ...(item.pricingModel ? { pricingModel: item.pricingModel } : {}),
+            inclusionStatus: item.inclusionStatus || 'INCLUDED',
             specialRequests: item.specialRequests,
             supplierId: valService?.lineItemSnapshot?.supplierId || item.activityMasterId || 'supplier-act-default',
             confirmationStatus: status,
@@ -448,10 +455,23 @@ export class QuoteConversionService {
         }
       }
 
-      const totalSupplierCost = accommodationSupplierCost + transportSupplierCost + activitySupplierCost;
-      const grossProfit = totalSellingPrice - totalSupplierCost;
-      const grossMargin =
-        totalSellingPrice > 0 ? Number(((grossProfit / totalSellingPrice) * 100).toFixed(1)) : 0;
+      const hasAuthoritativeQuoteSnapshot = freshQuote.supplierCostSource?.type === 'TRIP';
+      const frozenBreakdown = hasAuthoritativeQuoteSnapshot ? freshQuote.supplierCostBreakdown : undefined;
+      if (frozenBreakdown) {
+        accommodationSupplierCost = frozenBreakdown.accommodation.total;
+        transportSupplierCost = frozenBreakdown.transport.total;
+        activitySupplierCost = frozenBreakdown.activities.total;
+      }
+      const otherSupplierCosts = frozenBreakdown?.other.total || 0;
+      const totalSupplierCost = hasAuthoritativeQuoteSnapshot && typeof freshQuote.totalSupplierCost === 'number'
+        ? freshQuote.totalSupplierCost
+        : accommodationSupplierCost + transportSupplierCost + activitySupplierCost + otherSupplierCosts;
+      const grossProfit = hasAuthoritativeQuoteSnapshot && typeof freshQuote.grossProfit === 'number'
+        ? freshQuote.grossProfit
+        : totalSellingPrice - totalSupplierCost;
+      const grossMargin = hasAuthoritativeQuoteSnapshot && typeof freshQuote.grossMargin === 'number'
+        ? freshQuote.grossMargin
+        : totalSellingPrice > 0 ? Number(((grossProfit / totalSellingPrice) * 100).toFixed(1)) : 0;
 
       const financialSnapshot: FinancialSnapshot = {
         id: snapshotId,
@@ -465,7 +485,8 @@ export class QuoteConversionService {
         accommodationSupplierCost,
         transportSupplierCost,
         activitySupplierCost,
-        otherSupplierCosts: 0,
+        otherSupplierCosts,
+        ...(frozenBreakdown ? { supplierCostBreakdown: frozenBreakdown } : {}),
         grossProfit,
         grossMargin,
         lineItems,
@@ -589,10 +610,12 @@ export class QuoteConversionService {
   private async assertTripCostingCompleteForConversion(txn: ConversionTransaction, quote: Quote): Promise<void> {
     if (!quote.tripId || quote.supplierCostSource?.type !== 'TRIP') return;
     const trip = await txn.get('trips', quote.tripId);
-    if (
-      !trip || trip.costingStatus !== 'CALCULATED' ||
-      trip.updatedAt !== quote.supplierCostSource.asOf
-    ) {
+    const sourceRevision = quote.supplierCostSource.costingRevision;
+    const tripRevision = Number(trip?.costingRevision || 0);
+    const sourceIsStale = sourceRevision !== undefined
+      ? sourceRevision !== tripRevision
+      : Boolean(trip?.updatedAt !== quote.supplierCostSource.asOf);
+    if (!isTripCostingFresh(trip) || sourceIsStale) {
       throw new ConversionError(
         422,
         'TRIP_COSTING_INCOMPLETE',

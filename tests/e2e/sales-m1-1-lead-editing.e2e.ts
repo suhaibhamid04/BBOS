@@ -38,7 +38,7 @@ test('M1.1 edits Lead, preserves services, reconciles stale package, and keeps c
   const selectedService = page.locator('[data-testid^="edit-trip-item-"]').first();
   await expect(selectedService).toBeVisible();
   await page.getByTestId('calculate-trip-costs').click();
-  await expect(page.getByTestId('trip-costing-status')).toHaveText('CALCULATED');
+  await expect(page.getByTestId('trip-costing-status')).toHaveText('Costs current');
 
   await page.getByTestId('return-to-lead').click();
   await page.getByTestId('edit-lead').click();
@@ -60,14 +60,14 @@ test('M1.1 edits Lead, preserves services, reconciles stale package, and keeps c
   await page.getByTestId('lead-build-package').click();
 
   await expect(page.getByTestId('package-review-warning')).toBeVisible();
-  await expect(page.getByTestId('trip-costing-status')).toHaveText('PENDING');
+  await expect(page.getByTestId('trip-costing-status')).toHaveText('Needs update');
   await expect(page.locator('[data-testid^="edit-trip-item-"]').first()).toBeVisible();
   await expect(page.getByTestId('calculate-trip-costs')).toBeDisabled();
   await page.getByTestId('apply-latest-lead').click();
   await expect(page.getByTestId('package-review-warning')).toHaveCount(0);
   await expect(page.locator('#trip-builder-active')).toContainText('4 Adults + 1 Kids');
   await page.getByTestId('calculate-trip-costs').click();
-  await expect(page.getByTestId('trip-costing-status')).toHaveText('CALCULATED');
+  await expect(page.getByTestId('trip-costing-status')).toHaveText('Costs current');
   await expect(page.locator('[data-testid^="edit-trip-item-"]').first()).toBeVisible();
 
   await page.getByTestId('return-to-lead').click();
@@ -79,6 +79,6 @@ test('M1.1 edits Lead, preserves services, reconciles stale package, and keeps c
   await expect(page.getByTestId('lead-package-review-warning')).toHaveCount(0);
   await page.getByRole('button', { name: /Resume Package|Build Package/ }).first().click();
   await expect(page.getByTestId('package-review-warning')).toHaveCount(0);
-  await expect(page.getByTestId('trip-costing-status')).toHaveText('CALCULATED');
+  await expect(page.getByTestId('trip-costing-status')).toHaveText('Costs current');
   await expect(page.locator('[data-testid^="edit-trip-item-"]').first()).toBeVisible();
 });

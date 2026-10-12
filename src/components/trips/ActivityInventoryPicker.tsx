@@ -1,12 +1,14 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { Compass, AlertTriangle, ShieldAlert } from 'lucide-react';
-import { ActivityPricingModel } from '../../types/activity';
+import { ActivityPricingModel, type ActivityInclusionStatus } from '../../types/activity';
 import { ActivityItineraryMetadata } from '../../types';
+import type { PackageRateEntryMode, PackageSupplierRateInput, TaxTreatment } from '../../types/accommodation';
 import { authenticatedMutationHeaders } from '../../services/auth/authenticatedApi';
 
 interface ActivityInventoryPickerProps {
+  tripId: string;
   date: string;
   defaultAdults: number;
   defaultChildren: number;
@@ -16,6 +18,7 @@ interface ActivityInventoryPickerProps {
 }
 
 export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = ({ 
+  tripId,
   date,
   defaultAdults,
   defaultChildren,
@@ -39,10 +42,25 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
   const [hours, setHours] = useState(initialMetadata?.hours || 1);
   const [days, setDays] = useState(initialMetadata?.days || 1);
   const [sessions, setSessions] = useState(initialMetadata?.sessions || 1);
+  const [units, setUnits] = useState(initialMetadata?.units || 1);
+  const [inclusionStatus, setInclusionStatus] = useState<ActivityInclusionStatus>(initialMetadata?.inclusionStatus || 'INCLUDED');
 
   const [isCalculating, setIsCalculating] = useState(false);
+  const calculationRequestId = useRef(0);
   const [calculatedRate, setCalculatedRate] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const initialPackageRate = initialMetadata?.packageSupplierRate;
+  const initialActivityRateMode = initialPackageRate && ['PER_PERSON', 'PER_CHILD', 'PER_GROUP', 'PER_UNIT', 'FLAT_TOTAL'].includes(initialPackageRate.entryMode) ? initialPackageRate.entryMode : 'CONTRACTED';
+  const [rateMode, setRateMode] = useState<'CONTRACTED' | PackageRateEntryMode>(initialActivityRateMode);
+  const [packageRateAmount, setPackageRateAmount] = useState(initialPackageRate ? String(initialPackageRate.amount) : '');
+  const [packageChildAmount, setPackageChildAmount] = useState(initialPackageRate?.childAmount === undefined ? '' : String(initialPackageRate.childAmount));
+  const [packageTaxTreatment, setPackageTaxTreatment] = useState<TaxTreatment>(initialPackageRate?.taxTreatment || 'NET');
+  const [supplierReference, setSupplierReference] = useState(initialPackageRate?.supplierQuoteReference || '');
+  const packageRate: PackageSupplierRateInput | undefined = rateMode === 'CONTRACTED' || !Number.isFinite(Number(packageRateAmount)) || Number(packageRateAmount) <= 0 ? undefined : {
+    entryMode: rateMode, amount: Number(packageRateAmount), taxTreatment: packageTaxTreatment,
+    ...(rateMode === 'PER_PERSON' && packageChildAmount !== '' ? { childAmount: Number(packageChildAmount) } : {}),
+    ...(supplierReference.trim() ? { supplierQuoteReference: supplierReference.trim() } : {}),
+  };
 
   const activeActivities = useMemo(
     () => activityMasters.filter(a => a.active),
@@ -57,6 +75,7 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
 
   const calculateRate = useCallback(async () => {
     if (!selectedActivityId || !date) return;
+    const requestId = ++calculationRequestId.current;
     
     setIsCalculating(true);
     setError(null);
@@ -67,6 +86,7 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
         method: 'POST',
         headers: await authenticatedMutationHeaders(currentUser.employeeId),
         body: JSON.stringify({
+          tripId,
           activityId: selectedActivityId,
           date,
           adults,
@@ -77,7 +97,8 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
           tickets,
           hours,
           days,
-          sessions
+          sessions,
+          units
         })
       });
       
@@ -87,16 +108,20 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
       if (!data.success) throw new Error(data.error || 'Failed to calculate rate');
       if (data.data.available === false) throw new Error(data.data.error || 'Rate unavailable');
       
-      setCalculatedRate(data.data);
-      if (data.data.pricingModel) {
-        setPricingModel(data.data.pricingModel);
+      if (requestId !== calculationRequestId.current) return;
+      const effectivePricingModel = rateMode === 'CONTRACTED' ? data.data.pricingModel : rateMode;
+      setCalculatedRate({ ...data.data, pricingModel: effectivePricingModel });
+      if (effectivePricingModel) {
+        setPricingModel(effectivePricingModel);
       }
     } catch (err: any) {
-      setError(err.message);
+      if (requestId !== calculationRequestId.current) return;
+      if (packageRate) setCalculatedRate({ available: true, needsConfirmation: true, pricingModel: rateMode, taxDescription: packageTaxTreatment, supplierCost: packageRate.amount });
+      else setError(err.message);
     } finally {
-      setIsCalculating(false);
+      if (requestId === calculationRequestId.current) setIsCalculating(false);
     }
-  }, [selectedActivityId, date, adults, children, infants, vehicles, groups, tickets, hours, days, sessions, currentUser.employeeId]);
+  }, [tripId, selectedActivityId, date, adults, children, infants, vehicles, groups, tickets, hours, days, sessions, units, currentUser.employeeId, rateMode, packageRateAmount, packageChildAmount, packageTaxTreatment, supplierReference]);
 
   useEffect(() => {
     if (selectedActivityId) {
@@ -105,7 +130,7 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
   }, [calculateRate]);
 
   const handleConfirm = () => {
-    if (!calculatedRate?.available || !calculatedRate.rateId || !calculatedRate.supplierId) return;
+    if (!calculatedRate?.available || (!calculatedRate.rateId && !packageRate)) return;
 
     const activity = activityMasters.find(a => a.id === selectedActivityId);
 
@@ -113,8 +138,8 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
       inventoryType: 'ACTIVITY',
       activityId: selectedActivityId,
       activityName: activity?.name || 'Activity',
-      rateId: calculatedRate.rateId,
-      supplierId: calculatedRate.supplierId,
+      ...(calculatedRate.rateId ? { rateId: calculatedRate.rateId } : {}),
+      ...(calculatedRate.supplierId ? { supplierId: calculatedRate.supplierId } : {}),
       supplierName: calculatedRate.supplierName,
       pricingModel: calculatedRate.pricingModel,
       date,
@@ -127,9 +152,12 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
       hours,
       days,
       sessions,
+      units,
+      inclusionStatus,
       duration: activity?.duration,
       needsConfirmation: calculatedRate.needsConfirmation,
-      taxDescription: calculatedRate.taxDescription
+      taxDescription: calculatedRate.taxDescription,
+      ...(packageRate ? { packageRateRequest: packageRate } : {}),
     });
   };
 
@@ -233,6 +261,20 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
                 </>
               )}
 
+              {pricingModel === 'PER_CHILD' && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Children</label>
+                  <input data-testid="activity-child-count" type="number" min="1" value={children} onChange={(e) => setChildren(parseInt(e.target.value) || 1)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg" />
+                </div>
+              )}
+
+              {pricingModel === 'PER_GROUP' && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Number of Groups</label>
+                  <input data-testid="activity-group-count" type="number" min="1" value={groups} onChange={(e) => setGroups(parseInt(e.target.value) || 1)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg" />
+                </div>
+              )}
+
               {pricingModel === 'PER_VEHICLE' && (
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Number of Vehicles</label>
@@ -275,6 +317,16 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
           </div>
         )}
 
+        <section className="space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-4" data-testid="activity-package-controls">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="text-xs font-semibold text-slate-700">Customer package treatment<select data-testid="activity-inclusion-status" value={inclusionStatus} onChange={event => setInclusionStatus(event.target.value as ActivityInclusionStatus)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"><option value="INCLUDED">Included in package</option><option value="OPTIONAL">Optional add-on</option><option value="NOT_INCLUDED">Not included</option></select></label>
+            <label className="text-xs font-semibold text-slate-700">Unit quantity<input data-testid="activity-unit-count" type="number" min="1" value={units} onChange={event => setUnits(Math.max(1, Number(event.target.value) || 1))} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2" /></label>
+          </div>
+          <p className="text-[11px] text-slate-600">Optional and not-included activities remain visible as choices but are excluded from authoritative package supplier cost.</p>
+          <label className="block text-xs font-semibold text-slate-700">Supplier rate for this package<select data-testid="activity-package-rate-mode" value={rateMode} onChange={event => { const next = event.target.value as typeof rateMode; setRateMode(next); if (next !== 'CONTRACTED') setPricingModel(next as ActivityPricingModel); }} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"><option value="CONTRACTED">Use contracted rate</option><option value="PER_PERSON">Per person</option><option value="PER_CHILD">Per child</option><option value="PER_GROUP">Per group</option><option value="PER_UNIT">Per unit</option><option value="FLAT_TOTAL">Flat total</option></select></label>
+          {rateMode !== 'CONTRACTED' && <div className="grid gap-3 sm:grid-cols-2"><label className="text-xs font-semibold text-slate-700">Supplier amount<input data-testid="activity-package-rate-amount" type="number" min="1" value={packageRateAmount} onChange={event => setPackageRateAmount(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2" /></label>{rateMode === 'PER_PERSON' && <label className="text-xs font-semibold text-slate-700">Child amount (optional)<input type="number" min="0" value={packageChildAmount} onChange={event => setPackageChildAmount(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2" /></label>}<label className="text-xs font-semibold text-slate-700">Tax treatment<select value={packageTaxTreatment} onChange={event => setPackageTaxTreatment(event.target.value as TaxTreatment)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"><option value="NET">Net / taxes extra</option><option value="INCLUSIVE">Taxes included</option><option value="GST_5">Add 5% GST</option><option value="GST_18">Add 18% GST</option></select></label><label className="text-xs font-semibold text-slate-700">Supplier reference<input value={supplierReference} onChange={event => setSupplierReference(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2" /></label></div>}
+        </section>
+
         {/* Step 3: Calculation Result */}
         <div className="pt-4 border-t border-slate-100">
           <h4 className="text-sm font-bold text-slate-800 uppercase tracking-wider mb-4">3. Availability & Cost</h4>
@@ -289,7 +341,7 @@ export const ActivityInventoryPicker: React.FC<ActivityInventoryPickerProps> = (
               <div>
                 <h5 className="text-sm font-bold text-rose-800">Rate Unavailable</h5>
                 <p className="text-xs text-rose-600 mt-1">{error}</p>
-                <p className="text-xs font-bold text-rose-700 mt-2">To proceed, choose a different activity or contact procurement.</p>
+                <p className="text-xs font-bold text-rose-700 mt-2">No contracted activity rate is available. Enter a package supplier rate above, or choose another activity.</p>
               </div>
             </div>
           ) : calculatedRate ? (

@@ -118,12 +118,14 @@ const SNAPSHOT_FULL_FIELDS = [
   'totalSellingPrice', 'totalSupplierCost', 'accommodationSupplierCost',
   'transportSupplierCost', 'activitySupplierCost', 'otherSupplierCosts', 'grossProfit',
   'grossMargin', 'rateValidationFingerprint', 'createdAt', 'createdBy',
+  'supplierCostBreakdown',
 ] as const;
 
 const SNAPSHOT_RESERVATIONS_FIELDS = [
   'id', 'bookingId', 'snapshotVersion', 'quoteId', 'quoteVersion', 'currency',
   'totalSupplierCost', 'accommodationSupplierCost', 'transportSupplierCost',
   'activitySupplierCost', 'otherSupplierCosts', 'rateValidationFingerprint', 'createdAt',
+  'supplierCostBreakdown',
 ] as const;
 
 const LINE_ITEM_FULL_FIELDS = [

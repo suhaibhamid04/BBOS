@@ -74,6 +74,13 @@ import {
   LeadInteractionInput
 } from '../types';
 import { getLeadById, recordLeadInteraction as recordLeadInteractionApi } from '../services/leads/leadFollowUpApi';
+import { isTripCostingFresh } from '../utils/costingFreshness';
+import {
+  assessLowMarginPolicy,
+  buildPackageSupplierCostBreakdown,
+  calculatePackageEconomics,
+  type PackageCostEntry,
+} from '../utils/packageCommercials';
 import {
   INITIAL_PACKAGES,
   DEMO_CUSTOMERS,
@@ -135,11 +142,12 @@ type TripDraftInput = Omit<Trip, 'id' | 'createdAt' | 'updatedAt' | 'status' | '
   totalSupplierCost?: number;
   totalSellingPrice?: number;
 };
+type TripUpdateInput = Partial<Trip> & { expectedCostingRevision?: number };
 
 const TRIP_WRITE_FIELDS = [
   'customerId', 'leadId', 'title', 'destination', 'startDate', 'endDate',
   'travelerCount', 'adults', 'children', 'tripType', 'currency', 'budget',
-  'childAges',
+  'childAges', 'pricingMode', 'pricingInput', 'expectedCostingRevision',
 ] as const;
 
 function buildTripWritePayload(sourceValue: TripDraftInput | Partial<Trip>, isCreate: boolean): Record<string, unknown> {
@@ -153,6 +161,70 @@ function buildTripWritePayload(sourceValue: TripDraftInput | Partial<Trip>, isCr
   else if (isCreate) payload.totalSellingPrice = 0;
   if (isCreate && payload.currency === undefined) payload.currency = 'INR';
   return payload;
+}
+
+const TRIP_COSTING_INPUT_FIELDS = new Set([
+  'customerId', 'leadId', 'title', 'destination', 'startDate', 'endDate',
+  'travelerCount', 'adults', 'children', 'childAges', 'tripType', 'currency',
+]);
+
+function stableValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (!value || typeof value !== 'object') return value === undefined ? null : value;
+  const record = value as Record<string, unknown>;
+  return Object.fromEntries(Object.keys(record).sort().map(key => [key, stableValue(record[key])]));
+}
+
+function sameValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(stableValue(left)) === JSON.stringify(stableValue(right));
+}
+
+function itineraryCommercialValue(item: Partial<ItineraryItem>): Record<string, unknown> {
+  const metadata = item.metadata && typeof item.metadata === 'object'
+    ? { ...(item.metadata as Record<string, unknown>) }
+    : item.metadata;
+  if (metadata && typeof metadata === 'object' && 'packageSupplierRate' in metadata) {
+    const rate = metadata.packageSupplierRate as Record<string, unknown> | undefined;
+    metadata.packageSupplierRate = rate ? {
+      entryMode: rate.entryMode,
+      amount: rate.amount,
+      childAmount: rate.childAmount ?? null,
+      taxTreatment: rate.taxTreatment,
+    } : rate;
+  }
+  if (item.type === 'TRANSPORT' && metadata && typeof metadata === 'object') {
+    const serviceDays = Array.isArray(metadata.serviceDays) ? metadata.serviceDays : [];
+    return {
+      type: item.type, inventoryId: item.inventoryId, sellingPrice: item.sellingPrice,
+      metadata: {
+        vehicleCategoryId: metadata.vehicleCategoryId, rateId: metadata.rateId,
+        serviceType: metadata.serviceType, pricingUnit: metadata.pricingUnit,
+        startDate: metadata.startDate, vehicleCount: metadata.vehicleCount,
+        chargeableDays: metadata.chargeableDays, nightHalts: metadata.nightHalts,
+        occurrences: metadata.occurrences, distanceKm: metadata.distanceKm, hours: metadata.hours,
+        packageSupplierRate: metadata.packageSupplierRate,
+        serviceDays: serviceDays.map(value => { const day = value as Record<string, unknown>; return { dayNumber: day.dayNumber, date: day.date, serviceType: day.serviceType, chargeableTransportDay: day.chargeableTransportDay }; }),
+      },
+    };
+  }
+  if (item.type === 'ACTIVITY' && metadata && typeof metadata === 'object') {
+    return {
+      type: item.type, inventoryId: item.inventoryId, sellingPrice: item.sellingPrice,
+      metadata: {
+        activityId: metadata.activityId, rateId: metadata.rateId, pricingModel: metadata.pricingModel,
+        date: metadata.date, adults: metadata.adults, children: metadata.children, infants: metadata.infants,
+        vehicles: metadata.vehicles, groups: metadata.groups, tickets: metadata.tickets,
+        hours: metadata.hours, days: metadata.days, sessions: metadata.sessions, units: metadata.units,
+        inclusionStatus: metadata.inclusionStatus, packageSupplierRate: metadata.packageSupplierRate,
+      },
+    };
+  }
+  return {
+    type: item.type, title: item.title, description: item.description,
+    startTime: item.startTime, endTime: item.endTime,
+    referenceId: item.referenceId, inventoryId: item.inventoryId,
+    sellingPrice: item.sellingPrice, metadata,
+  };
 }
 
 const QUOTE_WRITE_FIELDS = [
@@ -296,7 +368,7 @@ interface DataContextType {
   // Trip & Itinerary actions
   createTrip: (tripData: TripDraftInput, initialDaysCount?: number, fromPackageId?: string) => Promise<Trip>;
   createOrResumeLeadTrip: (leadId: string, persistedLead?: Lead) => Promise<Trip>;
-  updateTrip: (id: string, updates: Partial<Trip>) => Promise<void>;
+  updateTrip: (id: string, updates: TripUpdateInput) => Promise<void>;
   addItineraryDay: (tripId: string, dayData?: Partial<ItineraryDay>) => Promise<ItineraryDay>;
   updateItineraryDay: (id: string, updates: Partial<ItineraryDay>) => Promise<void>;
   deleteItineraryDay: (id: string) => Promise<void>;
@@ -783,12 +855,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Helper to log audit events with verified actor details
   const logAuditEvent = (action: string, entityType: string, entityId: string, before?: any, after?: any, reason?: string) => {
-    const actorFirebaseUid = auth?.currentUser?.uid;
     const newLog: AuditLog = {
       id: `audit-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       timestamp: new Date().toISOString(),
       actorType: 'HUMAN',
-      actorId: actorFirebaseUid || currentUser.id,
+      actorId: currentUser.employeeId,
       actorName: `${currentUser.name} (${currentUser.role})`,
       action,
       entityType,
@@ -861,6 +932,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
               : {
                   ...trip,
                   costingStatus: 'PENDING',
+                  costingRevision: Number(trip.costingRevision || 0) + 1,
                   packageReview: {
                     required: true,
                     reason: 'LEAD_COMMERCIAL_DETAILS_CHANGED',
@@ -1138,6 +1210,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         currency: tripData.currency || 'INR',
         totalSupplierCost: initialCost,
         costingStatus: 'PENDING',
+        costingRevision: 0,
         totalSellingPrice: initialPrice,
         grossProfit: profit,
         grossMargin: margin,
@@ -1296,7 +1369,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
   };
 
-  const updateTrip = async (id: string, updates: Partial<Trip>) => {
+  const updateTrip = async (id: string, updates: TripUpdateInput) => {
     const prevTrip = trips.find(t => t.id === id);
     if (!prevTrip) throw new Error('Trip not found.');
 
@@ -1310,8 +1383,47 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const result = await readApiResponse(response);
       updated = result.data as Trip;
     } else {
-      updated = { ...prevTrip, ...updates, updatedAt: new Date().toISOString() };
+      const invalidatesCosting = Object.keys(updates).some(field =>
+        TRIP_COSTING_INPUT_FIELDS.has(field) && !sameValue((prevTrip as any)[field], (updates as any)[field]),
+      );
+      const mode = updates.totalSellingPrice !== undefined && updates.pricingMode === undefined
+        ? 'SELLING_PRICE'
+        : updates.pricingMode || prevTrip.pricingMode || 'SELLING_PRICE';
+      const pricingInput = updates.totalSellingPrice !== undefined && updates.pricingMode === undefined
+        ? updates.totalSellingPrice
+        : updates.pricingInput ?? prevTrip.pricingInput ?? prevTrip.totalSellingPrice;
+      const economics = calculatePackageEconomics(prevTrip.totalSupplierCost || 0, mode, pricingInput);
+      const { expectedCostingRevision: _expectedCostingRevision, ...safeUpdates } = updates;
+      if (_expectedCostingRevision !== undefined && _expectedCostingRevision !== Number(prevTrip.costingRevision || 0)) {
+        throw new Error('Package economics changed. Reload before saving pricing.');
+      }
+      const pricingChanged = prevTrip.totalSellingPrice !== economics.totalSellingPrice
+        || (prevTrip.pricingMode || 'SELLING_PRICE') !== economics.pricingMode
+        || Number(prevTrip.pricingInput ?? prevTrip.totalSellingPrice) !== economics.pricingInput;
+      const nextRevision = Number(prevTrip.costingRevision || 0) + (invalidatesCosting || pricingChanged ? 1 : 0);
+      updated = {
+        ...prevTrip,
+        ...safeUpdates,
+        ...economics,
+        ...(prevTrip.costingStatus === 'CALCULATED' && !invalidatesCosting ? {
+          commercialApproval: assessLowMarginPolicy(economics.grossMargin, APP_CONFIG.LOW_MARGIN_THRESHOLD_PERCENT, new Date().toISOString()),
+        } : {}),
+        ...(invalidatesCosting ? {
+          costingStatus: 'PENDING' as const,
+          costingRevision: nextRevision,
+        } : pricingChanged ? {
+          costingRevision: nextRevision,
+          ...(prevTrip.costingStatus === 'CALCULATED' ? { costingCalculatedRevision: nextRevision } : {}),
+        } : {}),
+        updatedAt: new Date().toISOString(),
+      };
       logAuditEvent('trip.updated', 'TRIP', id, prevTrip, updates, `Updated trip ${prevTrip.title || id}`);
+      if (prevTrip.pricingMode !== updated.pricingMode) {
+        logAuditEvent('PRICING_MODE_CHANGED', 'TRIP', id, { pricingMode: prevTrip.pricingMode || 'SELLING_PRICE' }, { pricingMode: updated.pricingMode }, `Pricing mode changed by ${currentUser.employeeId}.`);
+      }
+      if (prevTrip.totalSellingPrice !== updated.totalSellingPrice) {
+        logAuditEvent('SELLING_PRICE_CHANGED', 'TRIP', id, { totalSellingPrice: prevTrip.totalSellingPrice }, { totalSellingPrice: updated.totalSellingPrice, pricingMode: updated.pricingMode }, `Selling price changed by ${currentUser.employeeId}.`);
+      }
     }
     setTrips(prev => prev.map(t => (t.id === id ? updated : t)));
   };
@@ -1327,8 +1439,15 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const allItems = tripDaysLocal.flatMap(d => d.items || []);
 
       if (APP_CONFIG.DEMO_MODE) {
+        const calculationRevision = Number(trip.costingRevision || 0);
         const itemSupplierCosts: Record<string, number> = {};
         let totalSupplierCost = 0;
+        const costEntries: PackageCostEntry[] = [];
+        const recordCost = (item: ItineraryItem, amount: number, category: PackageCostEntry['category']) => {
+          itemSupplierCosts[item.id] = amount;
+          totalSupplierCost += amount;
+          costEntries.push({ category, label: item.title || 'Package service', amount });
+        };
         for (const item of allItems) {
           const metadata = item.metadata || {};
           let supplierCost = 0;
@@ -1336,8 +1455,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             if (!metadata.propertyId || !metadata.roomCategoryId || !metadata.checkInDate || !metadata.nights) {
               if (Number.isFinite(item.supplierCost) && Number(item.supplierCost) >= 0) {
                 supplierCost = Number(item.supplierCost);
-                itemSupplierCosts[item.id] = supplierCost;
-                totalSupplierCost += supplierCost;
+                recordCost(item, supplierCost, 'ACCOMMODATION');
                 continue;
               }
               throw new Error('Accommodation item is missing authoritative inventory linkage.');
@@ -1360,43 +1478,56 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             if (!calculation.available) throw new Error('The selected accommodation is unavailable for these dates.');
             supplierCost = Number(calculation.totalAmount || 0);
           } else if (item.type === 'TRANSPORT') {
-            if (!metadata.vehicleCategoryId || !metadata.rateId || !metadata.startDate || !metadata.serviceType) {
+            const packageRate = metadata.packageSupplierRate;
+            const packageCost = packageRate?.entryMode === 'TOTAL_SERVICE'
+              ? Number(packageRate.amount)
+              : packageRate?.entryMode === 'PER_VEHICLE_DAY'
+                ? Number(packageRate.amount) * Math.max(1, Number(metadata.vehicleCount || 1)) * Math.max(1, Number(metadata.chargeableDays || metadata.vehicleDays || 1))
+                : undefined;
+            if (!metadata.vehicleCategoryId || (!metadata.rateId && packageCost === undefined) || !metadata.startDate || !metadata.serviceType) {
               if (Number.isFinite(item.supplierCost) && Number(item.supplierCost) >= 0) {
                 supplierCost = Number(item.supplierCost);
-                itemSupplierCosts[item.id] = supplierCost;
-                totalSupplierCost += supplierCost;
+                recordCost(item, supplierCost, 'TRANSPORT');
                 continue;
               }
               throw new Error('Transport item is missing authoritative inventory linkage.');
             }
             const rate = transportRatePeriods.find(value => value.id === metadata.rateId);
-            if (!rate) throw new Error(`Transport rate ${metadata.rateId || ''} not found.`);
-            const calculation = calculateTransportCost({
+            if (!rate && packageCost === undefined) throw new Error(`Transport rate ${metadata.rateId || ''} not found.`);
+            const calculation = rate ? calculateTransportCost({
               ratePeriod: rate,
               supplements: transportSupplements,
               serviceParams: {
                 vehicleDays: Number(metadata.vehicleDays || 1),
+                vehicleCount: Number(metadata.vehicleCount || 1),
+                chargeableDays: Number(metadata.chargeableDays || metadata.vehicleDays || 1),
                 nightHalts: Number(metadata.nightHalts || 0),
                 occurrences: Number(metadata.occurrences || 1),
                 distanceKm: Number(metadata.distanceKm || 0),
                 hours: Number(metadata.hours || 0),
               },
-            });
-            if (!calculation.available) throw new Error('The selected transport is unavailable for these dates.');
-            supplierCost = Number(calculation.totalAmount || 0);
+            }) : null;
+            if (!calculation?.available && packageCost === undefined) throw new Error('The selected transport is unavailable for these dates.');
+            supplierCost = Number(packageCost ?? calculation?.totalAmount ?? 0);
           } else if (item.type === 'ACTIVITY') {
-            if (!metadata.activityId || !metadata.rateId || !metadata.date) {
+            const packageRate = metadata.packageSupplierRate;
+            const packageCost = packageRate?.entryMode === 'PER_PERSON'
+              ? Number(packageRate.amount) * Math.max(0, Number(metadata.adults || trip.adults)) + Number(packageRate.childAmount ?? packageRate.amount) * Math.max(0, Number(metadata.children || trip.children))
+              : packageRate?.entryMode === 'PER_CHILD' ? Number(packageRate.amount) * Math.max(0, Number(metadata.children || trip.children))
+                : packageRate?.entryMode === 'PER_GROUP' ? Number(packageRate.amount) * Math.max(1, Number(metadata.groups || 1))
+                  : packageRate?.entryMode === 'PER_UNIT' ? Number(packageRate.amount) * Math.max(1, Number(metadata.units || metadata.tickets || 1))
+                    : ['FLAT_TOTAL', 'TOTAL_SERVICE'].includes(packageRate?.entryMode) ? Number(packageRate.amount) : undefined;
+            if (!metadata.activityId || (!metadata.rateId && packageCost === undefined) || !metadata.date) {
               if (Number.isFinite(item.supplierCost) && Number(item.supplierCost) >= 0) {
                 supplierCost = Number(item.supplierCost);
-                itemSupplierCosts[item.id] = supplierCost;
-                totalSupplierCost += supplierCost;
+                recordCost(item, supplierCost, 'ACTIVITIES');
                 continue;
               }
               throw new Error('Activity item is missing authoritative inventory linkage.');
             }
             const rate = activityRatePeriods.find(value => value.id === metadata.rateId);
-            if (!rate) throw new Error(`Activity rate ${metadata.rateId || ''} not found.`);
-            const calculation = calculateActivityCost({
+            if (!rate && packageCost === undefined) throw new Error(`Activity rate ${metadata.rateId || ''} not found.`);
+            const calculation = rate ? calculateActivityCost({
               ratePeriod: rate,
               params: {
                 adults: Number(metadata.adults || trip.adults),
@@ -1408,26 +1539,46 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 hours: Number(metadata.hours || 0),
                 days: Number(metadata.days || 0),
                 sessions: Number(metadata.sessions || 0),
+                units: Number(metadata.units || 0),
               },
-            });
-            if (!calculation.available) throw new Error('The selected activity is unavailable for these dates.');
-            supplierCost = Number(calculation.totalAmount || 0);
+            }) : null;
+            if (!calculation?.available && packageCost === undefined) throw new Error('The selected activity is unavailable for these dates.');
+            supplierCost = metadata.inclusionStatus === 'OPTIONAL' || metadata.inclusionStatus === 'NOT_INCLUDED'
+              ? 0
+              : Number(packageCost ?? calculation?.totalAmount ?? 0);
+          } else {
+            const inclusionStatus = metadata.inclusionStatus;
+            const isIncluded = inclusionStatus !== 'OPTIONAL' && inclusionStatus !== 'NOT_INCLUDED';
+            const hasAuthoritativeSource = typeof metadata.costSource === 'string' && metadata.costSource !== 'PENDING';
+            if (!isIncluded || !hasAuthoritativeSource || !Number.isFinite(item.supplierCost)) continue;
+            supplierCost = Number(item.supplierCost);
           }
           if (!Number.isFinite(supplierCost) || supplierCost < 0) throw new Error('Inventory costing returned an invalid supplier amount.');
-          itemSupplierCosts[item.id] = supplierCost;
-          totalSupplierCost += supplierCost;
+          recordCost(
+            item,
+            supplierCost,
+            item.type === 'HOTEL' ? 'ACCOMMODATION' : item.type === 'TRANSPORT' ? 'TRANSPORT' : item.type === 'ACTIVITY' ? 'ACTIVITIES' : 'OTHER',
+          );
         }
-        const grossProfit = trip.totalSellingPrice - totalSupplierCost;
-        const grossMargin = trip.totalSellingPrice > 0
-          ? Number(((grossProfit / trip.totalSellingPrice) * 100).toFixed(1))
-          : 0;
+        const supplierCostBreakdown = buildPackageSupplierCostBreakdown(costEntries);
+        const economics = calculatePackageEconomics(
+          totalSupplierCost,
+          trip.pricingMode || 'SELLING_PRICE',
+          trip.pricingInput ?? trip.totalSellingPrice,
+        );
+        const commercialApproval = assessLowMarginPolicy(
+          economics.grossMargin,
+          APP_CONFIG.LOW_MARGIN_THRESHOLD_PERCENT,
+          new Date().toISOString(),
+        );
         setItineraryDays(previous => previous.map(day => day.tripId !== tripId ? day : {
           ...day,
           items: (day.items || []).map(item => ({ ...item, supplierCost: itemSupplierCosts[item.id] ?? item.supplierCost })),
         }));
         setTrips(previous => previous.map(value => value.id !== tripId ? value : {
-          ...value, totalSupplierCost, grossProfit, grossMargin,
-          costingStatus: 'CALCULATED', updatedAt: new Date().toISOString(),
+          ...value, ...economics, supplierCostBreakdown, commercialApproval,
+          costingStatus: 'CALCULATED', costingCalculatedRevision: calculationRevision,
+          updatedAt: new Date().toISOString(),
         }));
         return;
       }
@@ -1453,10 +1604,17 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           prev.map(t => (t.id === tripId ? { 
             ...t, 
             totalSupplierCost: data.data.totalSupplierCost, 
+            supplierCostBreakdown: data.data.supplierCostBreakdown,
+            totalSellingPrice: data.data.totalSellingPrice ?? t.totalSellingPrice,
+            pricingMode: data.data.pricingMode ?? t.pricingMode,
+            pricingInput: data.data.pricingInput ?? t.pricingInput,
             grossProfit: data.data.grossProfit, 
             grossMargin: data.data.grossMargin, 
+            commercialApproval: data.data.commercialApproval,
             costingStatus: data.data.costingStatus,
-            updatedAt: new Date().toISOString() 
+            costingRevision: data.data.costingRevision ?? t.costingRevision,
+            costingCalculatedRevision: data.data.costingCalculatedRevision ?? t.costingCalculatedRevision,
+            updatedAt: data.data.updatedAt || new Date().toISOString()
           } : t))
         );
       }
@@ -1489,6 +1647,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         vehiclePreference: lead.vehiclePreference || lead.transportPreference || '',
         specialRequirements: lead.specialRequirements || '',
         costingStatus: 'PENDING',
+        costingRevision: Number(trip.costingRevision || 0) + 1,
         packageReview: {
           ...trip.packageReview,
           required: false,
@@ -1564,7 +1723,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     setItineraryDays(prev => [...prev, newDay]);
-    setTrips(prev => prev.map(item => item.id === tripId ? { ...item, costingStatus: 'PENDING', updatedAt: new Date().toISOString() } : item));
+    setTrips(prev => prev.map(item => item.id === tripId ? {
+      ...item, costingStatus: 'PENDING',
+      costingRevision: Number(item.costingRevision || 0) + 1,
+      updatedAt: new Date().toISOString(),
+    } : item));
     logAuditEvent('itinerary.day.created', 'ITINERARY_DAY', newDay.id, null, newDay, `Added Day ${nextDayNumber} to trip ${trip?.title || tripId}`);
 
     if (db && APP_CONFIG.DEMO_MODE) {
@@ -1603,7 +1766,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setItineraryDays(prev =>
       prev.map(d => (d.id === id ? { ...d, ...updates } : d))
     );
-    setTrips(prev => prev.map(item => item.id === day.tripId ? { ...item, costingStatus: 'PENDING', updatedAt: new Date().toISOString() } : item));
+    const invalidatesCosting = (['date', 'title', 'description', 'location'] as const)
+      .some(field => updates[field] !== undefined && !sameValue(day[field], updates[field]));
+    if (invalidatesCosting) setTrips(prev => prev.map(item => item.id === day.tripId ? {
+      ...item, costingStatus: 'PENDING',
+      costingRevision: Number(item.costingRevision || 0) + 1,
+      updatedAt: new Date().toISOString(),
+    } : item));
     if (db && APP_CONFIG.DEMO_MODE) {
       try {
         await setDoc(doc(db, 'itinerary_days', id), { ...day, ...updates });
@@ -1631,7 +1800,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const remainingDays = itineraryDays.filter(d => d.id !== id);
     setItineraryDays(remainingDays);
 
-    setTrips(prev => prev.map(item => item.id === day.tripId ? { ...item, costingStatus: 'PENDING', updatedAt: new Date().toISOString() } : item));
+    setTrips(prev => prev.map(item => item.id === day.tripId ? {
+      ...item, costingStatus: 'PENDING',
+      costingRevision: Number(item.costingRevision || 0) + 1,
+      updatedAt: new Date().toISOString(),
+    } : item));
 
     if (db && APP_CONFIG.DEMO_MODE) {
       try {
@@ -1647,7 +1820,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!targetDay) throw new Error(`Day ${dayId} not found`);
 
     const now = new Date().toISOString();
-    const demoItemData = APP_CONFIG.DEMO_MODE && itemData.type === 'HOTEL' && itemData.metadata?.packageRateRequest
+    const demoItemData = APP_CONFIG.DEMO_MODE && itemData.metadata?.packageRateRequest
       ? { ...itemData, metadata: (() => { const { packageRateRequest, ...metadata } = itemData.metadata!; return { ...metadata, packageSupplierRate: { ...packageRateRequest, enteredByEmployeeId: currentUser.employeeId, enteredAt: now } }; })() }
       : itemData;
     const newItem: ItineraryItem = {
@@ -1677,7 +1850,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const updatedDays = itineraryDays.map(d => (d.id === dayId ? updatedDay : d));
 
     setItineraryDays(updatedDays);
-    setTrips(prev => prev.map(item => item.id === targetDay.tripId ? { ...item, costingStatus: 'PENDING', updatedAt: new Date().toISOString() } : item));
+    setTrips(prev => prev.map(item => item.id === targetDay.tripId ? {
+      ...item, costingStatus: 'PENDING',
+      costingRevision: Number(item.costingRevision || 0) + 1,
+      updatedAt: new Date().toISOString(),
+    } : item));
 
     const actionName = itemData.type === 'HOTEL' ? 'hotel.added_to_trip' :
                        itemData.type === 'TRANSPORT' ? 'transport.added_to_trip' :
@@ -1710,14 +1887,30 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return result.data.item as ItineraryItem;
     }
     const now = new Date().toISOString();
-    const demoItemData = itemData.type === 'HOTEL' && itemData.metadata?.packageRateRequest
+    const demoItemData = itemData.metadata?.packageRateRequest
       ? { ...itemData, metadata: (() => { const { packageRateRequest, ...metadata } = itemData.metadata!; return { ...metadata, packageSupplierRate: { ...packageRateRequest, enteredByEmployeeId: currentUser.employeeId, enteredAt: now } }; })() }
       : itemData;
     const updatedItem = { ...demoItemData, id: itemId, dayId, tripId: targetDay.tripId } as ItineraryItem;
     const updatedDay = { ...targetDay, items: targetDay.items.map(item => item.id === itemId ? updatedItem : item) };
     setItineraryDays(prev => prev.map(day => day.id === dayId ? updatedDay : day));
-    setTrips(prev => prev.map(trip => trip.id === targetDay.tripId ? { ...trip, costingStatus: 'PENDING', updatedAt: new Date().toISOString() } : trip));
-    if (db) await setDoc(doc(db, 'itinerary_days', dayId), updatedDay).catch(console.warn);
+    const invalidatesCosting = !sameValue(
+      itineraryCommercialValue(existing),
+      itineraryCommercialValue(updatedItem),
+    );
+    if (invalidatesCosting) setTrips(prev => prev.map(trip => trip.id === targetDay.tripId ? {
+      ...trip, costingStatus: 'PENDING',
+      costingRevision: Number(trip.costingRevision || 0) + 1,
+      updatedAt: new Date().toISOString(),
+    } : trip));
+    if (db && APP_CONFIG.DEMO_MODE) {
+      try {
+        await setDoc(doc(db, 'itinerary_days', dayId), updatedDay);
+      } catch (err) {
+        // Demo state is authoritative in localStorage. A best-effort Firebase
+        // mirror must never prevent the in-app demo workflow from completing.
+        console.warn('Firestore demo item update notice:', err);
+      }
+    }
     return updatedItem;
   };
 
@@ -1741,7 +1934,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const updatedDays = itineraryDays.map(d => (d.id === dayId ? updatedDay : d));
 
     setItineraryDays(updatedDays);
-    setTrips(prev => prev.map(item => item.id === targetDay.tripId ? { ...item, costingStatus: 'PENDING', updatedAt: new Date().toISOString() } : item));
+    setTrips(prev => prev.map(item => item.id === targetDay.tripId ? {
+      ...item, costingStatus: 'PENDING',
+      costingRevision: Number(item.costingRevision || 0) + 1,
+      updatedAt: new Date().toISOString(),
+    } : item));
 
     if (db && APP_CONFIG.DEMO_MODE) {
       try {
@@ -1796,12 +1993,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const buildDemoTripQuoteFields = (trip: Trip, backupSelections: QuoteBackupAccommodation[] = []) => {
-    if (trip.costingStatus !== 'CALCULATED') throw new Error('Recalculate the Trip before creating or updating its Quote.');
+    if (!isTripCostingFresh(trip)) {
+      throw new Error('Package pricing needs updating before you can create or revise a Quote.');
+    }
     const items = itineraryDays.filter(day => day.tripId === trip.id).flatMap(day => day.items || []);
     const inventoryItems = items.filter(item => ['HOTEL', 'TRANSPORT', 'ACTIVITY'].includes(item.type));
     if (!inventoryItems.length) throw new Error('The Trip has no inventory-linked services to quote.');
     for (const item of inventoryItems) {
-      if (!item.metadata?.rateId) throw new Error(`Trip service ${item.title} is not linked to authoritative inventory.`);
+      if (!item.metadata?.rateId && item.metadata?.costSource !== 'MANUAL_SUPPLIER_QUOTE') throw new Error(`Trip service ${item.title} is not linked to authoritative inventory or an approved manual supplier quote.`);
     }
     const hotels = inventoryItems.filter(item => item.type === 'HOTEL').map(item => ({
       id: item.id,
@@ -1832,7 +2031,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       route: item.metadata!.routeName || item.description || item.metadata!.serviceType,
       serviceDate: item.metadata!.startDate,
       days: item.metadata!.vehicleDays || 1,
+      vehicleCount: item.metadata!.vehicleCount || 1,
+      chargeableDays: item.metadata!.chargeableDays || item.metadata!.vehicleDays || 1,
+      serviceDays: item.metadata!.serviceDays,
       passengerCount: trip.travelerCount,
+      supplierCost: item.supplierCost,
+      costSource: item.metadata!.costSource,
+      packageSupplierRate: item.metadata!.packageSupplierRate,
+      originalContractedTotal: item.metadata!.contractedTotalSupplierCost,
       specialRequests: item.description,
     }));
     const activities = inventoryItems.filter(item => item.type === 'ACTIVITY').map(item => ({
@@ -1846,6 +2052,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       serviceDate: item.metadata!.date,
       date: item.metadata!.date,
       pax: item.metadata!.tickets || (Number(item.metadata!.adults || 0) + Number(item.metadata!.children || 0)) || trip.travelerCount,
+      pricingModel: item.metadata!.pricingModel,
+      inclusionStatus: item.metadata!.inclusionStatus || 'INCLUDED',
+      supplierCost: item.supplierCost,
+      costSource: item.metadata!.costSource,
+      packageSupplierRate: item.metadata!.packageSupplierRate,
+      originalContractedTotal: item.metadata!.contractedTotalSupplierCost,
       specialRequests: item.description,
     }));
     const customer = customers.find(item => item.id === trip.customerId);
@@ -1858,6 +2070,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       tripId: trip.id, travelerCount: trip.travelerCount, adults: trip.adults, children: trip.children,
       durationDays, durationNights: Math.max(0, durationDays - 1), hotels, transports, activities,
       backupAccommodations: backupSelections,
+      supplierCostBreakdown: trip.supplierCostBreakdown,
+      pricingMode: trip.pricingMode || 'SELLING_PRICE',
+      pricingInput: trip.pricingInput ?? trip.totalSellingPrice,
+      requiresLowMarginApproval: trip.commercialApproval?.required === true,
+      approval: trip.commercialApproval
+        ? { ...trip.commercialApproval }
+        : { required: false, state: 'NOT_REQUIRED' },
     };
   };
 
@@ -1883,12 +2102,15 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const existingTripQuote = linkedTrip
       ? quotes.find(quote => quote.tripId === linkedTrip.id)
       : undefined;
+    if (linkedTrip && !isTripCostingFresh(linkedTrip)) {
+      throw new Error('Package pricing needs updating before you can create a Quote.');
+    }
     if (existingTripQuote) return existingTripQuote;
     const tripFields = linkedTrip
       ? buildDemoTripQuoteFields(linkedTrip, (quoteData.backupAccommodations || []) as QuoteBackupAccommodation[])
       : {};
-    const totalAmount = Number(payload.totalAmount) || 0;
-    const discountAmount = Number(payload.discountAmount) || 0;
+    const totalAmount = linkedTrip?.totalSellingPrice ?? (Number(payload.totalAmount) || 0);
+    const discountAmount = linkedTrip ? 0 : Number(payload.discountAmount) || 0;
     const finalAmount = Math.max(0, totalAmount - discountAmount);
     const totalSupplierCost = linkedTrip?.totalSupplierCost;
     const newQuote: Quote = {
@@ -1902,6 +2124,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         totalSupplierCost,
         grossProfit: finalAmount - totalSupplierCost,
         grossMargin: finalAmount > 0 ? Number((((finalAmount - totalSupplierCost) / finalAmount) * 100).toFixed(1)) : 0,
+        supplierCostSource: {
+          type: 'TRIP' as const,
+          sourceId: linkedTrip!.id,
+          asOf: linkedTrip!.updatedAt,
+          costingRevision: Number(linkedTrip!.costingRevision || 0),
+        },
       } : {}),
       status: 'DRAFT',
       salesEmployeeId: currentUser.employeeId,
@@ -1939,8 +2167,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const linkedTrip = prevQuote.tripId ? trips.find(trip => trip.id === prevQuote.tripId) : undefined;
     const backups = (updates.backupAccommodations ?? prevQuote.backupAccommodations ?? []) as QuoteBackupAccommodation[];
     const tripFields = linkedTrip ? buildDemoTripQuoteFields(linkedTrip, backups) : {};
-    const totalAmount = Number(payload.totalAmount ?? prevQuote.totalAmount) || 0;
-    const discountAmount = Number(payload.discountAmount ?? prevQuote.discountAmount) || 0;
+    const totalAmount = linkedTrip?.totalSellingPrice ?? (Number(payload.totalAmount ?? prevQuote.totalAmount) || 0);
+    const discountAmount = linkedTrip ? 0 : Number(payload.discountAmount ?? prevQuote.discountAmount) || 0;
     const finalAmount = Math.max(0, totalAmount - discountAmount);
     const totalSupplierCost = linkedTrip?.totalSupplierCost ?? prevQuote.totalSupplierCost;
     const updatedQuote: Quote = {
@@ -1951,8 +2179,17 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       discountAmount,
       finalAmount,
       ...(totalSupplierCost !== undefined ? {
+        totalSupplierCost,
         grossProfit: finalAmount - totalSupplierCost,
         grossMargin: finalAmount > 0 ? Number((((finalAmount - totalSupplierCost) / finalAmount) * 100).toFixed(1)) : 0,
+        ...(linkedTrip ? {
+          supplierCostSource: {
+            type: 'TRIP' as const,
+            sourceId: linkedTrip.id,
+            asOf: linkedTrip.updatedAt,
+            costingRevision: Number(linkedTrip.costingRevision || 0),
+          },
+        } : {}),
       } : {}),
       version: (prevQuote.version || 1) + 1,
       versionHistory: [
@@ -1976,11 +2213,22 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           totalSupplierCost: prevQuote.totalSupplierCost,
           grossProfit: prevQuote.grossProfit,
           grossMargin: prevQuote.grossMargin,
+          supplierCostBreakdown: prevQuote.supplierCostBreakdown,
+          pricingMode: prevQuote.pricingMode,
+          pricingInput: prevQuote.pricingInput,
+          sharedAt: prevQuote.sharedAt,
+          sharedByEmployeeId: prevQuote.sharedByEmployeeId,
+          shareChannel: prevQuote.shareChannel,
+          customerPackageSnapshot: prevQuote.customerPackageSnapshot,
         },
       ],
       updatedByEmployeeId: currentUser.employeeId,
       updatedAt: new Date().toISOString(),
     };
+    delete updatedQuote.sharedAt;
+    delete updatedQuote.sharedByEmployeeId;
+    delete updatedQuote.shareChannel;
+    delete updatedQuote.customerPackageSnapshot;
     setQuotes(prev => prev.map(q => q.id === id ? updatedQuote : q));
     return updatedQuote;
   };
@@ -1995,9 +2243,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const body = await readApiResponse(response);
       return body.data as CustomerPackageDocument;
     }
+    if (quote.sharedAt && quote.customerPackageSnapshot) return quote.customerPackageSnapshot;
+    if (quote.sharedAt) return buildCustomerPackageProjection(quote, [], null, quote.sharedAt);
     const trip = quote.tripId ? trips.find(item => item.id === quote.tripId) : undefined;
     if (!trip) throw new Error('A customer package requires a persisted Trip-linked Quote.');
-    if (trip.costingStatus !== 'CALCULATED') throw new Error('Recalculate the Trip before generating the customer package.');
+    if (!isTripCostingFresh(trip)) {
+      throw new Error('Package pricing needs updating before you can preview or share this Quote.');
+    }
     if (!Number.isFinite(quote.finalAmount) || quote.finalAmount <= 0) throw new Error('Set and save a positive package selling price first.');
     return buildCustomerPackageProjection(
       quote,
@@ -2013,6 +2265,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   ): Promise<QuoteShareResult> => {
     const quote = quotes.find(item => item.id === quoteId);
     if (!quote) throw new Error('Save the Quote before sharing the customer package.');
+    if (quote.approval?.required === true && quote.approval.state !== 'APPROVED') {
+      throw new Error('This low-margin Quote requires commercial approval before sharing.');
+    }
     if (!APP_CONFIG.DEMO_MODE) {
       const response = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/share`, {
         method: 'POST',
@@ -2027,12 +2282,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if ((quote.version || 1) !== expectedVersion) throw new Error('The Quote changed after this package was opened. Reload before sharing.');
     const customerPackage = await getCustomerPackage(quoteId);
     const now = new Date().toISOString();
+    const sharedSnapshot = { ...customerPackage, generatedAt: now };
     const updated: Quote = {
       ...quote,
       status: 'SENT',
       sharedAt: now,
       sharedByEmployeeId: currentUser.employeeId,
       shareChannel: channel,
+      customerPackageSnapshot: sharedSnapshot,
       version: (quote.version || 1) + 1,
       versionHistory: [
         ...(quote.versionHistory || []),
@@ -2051,7 +2308,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
     setQuotes(previous => previous.map(item => item.id === quoteId ? updated : item));
     logAuditEvent('QUOTE_SHARED', 'QUOTE', quoteId, quote, updated, `Customer package shared by ${currentUser.name}.`);
-    return { quote: updated, customerPackage: { ...customerPackage, generatedAt: now } };
+    return { quote: updated, customerPackage: sharedSnapshot };
   };
 
   const createBooking = async (bookingData: Omit<Booking, 'id' | 'createdAt' | 'updatedAt' | 'bookingReference'>): Promise<Booking> => {

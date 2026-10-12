@@ -116,6 +116,32 @@ export class TransportQuoteValidator {
       errors.push('Transport duration days must be greater than 0');
     }
 
+    const frozenPackageRate = item.packageSupplierRate;
+    if (frozenPackageRate && typeof item.supplierCost === 'number' && Number.isFinite(item.supplierCost) && item.supplierCost >= 0) {
+      const units = frozenPackageRate.entryMode === 'PER_VEHICLE_DAY'
+        ? Math.max(1, item.vehicleCount || 1) * Math.max(1, item.chargeableDays || days)
+        : 1;
+      return {
+        serviceType: 'TRANSPORT', serviceId, serviceName: vehicle.displayName || vehicle.name,
+        outcome: 'AVAILABLE', isValid: errors.length === 0, canProceedToBooking: errors.length === 0,
+        rateVerified: true, ...(item.ratePeriodId ? { ratePeriodId: item.ratePeriodId } : {}),
+        authoritativeSupplierCost: item.supplierCost, quotedSupplierCost: item.supplierCost,
+        availabilityStatus: 'AVAILABLE',
+        lineItemSnapshot: {
+          serviceId, serviceType: 'TRANSPORT', supplierId: vehicle.id,
+          supplierName: vehicle.displayName || vehicle.name, inventoryMasterId: vehicle.id,
+          ...(item.ratePeriodId ? { ratePeriodId: item.ratePeriodId } : {}),
+          rateContractType: 'PACKAGE', frozenSupplierUnitRate: frozenPackageRate.amount,
+          units, frozenSupplementsCost: 0, frozenTotalSupplierCost: item.supplierCost,
+          taxTreatment: frozenPackageRate.taxTreatment, taxAmount: 0,
+          rateVerifiedAt: new Date().toISOString(), costSource: item.costSource,
+          packageSupplierRate: frozenPackageRate,
+          ...(item.originalContractedTotal !== undefined ? { originalContractedTotal: item.originalContractedTotal } : {}),
+        },
+        errors, warnings,
+      };
+    }
+
     // Rate period validation
     const ratePeriodId = item.ratePeriodId;
     if (!ratePeriodId) {
@@ -243,6 +269,8 @@ export class TransportQuoteValidator {
       supplements,
       serviceParams: {
         vehicleDays: days,
+        vehicleCount: item.vehicleCount || 1,
+        chargeableDays: item.chargeableDays || days,
       },
     });
 
@@ -290,7 +318,7 @@ export class TransportQuoteValidator {
           ratePeriodId,
           rateContractType: 'STANDARD',
           frozenSupplierUnitRate: 0,
-          units: days,
+          units: days * Math.max(1, item.vehicleCount || 1),
           frozenSupplementsCost: 0,
           frozenTotalSupplierCost: 0,
           taxTreatment: ratePeriod.taxTreatment || 'INCLUSIVE',
@@ -384,7 +412,7 @@ export class TransportQuoteValidator {
         ratePeriodId,
         rateContractType: 'STANDARD',
         frozenSupplierUnitRate: ratePeriod.baseRate,
-        units: days,
+        units: days * Math.max(1, item.vehicleCount || 1),
         frozenSupplementsCost: calculation.breakdown?.additionalChargesTotal || 0,
         frozenTotalSupplierCost: authoritativeSupplierCost,
         taxTreatment: ratePeriod.taxTreatment || 'INCLUSIVE',

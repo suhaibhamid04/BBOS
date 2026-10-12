@@ -5,6 +5,9 @@ import { APP_CONFIG } from '../../src/config';
 
 const originalDemoMode = APP_CONFIG.DEMO_MODE;
 let tripWriteCount = 0;
+let itineraryWriteCount = 0;
+let auditWriteCount = 0;
+let transactionTripRevisionOverride: number | undefined;
 let storedTrip: any = {
   id: 'trip-123',
   assignedSalesEmployeeId: 'emp-sales-01',
@@ -14,6 +17,8 @@ let storedTrip: any = {
   adults: 2,
   children: 0,
   childAges: [],
+  costingStatus: 'PENDING',
+  costingRevision: 0,
 };
 let storedItineraryItems: any[] = [];
 
@@ -21,7 +26,7 @@ let storedItineraryItems: any[] = [];
 // Must simulate the full where().where().get() chain for tripCosting
 mock.module('../../server/firebaseAdmin.ts', () => ({
   getAdminDb: () => {
-    return {
+    const db: any = {
       collection: (colName: string) => {
         let filters: any[] = [];
         const mockQuery = {
@@ -51,6 +56,8 @@ mock.module('../../server/firebaseAdmin.ts', () => ({
         };
         return {
           doc: (id: string) => ({
+            id,
+            colName,
             get: async () => ({
               id,
               exists: colName === 'trips' && id === storedTrip.id,
@@ -63,8 +70,33 @@ mock.module('../../server/firebaseAdmin.ts', () => ({
           where: mockQuery.where,
           get: mockQuery.get
         };
-      }
+      },
+      runTransaction: async (callback: (transaction: any) => Promise<any>) => callback({
+        get: async (ref: any) => {
+          if (ref.colName === 'trips' && transactionTripRevisionOverride !== undefined) {
+            storedTrip = { ...storedTrip, costingRevision: transactionTripRevisionOverride, costingStatus: 'PENDING' };
+          }
+          return {
+            id: ref.id,
+            exists: ref.colName === 'trips' && ref.id === storedTrip.id,
+            data: () => storedTrip,
+          };
+        },
+        update: (ref: any, data: any) => {
+          if (ref.colName === 'trips') {
+            tripWriteCount += 1;
+            storedTrip = { ...storedTrip, ...data };
+          } else if (ref.colName === 'itinerary_days') {
+            itineraryWriteCount += 1;
+            storedItineraryItems = data.items;
+          }
+        },
+        set: (ref: any) => {
+          if (ref.colName === 'audit_logs') auditWriteCount += 1;
+        },
+      }),
     };
+    return db;
   }
 }));
 
@@ -82,6 +114,9 @@ describe('POST /api/trips/calculate-costs', () => {
   beforeEach(() => {
     APP_CONFIG.DEMO_MODE = false;
     tripWriteCount = 0;
+    itineraryWriteCount = 0;
+    auditWriteCount = 0;
+    transactionTripRevisionOverride = undefined;
     storedItineraryItems = [];
     storedTrip = {
       id: 'trip-123',
@@ -92,6 +127,8 @@ describe('POST /api/trips/calculate-costs', () => {
       adults: 2,
       children: 0,
       childAges: [],
+      costingStatus: 'PENDING',
+      costingRevision: 0,
     };
     jsonMock = mock((data: any) => data);
     statusMock = mock((code: number) => {
@@ -123,7 +160,9 @@ describe('POST /api/trips/calculate-costs', () => {
       totalSellingPrice: 50000,
       items: [
         {
+          id: 'hotel-1',
           type: 'HOTEL',
+          title: 'Kareem Residency',
           supplierCost: 999999, // Malicious client cost
           metadata: {
             propertyId: 'accom-sgr-kareemresidency',
@@ -151,8 +190,15 @@ describe('POST /api/trips/calculate-costs', () => {
     
     expect(result.success).toBe(true);
     expect(result.data.totalSupplierCost).toBe(7000); // Successfully ignored 999999
+    expect(result.data.supplierCostBreakdown).toMatchObject({
+      accommodation: { total: 7000, items: [{ label: 'Kareem Residency', amount: 7000 }] },
+      transport: { total: 0 }, activities: { total: 0 }, other: { total: 0 }, total: 7000,
+    });
     expect(result.data.grossProfit).toBe(43000);
     expect(result.data.grossMargin).toBe(86);
+    expect(result.data.costingStatus).toBe('CALCULATED');
+    expect(result.data.costingCalculatedRevision).toBe(0);
+    expect(auditWriteCount).toBe(1);
   });
 
   it('returns full financial metrics for an authorized owning Sales Executive', async () => {
@@ -190,6 +236,19 @@ describe('POST /api/trips/calculate-costs', () => {
     expect(result.data.totalSupplierCost).toBe(7000);
     expect(result.data.grossProfit).toBe(43000);
     expect(result.data.grossMargin).toBe(86);
+  });
+
+  it('includes authoritative other services and excludes optional other services', async () => {
+    req.body = { tripId: 'trip-123', items: [] };
+    storedItineraryItems = [
+      { id: 'guide-1', type: 'OTHER', title: 'Local guide', supplierCost: 2_500, metadata: { costSource: 'MANUAL_SUPPLIER_QUOTE', inclusionStatus: 'INCLUDED' } },
+      { id: 'photo-1', type: 'OTHER', title: 'Optional photographer', supplierCost: 4_000, metadata: { costSource: 'MANUAL_SUPPLIER_QUOTE', inclusionStatus: 'OPTIONAL' } },
+    ];
+    const handler = (tripsRouter as any).stack[0].route.stack[0].handle;
+    await handler(req as Request, res as Response, () => {});
+    const result = jsonMock.mock.calls[0][0];
+    expect(result.data.totalSupplierCost).toBe(2_500);
+    expect(result.data.supplierCostBreakdown.other).toEqual({ total: 2_500, items: [{ label: 'Local guide', amount: 2_500 }] });
   });
 
   it('applies October rate for Kareem Residency correctly', async () => {
@@ -279,6 +338,28 @@ describe('POST /api/trips/calculate-costs', () => {
     expect(statusMock.mock.calls[0][0]).toBe(403);
     expect(jsonMock.mock.calls[0][0].code).toBe('RESOURCE_ACCESS_DENIED');
     expect(tripWriteCount).toBe(0);
+  });
+
+  it('does not commit an older calculation over a newer commercial-input revision', async () => {
+    const handler = (tripsRouter as any).stack[0].route.stack[0].handle;
+    storedTrip = { ...storedTrip, costingRevision: 3, costingStatus: 'PENDING' };
+    storedItineraryItems = [{
+      id: 'hotel-race', type: 'HOTEL', metadata: {
+        propertyId: 'accom-sgr-kareemresidency', roomCategoryId: 'rc-accom-sgr-kareemresidency',
+        checkInDate: '2026-09-15', nights: 2, adults: 2, children: 0,
+      },
+    }];
+    transactionTripRevisionOverride = 4;
+    req.body = { tripId: 'trip-123', items: [] };
+
+    await handler(req as Request, res as Response, () => {});
+
+    expect(statusMock).toHaveBeenCalledWith(409);
+    expect(jsonMock.mock.calls[0][0]).toMatchObject({ code: 'COSTING_INPUT_CHANGED' });
+    expect(storedTrip).toMatchObject({ costingStatus: 'PENDING', costingRevision: 4 });
+    expect(tripWriteCount).toBe(0);
+    expect(itineraryWriteCount).toBe(0);
+    expect(auditWriteCount).toBe(0);
   });
 
   it('denies Marketing, Operations, another Executive, and missing owner metadata before calculation or write', async () => {

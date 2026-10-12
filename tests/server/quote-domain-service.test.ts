@@ -6,6 +6,7 @@ import { DefaultInventoryDataProvider } from '../../src/services/quoteValidation
 import { authorizeResource } from '../../server/authorization/policyEngine';
 import { quoteResourceContext } from '../../server/authorization/resourceContext';
 import { buildQuoteConversionDto, buildQuoteDto } from '../../server/authorization/quoteDto';
+import { LowMarginQuoteApprovalService } from '../../server/services/approvalInboxService';
 
 describe('Stage D1 server-authoritative Quote mutations', () => {
   let storage: InMemoryConversionStorageProvider;
@@ -37,6 +38,8 @@ describe('Stage D1 server-authoritative Quote mutations', () => {
     salesTeamId: 'sales-team-01',
     status: 'DRAFT',
     costingStatus: 'CALCULATED',
+    costingRevision: 0,
+    costingCalculatedRevision: 0,
     totalSupplierCost: 40_000,
     totalSellingPrice: 80_000,
     updatedAt: '2026-09-20T10:00:00.000Z',
@@ -116,9 +119,9 @@ describe('Stage D1 server-authoritative Quote mutations', () => {
     expect(quote.salesTeamId).toBe('sales-team-01');
     expect(quote.status).toBe('DRAFT');
     expect(quote.totalSupplierCost).toBe(40_000);
-    expect(quote.finalAmount).toBe(95_000);
-    expect(quote.grossProfit).toBe(55_000);
-    expect(quote.grossMargin).toBe(57.9);
+    expect(quote.finalAmount).toBe(80_000);
+    expect(quote.grossProfit).toBe(40_000);
+    expect(quote.grossMargin).toBe(50);
     expect(quote.supplierCostSource).toMatchObject({ type: 'TRIP', sourceId: 'trip-01' });
     expect(quote.hotels?.[0]).toMatchObject({
       sourceTripItemId: 'trip-hotel-01',
@@ -130,6 +133,55 @@ describe('Stage D1 server-authoritative Quote mutations', () => {
     const audit = storage.getAllAuditLogs()[0];
     expect(audit.action).toBe('QUOTE_CREATED');
     expect(audit.actorId).toBe(executive.employeeId);
+  });
+
+  it('freezes category economics and preserves the prior Quote version after Trip repricing', async () => {
+    const firstBreakdown = {
+      accommodation: { total: 28_000, items: [{ label: 'Srinagar hotel', amount: 28_000 }] },
+      transport: { total: 10_000, items: [{ label: 'Vehicle', amount: 10_000 }] },
+      activities: { total: 2_000, items: [{ label: 'Shikara', amount: 2_000 }] },
+      other: { total: 0, items: [] }, total: 40_000,
+    };
+    storage.rawUpdate('trips', 'trip-01', {
+      totalSellingPrice: 80_000, pricingMode: 'SELLING_PRICE', pricingInput: 80_000,
+      supplierCostBreakdown: firstBreakdown,
+    });
+    const quote = await service.createQuote(createInput(), executive);
+    expect(quote.supplierCostBreakdown).toEqual(firstBreakdown);
+
+    const secondBreakdown = {
+      accommodation: { total: 33_000, items: [{ label: 'Srinagar hotel', amount: 33_000 }] },
+      transport: { total: 10_000, items: [{ label: 'Vehicle', amount: 10_000 }] },
+      activities: { total: 2_000, items: [{ label: 'Shikara', amount: 2_000 }] },
+      other: { total: 0, items: [] }, total: 45_000,
+    };
+    storage.rawUpdate('trips', 'trip-01', {
+      totalSupplierCost: 45_000, totalSellingPrice: 90_000, grossProfit: 45_000, grossMargin: 50,
+      supplierCostBreakdown: secondBreakdown, costingRevision: 1, costingCalculatedRevision: 1,
+    });
+    const revised = await service.updateQuote(quote.id, { notes: 'Current package economics' }, executive);
+    expect(revised).toMatchObject({ totalSupplierCost: 45_000, finalAmount: 90_000, grossProfit: 45_000 });
+    expect(revised.supplierCostBreakdown).toEqual(secondBreakdown);
+    expect(revised.versionHistory?.[0].supplierCostBreakdown).toEqual(firstBreakdown);
+    expect(revised.versionHistory?.[0].finalAmount).toBe(80_000);
+  });
+
+  it('copies configured low-margin review state and blocks unsafe sharing', async () => {
+    storage.rawUpdate('trips', 'trip-01', {
+      grossProfit: 40_000, grossMargin: 50,
+      commercialApproval: { required: true, state: 'REVIEW_REQUIRED', thresholdPercent: 60, assessedAt: '2026-10-09T00:00:00Z' },
+    });
+    const quote = await service.createQuote(createInput(), executive);
+    expect(quote).toMatchObject({ requiresLowMarginApproval: true, approval: { required: true, state: 'REVIEW_REQUIRED' } });
+    await expect(service.shareQuote(quote.id, { channel: 'DOCUMENT', expectedVersion: 1 }, executive))
+      .rejects.toMatchObject({ statusCode: 409, code: 'COMMERCIAL_APPROVAL_REQUIRED' });
+    expect(storage.rawGet('quotes', quote.id)).toMatchObject({ status: 'DRAFT', version: 1 });
+
+    const approved = await new LowMarginQuoteApprovalService(storage).decideQuote(quote.id, {
+      decision: 'APPROVED', expectedUpdatedAt: `${quote.version}:${quote.updatedAt}`,
+    }, manager);
+    const shared = await service.shareQuote(quote.id, { channel: 'DOCUMENT', expectedVersion: approved.version }, executive);
+    expect(shared.quote).toMatchObject({ status: 'SENT', approval: { state: 'APPROVED' } });
   });
 
   it('returns the existing Trip Quote when creation is retried', async () => {
@@ -172,6 +224,40 @@ describe('Stage D1 server-authoritative Quote mutations', () => {
     expect(conversion.activities[0].sourceQuoteServiceId).toBe('trip-activity-01');
     expect((conversion.booking as any).totalSupplierCost).toBeUndefined();
     expect((conversion.booking as any).grossProfit).toBeUndefined();
+  });
+
+  it('freezes M4.2 package transport economics and keeps optional activities out of Booking fulfillment', async () => {
+    const day = storage.rawGet('itinerary_days', 'day-trip-01')!;
+    storage.rawSet('itinerary_days', 'day-trip-01', {
+      ...day,
+      items: day.items.map((item: any) => item.type === 'TRANSPORT' ? {
+        ...item, supplierCost: 18_000,
+        metadata: {
+          ...item.metadata, vehicleCount: 2, chargeableDays: 2,
+          serviceDays: [{ dayNumber: 1, date: '2026-10-15', serviceType: 'AIRPORT_TRANSFER', chargeableTransportDay: true }, { dayNumber: 2, date: '2026-10-16', serviceType: 'DAY_TRIP', chargeableTransportDay: true }],
+          costSource: 'PACKAGE_RATE_OVERRIDE', contractedTotalSupplierCost: 20_000,
+          packageSupplierRate: { entryMode: 'PER_VEHICLE_DAY', amount: 4_500, taxTreatment: 'NET', enteredByEmployeeId: executive.employeeId, enteredAt: '2026-09-20T09:00:00.000Z', originalContractedTotal: 20_000 },
+        },
+      } : item.type === 'ACTIVITY' ? {
+        ...item, supplierCost: 0,
+        metadata: { ...item.metadata, inclusionStatus: 'OPTIONAL' },
+      } : item),
+    });
+    const quote = await service.createQuote(createInput(), executive);
+    expect(quote.transports?.[0]).toMatchObject({ vehicleCount: 2, chargeableDays: 2, costSource: 'PACKAGE_RATE_OVERRIDE', originalContractedTotal: 20_000 });
+    expect(quote.transports?.[0].packageSupplierRate).toMatchObject({ amount: 4_500, enteredByEmployeeId: executive.employeeId });
+    expect(quote.activities?.[0]).toMatchObject({ inclusionStatus: 'OPTIONAL', supplierCost: 0 });
+
+    const sent = await service.updateQuote(quote.id, { status: 'SENT' }, executive);
+    const conversion = await new QuoteConversionService(storage, new DefaultInventoryDataProvider())
+      .convertQuoteToBooking(sent.id, executive, { currentDate: '2026-09-29' });
+    expect(conversion.transports[0]).toMatchObject({ vehicleCount: 2, chargeableDays: 2 });
+    expect(conversion.activities).toHaveLength(0);
+    const financial = storage.rawList(`bookings/${conversion.booking.id}/financial_snapshot`).find(value => value.bookingId === conversion.booking.id);
+    expect(financial?.lineItems.find((value: any) => value.serviceId === 'trip-transport-01')).toMatchObject({
+      rateContractType: 'PACKAGE', frozenTotalSupplierCost: 18_000,
+      packageSupplierRate: { amount: 4_500, enteredByEmployeeId: executive.employeeId },
+    });
   });
 
   it('derives Sales ownership from the Lead when a Manager or Admin creates the Quote', async () => {
@@ -278,7 +364,7 @@ describe('Stage D1 server-authoritative Quote mutations', () => {
     expect(storage.getAllAuditLogs()).toHaveLength(0);
   });
 
-  it('archives every prior commercial revision and recomputes derived financials', async () => {
+  it('archives every prior commercial revision and retains authoritative Trip economics', async () => {
     const quote = await service.createQuote(createInput(), executive);
     const updated = await service.updateQuote(quote.id, {
       totalAmount: 120_000,
@@ -291,9 +377,9 @@ describe('Stage D1 server-authoritative Quote mutations', () => {
     expect(updated.versionHistory?.[0].version).toBe(1);
     expect(updated.versionHistory?.[0].updatedBy).toBe(executive.employeeId);
     expect(updated.totalSupplierCost).toBe(40_000);
-    expect(updated.finalAmount).toBe(120_000);
-    expect(updated.grossProfit).toBe(80_000);
-    expect(updated.grossMargin).toBe(66.7);
+    expect(updated.finalAmount).toBe(80_000);
+    expect(updated.grossProfit).toBe(40_000);
+    expect(updated.grossMargin).toBe(50);
     expect(updated.status).toBe('SENT');
   });
 
@@ -409,7 +495,7 @@ describe('Stage D1 server-authoritative Quote mutations', () => {
 
     const preview = await service.getCustomerPackage(quote.id, executive);
     expect(preview).toMatchObject({
-      customerName: 'Test Customer', destination: 'Your destination', packageSellingPrice: 95_000,
+      customerName: 'Test Customer', destination: 'Your destination', packageSellingPrice: 80_000,
       hotels: [{ hotelName: 'Hotel Kareem Residency', roomCategoryName: 'Deluxe Room', mealPlan: 'MAP' }],
       transports: [{ vehicleName: 'Innova Crysta AC' }], activities: [{ activityName: 'Private Shikara Ride on Dal Lake' }],
     });
@@ -440,23 +526,40 @@ describe('Stage D1 server-authoritative Quote mutations', () => {
     expect(storage.getAllAuditLogs().filter(log => log.action === 'QUOTE_SHARED')).toHaveLength(0);
   });
 
-  it('blocks new Quote work and sharing while Lead-driven package review is pending without changing historical Quote', async () => {
-    const historical = await service.createQuote(createInput(), executive);
+  it('keeps a shared Quote immutable while blocking new Quote work until current package costs are refreshed', async () => {
+    const draft = await service.createQuote(createInput(), executive);
+    const shared = await service.shareQuote(draft.id, { channel: 'DOCUMENT', expectedVersion: draft.version }, executive);
+    const historicalPackage = await service.getCustomerPackage(draft.id, executive);
     storage.rawUpdate('trips', 'trip-01', {
       costingStatus: 'PENDING',
+      costingRevision: 1,
       packageReview: {
         required: true, reason: 'LEAD_COMMERCIAL_DETAILS_CHANGED',
         changes: [{ field: 'adults', before: 2, after: 4 }],
         markedAt: '2026-09-21T00:00:00.000Z', markedByEmployeeId: executive.employeeId,
       },
     });
-    const before = storage.rawGet('quotes', historical.id);
+    const before = storage.rawGet('quotes', draft.id);
 
-    await expect(service.updateQuote(historical.id, { notes: 'new revision' }, executive))
-      .rejects.toMatchObject({ code: 'PACKAGE_REVIEW_REQUIRED' });
-    await expect(service.shareQuote(historical.id, { channel: 'DOCUMENT', expectedVersion: historical.version }, executive))
-      .rejects.toMatchObject({ code: 'PACKAGE_REVIEW_REQUIRED' });
-    expect(storage.rawGet('quotes', historical.id)).toEqual(before);
+    await expect(service.createQuote(createInput(), executive))
+      .rejects.toMatchObject({ statusCode: 409, code: 'TRIP_COSTING_PENDING' });
+    await expect(service.updateQuote(draft.id, { notes: 'new revision' }, executive))
+      .rejects.toMatchObject({ statusCode: 409, code: 'TRIP_COSTING_PENDING' });
+    await expect(service.shareQuote(draft.id, { channel: 'DOCUMENT', expectedVersion: shared.quote.version }, executive))
+      .rejects.toMatchObject({ statusCode: 409, code: 'TRIP_COSTING_PENDING' });
+    expect(await service.getCustomerPackage(draft.id, executive)).toEqual(historicalPackage);
+    expect(storage.rawGet('quotes', draft.id)).toEqual(before);
+
+    storage.rawUpdate('trips', 'trip-01', {
+      costingStatus: 'CALCULATED',
+      costingCalculatedRevision: 1,
+      totalSupplierCost: 60_000,
+      packageReview: { required: false },
+    });
+    const revised = await service.updateQuote(draft.id, { notes: 'costs reviewed' }, executive);
+    expect(revised).toMatchObject({ version: 3, notes: 'costs reviewed' });
+    expect(revised).toMatchObject({ totalSupplierCost: 60_000 });
+    expect(revised.supplierCostSource).toMatchObject({ costingRevision: 1 });
   });
 
   it('uses explicit conversion DTO allowlists and never passes supplier snapshots through', () => {

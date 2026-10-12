@@ -338,6 +338,7 @@ export function authorizeResource(
   ];
   if (
     approvalAwareActions.includes(action) &&
+    !(resource === 'QUOTE' && action === 'UPDATE_COMMERCIAL' && ['DRAFT', 'PENDING_APPROVAL'].includes(context.status || '')) &&
     context.approval?.required === true &&
     context.approval.state !== 'APPROVED'
   ) {

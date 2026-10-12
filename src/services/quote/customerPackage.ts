@@ -45,6 +45,7 @@ function projectItineraryItem(value: unknown): CustomerPackageItineraryItem | nu
       type, title, ...(text(item.description) ? { description: text(item.description) } : {}),
       ...(text(metadata.activityName) ? { activityName: text(metadata.activityName) } : {}),
       ...(text(metadata.date) ? { serviceDate: text(metadata.date) } : {}),
+      ...(text(metadata.inclusionStatus) ? { inclusionStatus: text(metadata.inclusionStatus) as 'INCLUDED' | 'OPTIONAL' | 'NOT_INCLUDED' } : {}),
     };
   }
   return { type, title, ...(text(item.description) ? { description: text(item.description) } : {}) };
@@ -72,11 +73,14 @@ export function buildCustomerPackageProjection(
     ...(text(item.serviceDate) ? { serviceDate: text(item.serviceDate) } : {}),
     days: number(item.days, 1),
     passengerCount: number(item.passengerCount, number(quote.travelerCount, 1)),
+    ...(number(item.vehicleCount) > 0 ? { vehicleCount: number(item.vehicleCount) } : {}),
+    ...(Array.isArray(item.serviceDays) ? { serviceDays: item.serviceDays } : {}),
   })) : [];
   const activities = Array.isArray(quote.activities) ? quote.activities.map((item: UnknownRecord) => ({
     activityName: text(item.activityName) || text(item.name) || 'Activity',
     ...(text(item.serviceDate ?? item.date) ? { serviceDate: text(item.serviceDate ?? item.date) } : {}),
     participantCount: number(item.pax, number(quote.travelerCount, 1)),
+    ...(text(item.inclusionStatus) ? { inclusionStatus: text(item.inclusionStatus) as 'INCLUDED' | 'OPTIONAL' | 'NOT_INCLUDED' } : {}),
   })) : [];
   const itinerary = itineraryDays
     .map((day: UnknownRecord) => ({

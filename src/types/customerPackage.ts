@@ -14,6 +14,7 @@ export interface CustomerPackageItineraryItem {
   routeName?: string;
   serviceDate?: string;
   activityName?: string;
+  inclusionStatus?: import('./activity').ActivityInclusionStatus;
 }
 
 export interface CustomerPackageDay {
@@ -52,11 +53,14 @@ export interface CustomerPackageDocument {
     serviceDate?: string;
     days: number;
     passengerCount: number;
+    vehicleCount?: number;
+    serviceDays?: import('./transport').TransportServiceDay[];
   }>;
   activities: Array<{
     activityName: string;
     serviceDate?: string;
     participantCount: number;
+    inclusionStatus?: import('./activity').ActivityInclusionStatus;
   }>;
   itinerary: CustomerPackageDay[];
   packageSellingPrice: number;

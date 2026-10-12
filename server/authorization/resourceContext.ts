@@ -1,4 +1,5 @@
 import type { ResourceContext } from './policyTypes.js';
+import { isLowMarginApprovalCurrent } from '../../src/utils/packageCommercials.js';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -40,6 +41,14 @@ export function tripResourceContext(value: unknown): ResourceContext {
 export function quoteResourceContext(value: unknown): ResourceContext {
   const resource = asRecord(value);
   const context = commonContext(resource);
+  const approval = asRecord(resource.approval);
+  if (
+    approval.required === true
+    && approval.state === 'APPROVED'
+    && !isLowMarginApprovalCurrent(approval as any, resource as any)
+  ) {
+    context.approval = { ...approval, state: 'REVIEW_REQUIRED' };
+  }
   copyIfPresent(context, 'ownerEmployeeId', resource, 'salesEmployeeId');
   return context as ResourceContext;
 }

@@ -28,6 +28,7 @@ const SUPPLIER_COST_KEYS = [
   'baseSupplierCost',
   'additionalChargesTotal',
   'totalSupplierCost',
+  'supplierCostBreakdown',
   'packageSupplierRate',
   'contractedTotalSupplierCost',
   'originalContractedTotal',
@@ -40,7 +41,9 @@ const PROFIT_MARGIN_KEYS = [
   'profit',
   'commercialDiscount',
   'estimatedGrossProfit',
-  'estimatedGrossMargin'
+  'estimatedGrossMargin',
+  'pricingInput',
+  'commercialApproval',
 ];
 
 type FinancialVisibility = 'FULL' | 'SUPPLIER_ONLY' | 'SCOPED_SALES' | 'REDACTED';
