@@ -91,6 +91,178 @@ quotesRouter.post(
   },
 );
 
+quotesRouter.get(
+  '/groups/:groupId/customer-comparison',
+  requireRole(['Founder', 'Admin', 'Sales Manager', 'Sales Executive']),
+  async (req: Request, res: Response) => {
+    try {
+      const data = await quoteService.getOptionComparison(req.params.groupId, actorFromRequest(req));
+      return res.status(200).json({ success: true, data });
+    } catch (error) {
+      return sendQuoteError(res, error, 'load Quote option comparison');
+    }
+  },
+);
+
+quotesRouter.post(
+  '/groups/:groupId/reorder',
+  requireRole(['Founder', 'Admin', 'Sales Manager', 'Sales Executive']),
+  async (req: Request, res: Response) => {
+    try {
+      const actor = actorFromRequest(req);
+      const quotes = await quoteService.reorderOptions(req.params.groupId, req.body, actor);
+      return res.status(200).json({
+        success: true,
+        data: quotes.map(quote => buildQuoteDto(quote, assertAuthorizedResource(actor, 'QUOTE', 'READ_DETAIL', quoteResourceContext(quote)))),
+      });
+    } catch (error) {
+      return sendQuoteError(res, error, 'reorder Quote options');
+    }
+  },
+);
+
+quotesRouter.post(
+  '/groups/:groupId/customer-shares',
+  requireRole(['Founder', 'Admin', 'Sales Manager', 'Sales Executive']),
+  async (req: Request, res: Response) => {
+    try {
+      const data = await quoteService.createCustomerShare(req.params.groupId, req.body, actorFromRequest(req));
+      return res.status(201).json({ success: true, data });
+    } catch (error) {
+      return sendQuoteError(res, error, 'create customer share');
+    }
+  },
+);
+
+quotesRouter.get(
+  '/groups/:groupId/customer-shares',
+  requireRole(['Founder', 'Admin', 'Sales Manager', 'Sales Executive']),
+  async (req: Request, res: Response) => {
+    try {
+      const data = await quoteService.listCustomerShares(req.params.groupId, actorFromRequest(req));
+      return res.status(200).json({ success: true, data });
+    } catch (error) {
+      return sendQuoteError(res, error, 'load customer share history');
+    }
+  },
+);
+
+quotesRouter.post(
+  '/customer-shares/:shareId/revoke',
+  requireRole(['Founder', 'Admin', 'Sales Manager', 'Sales Executive']),
+  async (req: Request, res: Response) => {
+    try {
+      if (req.body && Object.keys(req.body).length) {
+        throw new QuoteDomainError(400, 'UNSUPPORTED_SHARE_FIELD', 'Customer share revocation does not accept client-controlled fields.');
+      }
+      const data = await quoteService.revokeCustomerShare(req.params.shareId, actorFromRequest(req));
+      return res.status(200).json({ success: true, data });
+    } catch (error) {
+      return sendQuoteError(res, error, 'revoke customer share');
+    }
+  },
+);
+
+quotesRouter.get(
+  '/customer-shares/:shareId/pdf',
+  requireRole(['Founder', 'Admin', 'Sales Manager', 'Sales Executive']),
+  async (req: Request, res: Response) => {
+    try {
+      const result = await quoteService.generateCustomerSharePdf(req.params.shareId, actorFromRequest(req));
+      res.set({
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `attachment; filename="${result.filename}"`,
+        'Cache-Control': 'private, no-store, max-age=0',
+        'X-Content-Type-Options': 'nosniff',
+        'X-Customer-Share-Version': String(result.share.version),
+      });
+      return res.status(200).send(Buffer.from(result.bytes));
+    } catch (error) {
+      return sendQuoteError(res, error, 'generate customer Quote PDF');
+    }
+  },
+);
+
+quotesRouter.post(
+  '/customer-shares/:shareId/deliveries/prepare',
+  requireRole(['Founder', 'Admin', 'Sales Manager', 'Sales Executive']),
+  async (req: Request, res: Response) => {
+    try {
+      const configuredOrigin = process.env.BBOS_PUBLIC_APP_ORIGIN?.trim();
+      const requestOrigin = `${req.protocol}://${req.get('host')}`;
+      const data = await quoteService.prepareCustomerShareDelivery(
+        req.params.shareId,
+        req.body,
+        configuredOrigin || requestOrigin,
+        actorFromRequest(req),
+      );
+      return res.status(200).json({ success: true, data });
+    } catch (error) {
+      return sendQuoteError(res, error, 'prepare customer delivery');
+    }
+  },
+);
+
+quotesRouter.post(
+  '/:id/duplicate-option',
+  requireRole(['Founder', 'Admin', 'Sales Manager', 'Sales Executive']),
+  async (req: Request, res: Response) => {
+    try {
+      const actor = actorFromRequest(req);
+      const quote = await quoteService.duplicateOption(req.params.id, req.body, actor);
+      const authorization = assertAuthorizedResource(actor, 'QUOTE', 'READ_DETAIL', quoteResourceContext(quote));
+      return res.status(201).json({ success: true, data: buildQuoteDto(quote, authorization) });
+    } catch (error) {
+      return sendQuoteError(res, error, 'duplicate Quote option');
+    }
+  },
+);
+
+quotesRouter.patch(
+  '/:id/option',
+  requireRole(['Founder', 'Admin', 'Sales Manager', 'Sales Executive']),
+  async (req: Request, res: Response) => {
+    try {
+      const actor = actorFromRequest(req);
+      const quote = await quoteService.updateOption(req.params.id, req.body, actor);
+      const authorization = assertAuthorizedResource(actor, 'QUOTE', 'READ_DETAIL', quoteResourceContext(quote));
+      return res.status(200).json({ success: true, data: buildQuoteDto(quote, authorization) });
+    } catch (error) {
+      return sendQuoteError(res, error, 'update Quote option');
+    }
+  },
+);
+
+quotesRouter.post(
+  '/:id/recommend-option',
+  requireRole(['Founder', 'Admin', 'Sales Manager', 'Sales Executive']),
+  async (req: Request, res: Response) => {
+    try {
+      const actor = actorFromRequest(req);
+      const quote = await quoteService.recommendOption(req.params.id, actor);
+      const authorization = assertAuthorizedResource(actor, 'QUOTE', 'READ_DETAIL', quoteResourceContext(quote));
+      return res.status(200).json({ success: true, data: buildQuoteDto(quote, authorization) });
+    } catch (error) {
+      return sendQuoteError(res, error, 'recommend Quote option');
+    }
+  },
+);
+
+quotesRouter.post(
+  '/:id/refresh-option',
+  requireRole(['Founder', 'Admin', 'Sales Manager', 'Sales Executive']),
+  async (req: Request, res: Response) => {
+    try {
+      const actor = actorFromRequest(req);
+      const quote = await quoteService.refreshOptionFromTrip(req.params.id, actor);
+      const authorization = assertAuthorizedResource(actor, 'QUOTE', 'READ_DETAIL', quoteResourceContext(quote));
+      return res.status(200).json({ success: true, data: buildQuoteDto(quote, authorization) });
+    } catch (error) {
+      return sendQuoteError(res, error, 'refresh Quote option from Trip');
+    }
+  },
+);
+
 quotesRouter.patch(
   '/:id',
   requireRole(['Founder', 'Admin', 'Sales Manager', 'Sales Executive']),

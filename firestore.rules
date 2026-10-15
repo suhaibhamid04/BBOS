@@ -100,6 +100,30 @@ service cloud.firestore {
       allow read, create, update, delete: if false;
     }
 
+    match /conversation_entries/{entryId} {
+      // M6A/M6B communications, provider status and internal notes are scoped
+      // through authenticated APIs. Public Meta webhook writes are verified
+      // and performed by Admin SDK; browser clients cannot forge delivery state.
+      allow read, create, update, delete: if false;
+    }
+
+    match /unmatched_whatsapp/{messageId} {
+      // Unresolved provider messages contain customer communications and are
+      // exposed only through the Founder/Admin server workflow.
+      allow read, create, update, delete: if false;
+    }
+
+    match /whatsapp_webhook_events/{eventId} {
+      // Server-only idempotency receipts for signed Meta webhook deliveries.
+      allow read, create, update, delete: if false;
+    }
+
+    match /whatsapp_pending_statuses/{statusId} {
+      // Short-lived server reconciliation records for a provider status that
+      // races ahead of outbound message finalization.
+      allow read, create, update, delete: if false;
+    }
+
     // 4. Companies Collection
     match /companies/{companyId} {
       allow read: if isSalesExecutive() || isAccounts() || isAdmin();
@@ -130,6 +154,12 @@ service cloud.firestore {
       // Quote access is server-authoritative. The Express API verifies Firebase
       // identity, resolves BBOS employee identity, applies OWN/TEAM/ALL policy,
       // and returns explicit DTOs. Admin SDK traffic bypasses these client rules.
+      allow read, create, update, delete: if false;
+    }
+
+    match /customer_shares/{shareId} {
+      // Secure tokens, immutable customer snapshots, expiry, revocation, and
+      // view counters are exclusively managed by the Express/Admin SDK layer.
       allow read, create, update, delete: if false;
     }
 
@@ -456,12 +486,20 @@ service cloud.firestore {
                     request.resource.data.entityType != 'PAYMENT' &&
                     request.resource.data.entityType != 'SUPPLIER_PAYMENT' &&
                     request.resource.data.entityType != 'EMPLOYEE' &&
+                    request.resource.data.entityType != 'CUSTOMER_SHARE' &&
+                    request.resource.data.entityType != 'CONVERSATION_ENTRY' &&
                     !(request.resource.data.action in [
                       'QUOTE_CREATED',
                       'QUOTE_UPDATED',
                       'QUOTE_CONVERTED_TO_BOOKING',
                       'LEAD_INTERACTION_RECORDED',
                       'LEAD_DROPPED',
+                      'INTERNAL_NOTE_ADDED',
+                      'CUSTOMER_CONTACT_LOGGED',
+                      'INTERNAL_NOTE_EDITED',
+                      'WHATSAPP_MESSAGE_SEND_REQUESTED',
+                      'WHATSAPP_MESSAGE_RETRY_REQUESTED',
+                      'UNMATCHED_WHATSAPP_LINKED',
                       'PAYMENT_RECORDED',
                       'PAYMENT_VERIFIED',
                       'PAYMENT_REJECTED',

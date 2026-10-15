@@ -286,7 +286,7 @@ describe('Stage D1 server-authoritative Quote mutations', () => {
     expect(adminQuote.createdByEmployeeId).toBe(admin.employeeId);
   });
 
-  it('rejects client-controlled owner, team, status, supplier cost, profit, and margin fields', async () => {
+  it('rejects client-controlled owner, team, status, supplier cost, profit, and margin fields for options', async () => {
     const attacks = [
       { salesEmployeeId: 'emp-other' },
       { salesTeamId: 'team-other' },
@@ -299,7 +299,7 @@ describe('Stage D1 server-authoritative Quote mutations', () => {
     ];
 
     for (const attack of attacks) {
-      await expect(service.createQuote({ ...createInput(), ...attack }, executive))
+      await expect(service.createQuote({ ...createInput(), optionLabel: 'Value', ...attack }, executive))
         .rejects.toMatchObject({ statusCode: 400 });
     }
     expect(storage.rawGet('quotes', 'quote-01')).toBeNull();
@@ -562,6 +562,32 @@ describe('Stage D1 server-authoritative Quote mutations', () => {
     expect(revised.supplierCostSource).toMatchObject({ costingRevision: 1 });
   });
 
+  it('allows stale-itinerary preview but blocks final share until review, preserving historical snapshots', async () => {
+    const quote = await service.createQuote(createInput(), executive);
+    storage.rawUpdate('itinerary_days', 'day-trip-01', {
+      customerContent: {
+        style: 'DETAILED', status: 'REVIEW_NEEDED', sourceFingerprint: 'v1-old',
+        updatedAt: '2026-09-21T00:00:00.000Z', updatedByEmployeeId: executive.employeeId,
+      },
+    });
+    const preview = await service.getCustomerPackage(quote.id, executive);
+    expect(preview.itinerary).toHaveLength(1);
+    await expect(service.shareQuote(quote.id, { channel: 'DOCUMENT', expectedVersion: quote.version }, executive))
+      .rejects.toMatchObject({ statusCode: 409, code: 'ITINERARY_REVIEW_REQUIRED' });
+    expect(storage.rawGet('quotes', quote.id)).toMatchObject({ status: 'DRAFT', version: 1 });
+
+    storage.rawUpdate('itinerary_days', 'day-trip-01', {
+      customerContent: {
+        style: 'DETAILED', status: 'CURRENT', sourceFingerprint: 'v1-current',
+        updatedAt: '2026-09-21T01:00:00.000Z', updatedByEmployeeId: executive.employeeId,
+      },
+    });
+    const shared = await service.shareQuote(quote.id, { channel: 'DOCUMENT', expectedVersion: quote.version }, executive);
+    const frozen = shared.customerPackage;
+    storage.rawUpdate('itinerary_days', 'day-trip-01', { title: 'Later changed title', customerContent: { status: 'REVIEW_NEEDED' } });
+    expect(await service.getCustomerPackage(quote.id, executive)).toEqual(frozen);
+  });
+
   it('uses explicit conversion DTO allowlists and never passes supplier snapshots through', () => {
     const dto = buildQuoteConversionDto({
       success: true,
@@ -587,5 +613,124 @@ describe('Stage D1 server-authoritative Quote mutations', () => {
     expect(dto.booking.secretInternalFlag).toBeUndefined();
     expect(dto.booking.confirmationProgress.secretInternalFlag).toBeUndefined();
     expect(dto.accommodations[0].supplierCost).toBeUndefined();
+  });
+
+  it('creates, duplicates, edits, orders and recommends isolated frozen Quote options', async () => {
+    const value = await service.createQuote({ ...createInput(), optionLabel: 'Value', customerTitle: 'Kashmir Escape' }, executive);
+    expect(value).toMatchObject({ optionLabel: 'Value', optionOrder: 1, isRecommended: true, optionStatus: 'READY' });
+    expect(value.customerPackageSnapshot?.hotels[0].hotelName).toBe('Hotel Kareem Residency');
+
+    const recommended = await service.duplicateOption(value.id, { label: 'Recommended', totalAmount: 90_000 }, executive);
+    const premium = await service.duplicateOption(recommended.id, { label: 'Premium', totalAmount: 100_000 }, executive);
+    const sharedValue = await service.shareQuote(value.id, { channel: 'DOCUMENT', expectedVersion: value.version }, executive);
+    const historicalValuePackage = JSON.parse(JSON.stringify(sharedValue.customerPackage));
+    const valueBefore = JSON.parse(JSON.stringify(storage.rawGet('quotes', value.id)));
+    const changed = await service.updateOption(recommended.id, {
+      label: 'Best Value', totalAmount: 95_000,
+      inclusions: ['Premium hotel', 'Private Innova'], exclusions: ['Airfare'],
+    }, executive);
+    expect(changed).toMatchObject({ optionLabel: 'Best Value', finalAmount: 95_000, grossProfit: 55_000 });
+    expect(changed.customerPackageSnapshot).toMatchObject({ packageSellingPrice: 95_000, inclusions: ['Premium hotel', 'Private Innova'] });
+    expect(storage.rawGet('quotes', value.id)).toEqual(valueBefore);
+    expect(await service.getCustomerPackage(value.id, executive)).toEqual(historicalValuePackage);
+
+    const liveDay = storage.rawGet('itinerary_days', 'day-trip-01');
+    storage.rawUpdate('itinerary_days', 'day-trip-01', {
+      ...liveDay,
+      items: liveDay.items.map((item: any) => item.type === 'HOTEL'
+        ? { ...item, metadata: { ...item.metadata, propertyId: 'premium-hotel', propertyName: 'Premium Palace', roomCategoryId: 'premium-room', roomCategoryName: 'Premium Suite', rateId: 'premium-rate' } }
+        : item.type === 'TRANSPORT'
+          ? { ...item, metadata: { ...item.metadata, vehicleCategoryId: 'vc-premium', vehicleName: 'Innova Crysta Premium', rateId: 'premium-transport-rate' } }
+          : item),
+    });
+    storage.rawUpdate('trips', 'trip-01', { costingRevision: 1, costingCalculatedRevision: 1, updatedAt: '2026-09-21T00:00:00.000Z' });
+    const refreshedPremium = await service.refreshOptionFromTrip(premium.id, executive);
+    expect(refreshedPremium.hotels?.[0].hotelName).toBe('Premium Palace');
+    expect(refreshedPremium.transports?.[0].vehicleType).toBe('Innova Crysta Premium');
+    expect(storage.rawGet('quotes', value.id).hotels[0].hotelName).toBe('Hotel Kareem Residency');
+    expect(storage.rawGet('quotes', recommended.id).hotels[0].hotelName).toBe('Hotel Kareem Residency');
+
+    await service.recommendOption(recommended.id, executive);
+    expect(storage.rawGet('quotes', value.id).isRecommended).toBe(false);
+    expect(storage.rawGet('quotes', recommended.id).isRecommended).toBe(true);
+    expect(storage.rawGet('quotes', premium.id).isRecommended).toBe(false);
+    const reordered = await service.reorderOptions(value.quoteGroupId!, {
+      optionIds: [premium.optionId, recommended.optionId, value.optionId],
+    }, executive);
+    expect(reordered.map(option => option.optionLabel)).toEqual(['Premium', 'Best Value', 'Value']);
+
+    const comparison = await service.getOptionComparison(value.quoteGroupId!, executive);
+    expect(comparison.options).toHaveLength(3);
+    expect(comparison.options.filter(option => option.recommended).map(option => option.label)).toEqual(['Best Value']);
+    const customerJson = JSON.stringify(comparison);
+    expect(customerJson).not.toContain('totalSupplierCost');
+    expect(customerJson).not.toContain('grossProfit');
+    expect(customerJson).not.toContain('approval');
+    expect(customerJson).not.toContain('supplierCostSource');
+  });
+
+  it('keeps option snapshots frozen after Trip changes and converts only the accepted option', async () => {
+    const value = await service.createQuote({ ...createInput(), optionLabel: 'Value' }, executive);
+    const selected = await service.duplicateOption(value.id, { label: 'Recommended', totalAmount: 92_000 }, executive);
+    const originalSnapshot = JSON.parse(JSON.stringify(selected.customerPackageSnapshot));
+    storage.rawUpdate('trips', 'trip-01', {
+      totalSupplierCost: 70_000, totalSellingPrice: 120_000,
+      costingRevision: 2, costingCalculatedRevision: 2,
+    });
+    storage.rawUpdate('itinerary_days', 'day-trip-01', { title: 'Changed live itinerary' });
+    expect(await service.getCustomerPackage(selected.id, executive)).toEqual(originalSnapshot);
+
+    const shared = await service.shareQuote(selected.id, { channel: 'DOCUMENT', expectedVersion: selected.version }, executive);
+    const conversion = await new QuoteConversionService(storage, new DefaultInventoryDataProvider())
+      .convertQuoteToBooking(shared.quote.id, executive, { currentDate: '2026-10-01' });
+    expect(conversion.booking).toMatchObject({
+      quoteId: selected.id,
+      quoteOptionId: selected.optionId,
+      quoteGroupId: selected.quoteGroupId,
+      totalSellingPrice: 92_000,
+    });
+    expect(conversion.booking.customerPackageSnapshot).toEqual(originalSnapshot);
+    expect(conversion.accommodations[0]).toMatchObject({ propertyName: 'Hotel Kareem Residency', roomCategoryName: 'Deluxe Room' });
+    const financial = storage.rawList(`bookings/${conversion.booking.id}/financial_snapshot`)
+      .find(value => value.bookingId === conversion.booking.id);
+    expect(financial).toMatchObject({ totalSupplierCost: 40_000, totalSellingPrice: 92_000 });
+    expect(storage.rawGet('quotes', selected.id)).toMatchObject({ optionStatus: 'ACCEPTED', convertedBookingId: conversion.booking.id });
+    expect(storage.rawGet('quotes', value.id)).toMatchObject({ optionStatus: 'SUPERSEDED' });
+    await expect(service.shareQuote(value.id, { channel: 'DOCUMENT', expectedVersion: value.version }, executive))
+      .rejects.toMatchObject({ statusCode: 409, code: 'QUOTE_SHARE_WORKFLOW_DENIED' });
+    storage.rawUpdate('quotes', value.id, { optionStatus: 'READY' });
+    const losingShared = await service.shareQuote(value.id, { channel: 'DOCUMENT', expectedVersion: value.version }, executive);
+    await expect(new QuoteConversionService(storage, new DefaultInventoryDataProvider())
+      .convertQuoteToBooking(losingShared.quote.id, executive, { currentDate: '2026-10-01' }))
+      .rejects.toMatchObject({ statusCode: 409, code: 'QUOTE_GROUP_ALREADY_ACCEPTED' });
+  });
+
+  it('requires current costing and reviewed itinerary before freezing a new option', async () => {
+    storage.rawUpdate('itinerary_days', 'day-trip-01', { customerContent: { status: 'REVIEW_NEEDED' } });
+    await expect(service.createQuote({ ...createInput(), optionLabel: 'Value' }, executive))
+      .rejects.toMatchObject({ statusCode: 409, code: 'ITINERARY_REVIEW_REQUIRED' });
+    expect(storage.rawList('quotes')).toHaveLength(0);
+
+    storage.rawUpdate('itinerary_days', 'day-trip-01', { customerContent: { status: 'CURRENT' } });
+    storage.rawUpdate('trips', 'trip-01', { costingStatus: 'STALE', costingRevision: 1, costingCalculatedRevision: 0 });
+    await expect(service.createQuote({ ...createInput(), optionLabel: 'Value' }, executive))
+      .rejects.toMatchObject({ statusCode: 409, code: 'TRIP_COSTING_PENDING' });
+    expect(storage.rawList('quotes')).toHaveLength(0);
+  });
+
+  it('requires current low-margin approval before freezing a new option', async () => {
+    storage.rawUpdate('trips', 'trip-01', {
+      commercialApproval: {
+        required: true,
+        state: 'REVIEW_REQUIRED',
+        thresholdPercent: 60,
+        assessedAt: '2026-10-09T00:00:00.000Z',
+      },
+    });
+
+    await expect(service.createQuote({ ...createInput(), optionLabel: 'Value' }, executive))
+      .rejects.toMatchObject({ statusCode: 409, code: 'COMMERCIAL_APPROVAL_REQUIRED' });
+    expect(storage.rawList('quotes')).toHaveLength(0);
+    expect(storage.getAllAuditLogs()).toHaveLength(0);
   });
 });

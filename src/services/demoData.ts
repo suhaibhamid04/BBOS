@@ -887,7 +887,7 @@ export const DEMO_TRIPS: Trip[] = [
     title: 'Kashmir Luxury Honeymoon & Houseboat Stays',
     destination: 'Kashmir',
     startDate: '2026-10-12',
-    endDate: '2026-10-16',
+    endDate: '2026-10-17',
     travelerCount: 2,
     adults: 2,
     children: 0,
@@ -953,7 +953,7 @@ export const DEMO_ITINERARIES: ItineraryDay[] = [
         referenceId: 'demo-act-02',
         supplierCost: 700,
         sellingPrice: 1300,
-        metadata: { activityId: 'demo-act-02', participants: 2 }
+        metadata: { activityId: 'demo-act-02', participants: 2, inclusionStatus: 'INCLUDED' }
       }
     ]
   },
@@ -1001,7 +1001,7 @@ export const DEMO_ITINERARIES: ItineraryDay[] = [
         referenceId: 'demo-act-01',
         supplierCost: 3700,
         sellingPrice: 4900,
-        metadata: { activityId: 'demo-act-01', participants: 2 }
+        metadata: { activityId: 'demo-act-01', participants: 2, inclusionStatus: 'OPTIONAL' }
       }
     ]
   },
@@ -1010,33 +1010,32 @@ export const DEMO_ITINERARIES: ItineraryDay[] = [
     tripId: 'trip-demo-01',
     dayNumber: 3,
     date: '2026-10-14',
-    title: 'Gulmarg to Pahalgam Valley of Shepherds',
-    location: 'Pahalgam',
-    description: 'Drive via saffron fields of Pampore and Apple valley. Check-in at riverside luxury resort.',
+    title: 'Sonamarg Meadows Day Excursion',
+    location: 'Sonamarg',
+    description: 'A scenic return journey from Srinagar to Sonamarg, with time to enjoy the mountain valley at a relaxed pace.',
     items: [
       {
         id: 'item-301',
         dayId: 'day-demo-3',
         tripId: 'trip-demo-01',
-        type: 'HOTEL',
-        title: 'Pine N Peak Hotel by ITC - Superior Valley Room',
-        description: 'MAP Plan (Breakfast + Dinner). Overlooking Lidder river.',
-        referenceId: 'demo-hotel-04',
-        supplierCost: 9000,
-        sellingPrice: 13500,
-        metadata: { hotelId: 'demo-hotel-04', roomType: 'Superior Valley Room', mealPlan: 'MAP', rooms: 1, guests: 2 }
+        type: 'TRANSPORT',
+        title: 'Innova Crysta AC - Srinagar to Sonamarg Day Excursion',
+        description: 'Private return transfer for the planned Sonamarg excursion.',
+        referenceId: 'demo-trans-01',
+        supplierCost: 3400,
+        sellingPrice: 4800,
+        metadata: { vehicleType: 'Innova Crysta AC', pickup: 'Srinagar', dropoff: 'Sonamarg' }
       },
       {
         id: 'item-302',
         dayId: 'day-demo-3',
         tripId: 'trip-demo-01',
-        type: 'TRANSPORT',
-        title: 'Innova Crysta AC - Gulmarg to Pahalgam Transit',
-        description: 'Dedicated transit with stops at Pampore saffron farms.',
-        referenceId: 'demo-trans-01',
-        supplierCost: 3400,
-        sellingPrice: 4800,
-        metadata: { vehicleType: 'Innova Crysta AC', pickup: 'Gulmarg', dropoff: 'Pahalgam' }
+        type: 'ACTIVITY',
+        title: 'Sonamarg Pony Ride',
+        description: 'Available locally at an additional charge, subject to weather and availability.',
+        supplierCost: 0,
+        sellingPrice: 0,
+        metadata: { activityName: 'Sonamarg Pony Ride', date: '2026-10-14', inclusionStatus: 'OPTIONAL' }
       }
     ]
   },
@@ -1045,9 +1044,9 @@ export const DEMO_ITINERARIES: ItineraryDay[] = [
     tripId: 'trip-demo-01',
     dayNumber: 4,
     date: '2026-10-15',
-    title: 'Pahalgam Local Exploration: Betaab & Aru Valley',
+    title: 'Srinagar to Pahalgam & Valley Exploration',
     location: 'Pahalgam',
-    description: 'Excursion to Betaab Valley and picturesque Aru Valley.',
+    description: 'Travel from Srinagar to Pahalgam before the included Betaab and Aru Valley excursion and an overnight stay beside the Lidder valley.',
     items: [
       {
         id: 'item-401',
@@ -1065,13 +1064,25 @@ export const DEMO_ITINERARIES: ItineraryDay[] = [
         id: 'item-402',
         dayId: 'day-demo-4',
         tripId: 'trip-demo-01',
+        type: 'TRANSPORT',
+        title: 'Innova Crysta AC - Srinagar to Pahalgam Transit',
+        description: 'Dedicated transfer from Srinagar to Pahalgam.',
+        referenceId: 'demo-trans-01',
+        supplierCost: 3400,
+        sellingPrice: 4800,
+        metadata: { vehicleType: 'Innova Crysta AC', pickup: 'Srinagar', dropoff: 'Pahalgam' }
+      },
+      {
+        id: 'item-403',
+        dayId: 'day-demo-4',
+        tripId: 'trip-demo-01',
         type: 'ACTIVITY',
         title: 'Pahalgam Betaab Valley & Aru Valley Private 4x4 Excursion',
         description: 'Private 4x4 union jeep covering Betaab Valley and Chandanwari.',
         referenceId: 'demo-act-03',
         supplierCost: 2400,
         sellingPrice: 3500,
-        metadata: { activityId: 'demo-act-03', participants: 2 }
+        metadata: { activityId: 'demo-act-03', participants: 2, inclusionStatus: 'INCLUDED' }
       }
     ]
   },
@@ -1080,21 +1091,46 @@ export const DEMO_ITINERARIES: ItineraryDay[] = [
     tripId: 'trip-demo-01',
     dayNumber: 5,
     date: '2026-10-16',
-    title: 'Pahalgam to Srinagar Airport Departure',
-    location: 'Srinagar Airport',
-    description: 'Breakfast at hotel, transfer to Srinagar airport for departure flight.',
+    title: 'Pahalgam to Srinagar',
+    location: 'Srinagar',
+    description: 'Return from Pahalgam to Srinagar for a relaxed final evening and overnight stay on Nigeen Lake.',
     items: [
       {
-        id: 'item-501',
-        dayId: 'day-demo-5',
+        id: 'item-501', dayId: 'day-demo-5', tripId: 'trip-demo-01', type: 'TRANSPORT',
+        title: 'Innova Crysta AC - Pahalgam to Srinagar Transfer',
+        description: 'Private transfer back to Srinagar.',
+        supplierCost: 3400, sellingPrice: 4800,
+        metadata: { vehicleName: 'Innova Crysta AC', routeName: 'Pahalgam to Srinagar', serviceType: 'INTERCITY_TRANSFER', startDate: '2026-10-16' },
+      },
+      {
+        id: 'item-502', dayId: 'day-demo-5', tripId: 'trip-demo-01', type: 'HOTEL',
+        title: 'Mascot Houseboats - Royal Cedar Suite',
+        description: 'MAP Plan (Breakfast + 4-Course Dinner). Nigeen Lake waterfront view.',
+        referenceId: 'demo-hotel-03', supplierCost: 6500, sellingPrice: 10500,
+        metadata: { hotelId: 'demo-hotel-03', roomType: 'Royal Cedar Suite', mealPlan: 'MAP', rooms: 1, guests: 2 },
+      },
+    ],
+  },
+  {
+    id: 'day-demo-6',
+    tripId: 'trip-demo-01',
+    dayNumber: 6,
+    date: '2026-10-17',
+    title: 'Srinagar Airport Departure',
+    location: 'Srinagar Airport',
+    description: 'Breakfast at the hotel followed by a timely transfer to Srinagar airport for the departure flight.',
+    items: [
+      {
+        id: 'item-601',
+        dayId: 'day-demo-6',
         tripId: 'trip-demo-01',
         type: 'TRANSPORT',
-        title: 'Innova Crysta AC - Pahalgam to Srinagar Airport Drop',
+        title: 'Innova Crysta AC - Srinagar Airport Drop',
         description: 'Timely airport departure transfer.',
         referenceId: 'demo-trans-01',
         supplierCost: 3400,
         sellingPrice: 4800,
-        metadata: { vehicleType: 'Innova Crysta AC', pickup: 'Pahalgam', dropoff: 'Srinagar Airport' }
+        metadata: { vehicleType: 'Innova Crysta AC', pickup: 'Srinagar', dropoff: 'Srinagar Airport' }
       }
     ]
   }

@@ -3,6 +3,7 @@ import type { CustomerPackageDocument, QuoteShareChannel } from './customerPacka
 export * from './lead';
 export * from './leadDistribution';
 export * from './leadFollowUp';
+export * from './conversationTimeline';
 
 export const USER_ROLES = [
   'Founder',
@@ -339,6 +340,7 @@ export interface QuoteCommercialApproval {
 }
 
 export type QuoteStatus = 'DRAFT' | 'PENDING_APPROVAL' | 'SENT' | 'VIEWED' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED';
+export type QuoteOptionStatus = 'DRAFT' | 'READY' | 'SHARED' | 'ACCEPTED' | 'DECLINED' | 'SUPERSEDED';
 
 export interface QuoteHotelItem {
   id?: string;
@@ -510,6 +512,16 @@ export interface Quote {
   requiresLowMarginApproval?: boolean;
   approval?: QuoteCommercialApproval;
   convertedBookingId?: string;
+  /** M5A comparison-group identity. Legacy Quotes omit these fields. */
+  quoteGroupId?: string;
+  optionId?: string;
+  optionLabel?: string;
+  customerTitle?: string;
+  optionOrder?: number;
+  isRecommended?: boolean;
+  optionStatus?: QuoteOptionStatus;
+  /** Marks the instant the live Trip was frozen into this independent option. */
+  optionSnapshotCreatedAt?: string;
   version: number;
   versionHistory?: QuoteVersion[];
   isDemo?: boolean;
@@ -743,6 +755,22 @@ export interface ItineraryItem {
   metadata?: Record<string, any>;
 }
 
+export type ItineraryContentStatus = 'CURRENT' | 'REVIEW_NEEDED';
+
+/**
+ * Review state for the customer-facing day copy. The copy itself continues to
+ * live in the existing title/description fields so BBOS has one day model.
+ */
+export interface ItineraryCustomerContent {
+  style: 'DETAILED';
+  status: ItineraryContentStatus;
+  sourceFingerprint: string;
+  updatedAt: string;
+  updatedByEmployeeId: string;
+  reviewedAt?: string;
+  reviewedByEmployeeId?: string;
+}
+
 export interface ItineraryDay {
   id: string;
   tripId: string;
@@ -753,6 +781,7 @@ export interface ItineraryDay {
   location: string;
   notes?: string;
   items: ItineraryItem[];
+  customerContent?: ItineraryCustomerContent;
 }
 
 export interface Hotel {

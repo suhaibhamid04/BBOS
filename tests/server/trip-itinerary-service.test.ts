@@ -487,4 +487,43 @@ describe('Sales Core M4.2 transport and activity package persistence', () => {
     expect(activity.item.metadata).toMatchObject({ costSource: 'MANUAL_SUPPLIER_QUOTE' });
     expect(activity.item.metadata?.rateId).toBeUndefined();
   });
+
+  test('customer copy edits are non-commercial, audited, and do not invalidate costing', async () => {
+    const { storage, service } = harness();
+    const result = await service.updateItineraryDay('day-own', {
+      title: 'A Gentle Arrival in Srinagar',
+      description: 'Meet your driver and settle into your planned stay at an easy pace.',
+    }, executive);
+    expect(result.trip.costingStatus).toBe('CALCULATED');
+    expect(storage.rawGet('trips', 'trip-own')?.costingStatus).toBe('CALCULATED');
+    expect(storage.rawList('audit_logs')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: 'ITINERARY_DAY_TITLE_CHANGED', actorId: 'exec-1' }),
+      expect.objectContaining({ action: 'ITINERARY_DAY_DESCRIPTION_CHANGED', actorId: 'exec-1' }),
+    ]));
+  });
+
+  test('customer-relevant service changes preserve copy and require explicit review', async () => {
+    const { storage, service } = harness();
+    const original = storage.rawGet('itinerary_days', 'day-own');
+    const changed = await service.addItineraryItem('day-own', {
+      type: 'SIGHTSEEING', title: 'Dal Lake walk', description: 'A relaxed lakeside walk.',
+    }, executive);
+    expect(changed.day.title).toBe(original.title);
+    expect(changed.day.description).toBe(original.description);
+    expect(changed.day.customerContent?.status).toBe('REVIEW_NEEDED');
+
+    await expectError(
+      service.composeItineraryDayCustomerContent('day-own', { confirmReplace: false }, executive),
+      'ITINERARY_CONTENT_REPLACE_CONFIRMATION_REQUIRED', 409,
+    );
+    const rebuilt = await service.composeItineraryDayCustomerContent('day-own', { confirmReplace: true }, executive);
+    expect(rebuilt.day.customerContent).toMatchObject({ status: 'CURRENT', reviewedByEmployeeId: 'exec-1' });
+    expect(rebuilt.trip.costingStatus).toBe('PENDING');
+
+    const locationChange = await service.updateItineraryDay('day-own', { location: 'Gulmarg' }, executive);
+    expect(locationChange.day.customerContent?.status).toBe('REVIEW_NEEDED');
+    const reviewed = await service.reviewItineraryDayCustomerContent('day-own', executive);
+    expect(reviewed.day.customerContent).toMatchObject({ status: 'CURRENT', reviewedByEmployeeId: 'exec-1' });
+    expect(storage.rawList('audit_logs').some(value => value.action === 'ITINERARY_DAY_REVIEWED' && value.actorId === 'exec-1')).toBe(true);
+  });
 });

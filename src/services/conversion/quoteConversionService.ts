@@ -77,6 +77,39 @@ export function generateValidationFingerprint(quote: Quote, validationResult: an
   return `FP-Q${quote.id}-V${quote.version || 1}-SVC${serviceCount}-C${costSum}-P${price}`;
 }
 
+/** M5A options are already server-frozen commercial snapshots; conversion must not reprice them. */
+function frozenOptionValidation(quote: Quote, now: string): any {
+  const services = [
+    ...(quote.hotels || []).map((item, index) => ({ serviceType: 'ACCOMMODATION', serviceId: item.id || `acc-${index + 1}`, serviceName: item.hotelName })),
+    ...(quote.transports || []).map((item, index) => ({ serviceType: 'TRANSPORT', serviceId: item.id || `trans-${index + 1}`, serviceName: item.vehicleType })),
+    ...(quote.activities || []).filter(item => item.inclusionStatus !== 'OPTIONAL' && item.inclusionStatus !== 'NOT_INCLUDED').map((item, index) => ({ serviceType: 'ACTIVITY', serviceId: item.id || `act-${index + 1}`, serviceName: item.activityName || item.name })),
+  ].map(service => ({ ...service, outcome: 'AVAILABLE', isValid: true, canProceedToBooking: true, rateVerified: true, availabilityStatus: 'AVAILABLE', errors: [], warnings: [] }));
+  return {
+    quoteId: quote.id,
+    quoteVersion: quote.version || 1,
+    overallOutcome: 'AVAILABLE',
+    isValid: true,
+    canConvert: services.length > 0,
+    totalServices: services.length,
+    availableServices: services.length,
+    needsConfirmationServices: 0,
+    onRequestServices: 0,
+    unavailableServices: 0,
+    rateChangedServices: 0,
+    missingRateServices: 0,
+    authoritativeTotalSupplierCost: quote.totalSupplierCost,
+    quotedTotalSupplierCost: quote.totalSupplierCost,
+    totalSellingPrice: quote.finalAmount,
+    estimatedGrossProfit: quote.grossProfit,
+    estimatedGrossMargin: quote.grossMargin,
+    services,
+    discrepancies: [],
+    errors: services.length ? [] : ['Quote option contains no bookable services'],
+    warnings: [],
+    validatedAt: now,
+  };
+}
+
 export interface QuoteConversionOptions {
   currentDate?: string;
 }
@@ -136,11 +169,13 @@ export class QuoteConversionService {
 
     // Ignore/reject any client-supplied supplier cost or financial aggregates
     // The server exclusively evaluates authoritative inventory data.
-    const validationResult = await this.validationService.validateQuote(quote, {
-      mode: 'CONVERSION',
-      currentDate,
-      inventoryProvider: this.inventoryProvider,
-    });
+    const validationResult = quote.optionId && quote.customerPackageSnapshot
+      ? frozenOptionValidation(quote, new Date().toISOString())
+      : await this.validationService.validateQuote(quote, {
+          mode: 'CONVERSION',
+          currentDate,
+          inventoryProvider: this.inventoryProvider,
+        });
 
     if (!validationResult.canConvert) {
       throw new ConversionError(
@@ -175,6 +210,7 @@ export class QuoteConversionService {
     // - update trip to BOOKED if applicable
     // - commit atomically
     const txnResult = await this.storageProvider.runTransaction(async (txn) => {
+      let optionGroup: Quote[] = [];
       // Step A: Read quote
       const freshQuote: Quote | null = await txn.get('quotes', quoteId);
       if (!freshQuote) {
@@ -216,6 +252,13 @@ export class QuoteConversionService {
           bookingId: (freshQuote as any).convertedBookingId,
           booking: existingBooking,
         };
+      }
+      if (freshQuote.quoteGroupId) {
+        optionGroup = await txn.findByField('quotes', 'quoteGroupId', freshQuote.quoteGroupId, 25) as Quote[];
+        const competing = optionGroup.find(option => option.id !== freshQuote.id && (option.convertedBookingId || option.optionStatus === 'ACCEPTED'));
+        if (competing) {
+          throw new ConversionError(409, 'QUOTE_GROUP_ALREADY_ACCEPTED', 'Another option in this Quote group already created the authoritative Booking.');
+        }
       }
       this.assertConversionWorkflow(freshQuote, currentDate);
       await this.assertTripCostingCompleteForConversion(txn, freshQuote);
@@ -398,6 +441,9 @@ export class QuoteConversionService {
         id: conversionKey,
         quoteId: freshQuote.id,
         quoteVersion,
+        ...(freshQuote.quoteGroupId ? { quoteGroupId: freshQuote.quoteGroupId } : {}),
+        ...(freshQuote.optionId ? { quoteOptionId: freshQuote.optionId } : {}),
+        ...(freshQuote.customerPackageSnapshot ? { customerPackageSnapshot: freshQuote.customerPackageSnapshot } : {}),
         bookingId,
         bookingReference,
         convertedBy: actor.employeeId,
@@ -417,6 +463,9 @@ export class QuoteConversionService {
         leadId: freshQuote.leadId,
         quoteId: freshQuote.id,
         quoteVersion,
+        ...(freshQuote.quoteGroupId ? { quoteGroupId: freshQuote.quoteGroupId } : {}),
+        ...(freshQuote.optionId ? { quoteOptionId: freshQuote.optionId } : {}),
+        ...(freshQuote.customerPackageSnapshot ? { customerPackageSnapshot: freshQuote.customerPackageSnapshot } : {}),
         status: 'PENDING_PAYMENT',
         paymentStatus: 'UNPAID',
         totalSellingPrice,
@@ -500,9 +549,15 @@ export class QuoteConversionService {
       // Step I: Update quote to ACCEPTED
       txn.update('quotes', freshQuote.id, {
         status: 'ACCEPTED',
+        ...(freshQuote.optionId ? { optionStatus: 'ACCEPTED' } : {}),
         convertedBookingId: booking.id,
         updatedAt: now,
       });
+      if (freshQuote.quoteGroupId) {
+        for (const option of optionGroup) {
+          if (option.id !== freshQuote.id) txn.update('quotes', option.id, { optionStatus: 'SUPERSEDED', updatedAt: now });
+        }
+      }
 
       // Step J: Update the Sales Lead to its canonical converted stage.
       if (freshQuote.leadId) {
@@ -608,6 +663,7 @@ export class QuoteConversionService {
    * semantics until an explicit migration is approved.
    */
   private async assertTripCostingCompleteForConversion(txn: ConversionTransaction, quote: Quote): Promise<void> {
+    if (quote.optionId && quote.customerPackageSnapshot) return;
     if (!quote.tripId || quote.supplierCostSource?.type !== 'TRIP') return;
     const trip = await txn.get('trips', quote.tripId);
     const sourceRevision = quote.supplierCostSource.costingRevision;

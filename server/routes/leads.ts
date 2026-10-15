@@ -15,6 +15,7 @@ import {
   type LeadPriority,
   type LeadStatus,
   type UserRole,
+  type WhatsAppProviderStatus,
 } from '../../src/types/index.js';
 import { APP_CONFIG } from '../../src/config.js';
 import { DEMO_CUSTOMERS, DEMO_LEADS, DEMO_QUOTES } from '../../src/services/demoData.js';
@@ -25,6 +26,18 @@ import {
   LeadDistributionService,
 } from '../services/leadDistributionService.js';
 import { LeadInteractionError, LeadInteractionService } from '../services/leadInteractionService.js';
+import {
+  ConversationTimelineError,
+  ConversationTimelineService,
+  InMemoryConversationTimelineReadProvider,
+} from '../services/conversationTimelineService.js';
+import {
+  MockMetaWhatsAppProvider,
+  WhatsAppMessagingError,
+  WhatsAppMessagingService,
+  normalizeWhatsAppRecipient,
+} from '../services/whatsappMessagingService.js';
+import { productionWhatsAppMessaging } from '../services/whatsappRuntime.js';
 
 export const leadsRouter = Router();
 
@@ -109,6 +122,13 @@ const demoLeadDistribution = new LeadDistributionService(demoDistributionStorage
 const productionLeadDistribution = new LeadDistributionService();
 const demoLeadInteractions = new LeadInteractionService(demoDistributionStorage);
 const productionLeadInteractions = new LeadInteractionService();
+const demoConversationTimeline = new ConversationTimelineService(
+  demoDistributionStorage,
+  new InMemoryConversationTimelineReadProvider(demoDistributionStorage),
+);
+const demoMetaWhatsAppProvider = new MockMetaWhatsAppProvider();
+const demoWhatsAppMessaging = new WhatsAppMessagingService(demoDistributionStorage, demoMetaWhatsAppProvider);
+const productionConversationTimeline = new ConversationTimelineService();
 
 class LeadRequestError extends Error {
   constructor(readonly statusCode: number, readonly code: string, message: string) { super(message); }
@@ -170,6 +190,8 @@ function sendError(res: Response, error: unknown, fallback: string) {
   if (error instanceof LeadRequestError) return res.status(error.statusCode).json({ error: error.message, code: error.code });
   if (error instanceof LeadDistributionError) return res.status(error.statusCode).json({ error: error.message, code: error.code });
   if (error instanceof LeadInteractionError) return res.status(error.statusCode).json({ error: error.message, code: error.code });
+  if (error instanceof ConversationTimelineError) return res.status(error.statusCode).json({ error: error.message, code: error.code });
+  if (error instanceof WhatsAppMessagingError) return res.status(error.statusCode).json({ error: error.message, code: error.code });
   console.error(`[LEADS] ${fallback}:`, error);
   return res.status(500).json({ error: fallback, code: 'LEAD_OPERATION_FAILED' });
 }
@@ -180,6 +202,14 @@ function distributionService(req: Request) {
 
 function interactionService(req: Request) {
   return isDemoRequest(req) ? demoLeadInteractions : productionLeadInteractions;
+}
+
+function conversationTimelineService(req: Request) {
+  return isDemoRequest(req) ? demoConversationTimeline : productionConversationTimeline;
+}
+
+function whatsappMessagingService(req: Request) {
+  return isDemoRequest(req) ? demoWhatsAppMessaging : productionWhatsAppMessaging;
 }
 
 function distributionActor(req: Request) {
@@ -463,6 +493,95 @@ leadsRouter.get('/sales-queue', requireRole(crmRoles), async (req, res) => {
     const data = await interactionService(req).getSalesQueue(distributionActor(req));
     return res.json({ success: true, data, ...(isDemoRequest(req) ? { mode: 'DEMO' } : {}) });
   } catch (error) { return sendError(res, error, 'Sales queue could not be loaded.'); }
+});
+
+leadsRouter.get('/whatsapp/unresolved', requireRole(['Founder', 'Admin']), async (req, res) => {
+  try {
+    const data = await whatsappMessagingService(req).listUnresolved(distributionActor(req));
+    return res.json({ success: true, data, ...(isDemoRequest(req) ? { mode: 'DEMO' } : {}) });
+  } catch (error) { return sendError(res, error, 'Unmatched WhatsApp messages could not be loaded.'); }
+});
+
+leadsRouter.post('/whatsapp/unresolved/:unresolvedId/link', requireRole(['Founder', 'Admin']), async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body as UnknownRecord : {};
+    const data = await whatsappMessagingService(req).linkUnresolved(req.params.unresolvedId, body.leadId, distributionActor(req));
+    return res.json({ success: true, data });
+  } catch (error) { return sendError(res, error, 'Unmatched WhatsApp message could not be linked.'); }
+});
+
+leadsRouter.post('/whatsapp/demo/events', requireRole(['Founder', 'Admin']), async (req, res) => {
+  try {
+    if (!isDemoRequest(req)) throw new WhatsAppMessagingError(404, 'DEMO_WHATSAPP_DISABLED', 'Demo WhatsApp simulation is unavailable outside Demo Mode.');
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body as UnknownRecord : {};
+    if (body.kind === 'FAIL_NEXT_SEND') {
+      demoMetaWhatsAppProvider.failNext(cleanString(body.code) || 'MOCK_PROVIDER_FAILURE', cleanString(body.message) || 'The demo Meta provider rejected this message.');
+      return res.json({ success: true, data: { armed: true } });
+    }
+    if (body.kind === 'INBOUND_MESSAGE') {
+      const senderPhone = normalizeWhatsAppRecipient(body.senderPhone);
+      const messageBody = cleanString(body.body);
+      if (!senderPhone || !messageBody) throw new WhatsAppMessagingError(400, 'INVALID_DEMO_WHATSAPP_EVENT', 'A valid sender phone and message are required.');
+      const data = await demoWhatsAppMessaging.ingest([{
+        kind: 'INBOUND_MESSAGE', provider: 'META_MOCK', externalMessageId: cleanString(body.externalMessageId) || `wamid.demo.in.${randomUUID()}`,
+        senderPhone, ...(cleanString(body.senderName) ? { senderName: cleanString(body.senderName) } : {}),
+        body: messageBody, occurredAt: cleanString(body.occurredAt) || new Date().toISOString(), demoSimulation: true,
+      }]);
+      return res.json({ success: true, data });
+    }
+    if (body.kind === 'MESSAGE_STATUS') {
+      const externalMessageId = cleanString(body.externalMessageId);
+      const status = cleanString(body.status) as WhatsAppProviderStatus | undefined;
+      if (!externalMessageId || !status || !['SENT', 'DELIVERED', 'READ', 'FAILED'].includes(status)) {
+        throw new WhatsAppMessagingError(400, 'INVALID_DEMO_WHATSAPP_EVENT', 'A valid message ID and delivery status are required.');
+      }
+      const data = await demoWhatsAppMessaging.ingest([{
+        kind: 'MESSAGE_STATUS', provider: 'META_MOCK', externalMessageId, status,
+        occurredAt: cleanString(body.occurredAt) || new Date().toISOString(), demoSimulation: true,
+        ...(status === 'FAILED' ? { failureCode: cleanString(body.failureCode) || 'MOCK_DELIVERY_FAILED', failureMessage: cleanString(body.failureMessage) || 'Demo delivery failed.' } : {}),
+      }]);
+      return res.json({ success: true, data });
+    }
+    throw new WhatsAppMessagingError(400, 'INVALID_DEMO_WHATSAPP_EVENT', 'Choose inbound, status, or fail-next-send simulation.');
+  } catch (error) { return sendError(res, error, 'Demo WhatsApp event could not be processed.'); }
+});
+
+leadsRouter.get('/:id/whatsapp/context', requireRole(crmRoles), async (req, res) => {
+  try {
+    const data = await whatsappMessagingService(req).getContext(req.params.id, distributionActor(req));
+    return res.json({ success: true, data, ...(isDemoRequest(req) ? { mode: 'DEMO' } : {}) });
+  } catch (error) { return sendError(res, error, 'WhatsApp context could not be loaded.'); }
+});
+
+leadsRouter.post('/:id/whatsapp/messages', requireRole(crmRoles), async (req, res) => {
+  try {
+    const result = await whatsappMessagingService(req).send(req.params.id, req.body, distributionActor(req));
+    return res.status(result.idempotent ? 200 : 201).json({ success: true, data: result.entry, idempotent: result.idempotent });
+  } catch (error) { return sendError(res, error, 'WhatsApp message could not be sent.'); }
+});
+
+leadsRouter.post('/:id/whatsapp/messages/:entryId/retry', requireRole(crmRoles), async (req, res) => {
+  try {
+    const result = await whatsappMessagingService(req).retry(req.params.id, req.params.entryId, req.body, distributionActor(req));
+    return res.status(result.idempotent ? 200 : 201).json({ success: true, data: result.entry, idempotent: result.idempotent });
+  } catch (error) { return sendError(res, error, 'WhatsApp message retry could not be completed.'); }
+});
+
+leadsRouter.get('/:id/conversation', requireRole(crmRoles), async (req, res) => {
+  try {
+    const data = await conversationTimelineService(req).getTimeline(req.params.id, distributionActor(req), {
+      limit: req.query.limit,
+      cursor: req.query.cursor,
+    });
+    return res.json({ success: true, data, ...(isDemoRequest(req) ? { mode: 'DEMO' } : {}) });
+  } catch (error) { return sendError(res, error, 'Conversation timeline could not be loaded.'); }
+});
+
+leadsRouter.post('/:id/conversation/entries', requireRole(crmRoles), async (req, res) => {
+  try {
+    const result = await conversationTimelineService(req).addEntry(req.params.id, req.body, distributionActor(req));
+    return res.status(result.idempotent ? 200 : 201).json({ success: true, data: result.entry, idempotent: result.idempotent });
+  } catch (error) { return sendError(res, error, 'Conversation entry could not be saved.'); }
 });
 
 leadsRouter.get('/:id', requireRole(crmRoles), async (req, res) => {

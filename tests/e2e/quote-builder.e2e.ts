@@ -95,7 +95,7 @@ test('Trip-backed Quote persists services, backups, pricing, versions, and conve
   await page.getByTestId('quote-selling-price').fill('110000');
   await page.getByTestId('save-quote').click();
   await expect(page.getByTestId('quote-version')).toHaveText('V3');
-  await expect(page.getByTestId('quote-selling-price')).toHaveValue('80000');
+  await expect(page.getByTestId('quote-selling-price')).toHaveValue('110000');
   await page.getByRole('button', { name: /History/ }).click();
   await expect(page.getByTestId('quote-history-version')).toHaveCount(2);
   await page.getByTestId('close-quote-history').click();

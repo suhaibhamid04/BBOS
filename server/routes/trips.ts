@@ -540,6 +540,36 @@ tripsRouter.patch(
   },
 );
 
+tripsRouter.post(
+  '/itinerary-days/:dayId/compose-customer-content',
+  requireRole([...commercialTripMutationRoles]),
+  async (req: Request, res: Response) => {
+    try {
+      const actor = actorFromRequest(req);
+      const result = await tripService.composeItineraryDayCustomerContent(req.params.dayId, req.body, actor);
+      const authorization = assertAuthorizedResource(actor, 'TRIP', 'READ_DETAIL', tripResourceContext(result.trip));
+      return res.status(200).json({ success: true, data: buildResourceDto(actor, 'TRIP', result, authorization) });
+    } catch (error) {
+      return sendTripMutationError(res, error, 'compose customer itinerary content');
+    }
+  },
+);
+
+tripsRouter.post(
+  '/itinerary-days/:dayId/review-customer-content',
+  requireRole([...commercialTripMutationRoles]),
+  async (req: Request, res: Response) => {
+    try {
+      const actor = actorFromRequest(req);
+      const result = await tripService.reviewItineraryDayCustomerContent(req.params.dayId, actor);
+      const authorization = assertAuthorizedResource(actor, 'TRIP', 'READ_DETAIL', tripResourceContext(result.trip));
+      return res.status(200).json({ success: true, data: buildResourceDto(actor, 'TRIP', result, authorization) });
+    } catch (error) {
+      return sendTripMutationError(res, error, 'review customer itinerary content');
+    }
+  },
+);
+
 tripsRouter.delete(
   '/itinerary-days/:dayId',
   requireRole([...commercialTripMutationRoles]),

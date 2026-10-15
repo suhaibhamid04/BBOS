@@ -1,5 +1,25 @@
-import type { AuditLog, CustomerPackageDocument, Quote, QuoteShareChannel, QuoteStatus, QuoteVersion } from '../../src/types/index.js';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import type {
+  AuditLog,
+  CustomerPackageDocument,
+  CustomerDeliveryChannel,
+  CustomerDeliveryPreparation,
+  CustomerQuoteComparison,
+  CustomerShareCreateResult,
+  CustomerShareExpiryDays,
+  CustomerShareHistoryItem,
+  CustomerSharePublicView,
+  CustomerShareStatus,
+  Quote,
+  QuoteOptionStatus,
+  QuoteShareChannel,
+  QuoteStatus,
+  QuoteVersion,
+} from '../../src/types/index.js';
 import { buildCustomerPackageProjection } from '../../src/services/quote/customerPackage.js';
+import { buildCustomerSharePublicView } from '../../src/services/quote/customerShareProjection.js';
+import { buildCustomerDeliveryPreparation } from '../../src/services/quote/customerShareDelivery.js';
+import { buildCustomerSharePdf, customerSharePdfFilename } from '../../src/services/quote/customerSharePdf.js';
 import {
   FirestoreConversionStorageProvider,
   type ConversionStorageProvider,
@@ -9,9 +29,80 @@ import { assertAuthorizedResource, ResourceAuthorizationError } from '../authori
 import { quoteResourceContext, tripResourceContext } from '../authorization/resourceContext.js';
 import type { AuthorizationPrincipal } from '../authorization/policyTypes.js';
 import { isTripCostingFresh } from '../../src/utils/costingFreshness.js';
-import { isLowMarginApprovalCurrent } from '../../src/utils/packageCommercials.js';
+import { assessLowMarginPolicy, isLowMarginApprovalCurrent } from '../../src/utils/packageCommercials.js';
 
 type UnknownRecord = Record<string, any>;
+
+interface CustomerShareRecord {
+  id: string;
+  quoteGroupId: string;
+  leadId?: string;
+  customerId?: string;
+  tripId?: string;
+  version: number;
+  quoteVersions: Array<{ quoteId: string; version: number }>;
+  tokenHash: string;
+  status: CustomerShareStatus;
+  createdByEmployeeId: string;
+  createdByName: string;
+  salesEmployeeId: string;
+  salesTeamId?: string;
+  createdAt: string;
+  expiresAt?: string;
+  revokedAt?: string;
+  revokedByEmployeeId?: string;
+  firstViewedAt?: string;
+  lastViewedAt?: string;
+  viewCount: number;
+  pdfGeneratedCount?: number;
+  whatsappPreparedCount?: number;
+  emailPreparedCount?: number;
+  lastPdfGeneratedAt?: string;
+  lastWhatsappPreparedAt?: string;
+  lastEmailPreparedAt?: string;
+  snapshot: CustomerSharePublicView;
+}
+
+const CUSTOMER_SHARE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const CUSTOMER_SHARE_EXPIRY_DAYS = new Set<CustomerShareExpiryDays>([7, 14, 30]);
+
+function hashCustomerShareToken(token: string): string {
+  return createHash('sha256').update(token, 'utf8').digest('hex');
+}
+
+function effectiveCustomerShareStatus(record: CustomerShareRecord, now: string): CustomerShareStatus {
+  if (record.status === 'REVOKED') return 'REVOKED';
+  if (record.expiresAt && record.expiresAt <= now) return 'EXPIRED';
+  return 'ACTIVE';
+}
+
+function customerShareHistory(record: CustomerShareRecord, now = new Date().toISOString()): CustomerShareHistoryItem {
+  return {
+    shareId: record.id,
+    quoteGroupId: record.quoteGroupId,
+    version: record.version,
+    status: effectiveCustomerShareStatus(record, now),
+    createdByName: record.createdByName,
+    createdAt: record.createdAt,
+    ...(record.expiresAt ? { expiresAt: record.expiresAt } : {}),
+    ...(record.revokedAt ? { revokedAt: record.revokedAt } : {}),
+    ...(record.firstViewedAt ? { firstViewedAt: record.firstViewedAt } : {}),
+    ...(record.lastViewedAt ? { lastViewedAt: record.lastViewedAt } : {}),
+    viewCount: record.viewCount || 0,
+    ...(record.pdfGeneratedCount ? { pdfGeneratedCount: record.pdfGeneratedCount } : {}),
+    ...(record.whatsappPreparedCount ? { whatsappPreparedCount: record.whatsappPreparedCount } : {}),
+    ...(record.emailPreparedCount ? { emailPreparedCount: record.emailPreparedCount } : {}),
+    ...(record.lastPdfGeneratedAt ? { lastPdfGeneratedAt: record.lastPdfGeneratedAt } : {}),
+    ...(record.lastWhatsappPreparedAt ? { lastWhatsappPreparedAt: record.lastWhatsappPreparedAt } : {}),
+    ...(record.lastEmailPreparedAt ? { lastEmailPreparedAt: record.lastEmailPreparedAt } : {}),
+  };
+}
+
+function assertCustomerShareActor(actor: QuoteMutationActor): void {
+  if (!['Founder', 'Admin', 'Sales Manager', 'Sales Executive'].includes(actor.role)) {
+    throw new QuoteDomainError(403, 'RESOURCE_ACCESS_DENIED', 'This role cannot manage customer shares.');
+  }
+}
 
 export interface QuoteMutationActor extends AuthorizationPrincipal {
   name: string;
@@ -37,6 +128,7 @@ const CREATE_FIELDS = new Set([
   'adults', 'children', 'packageId', 'packageName', 'durationDays', 'durationNights',
   'totalAmount', 'discountAmount', 'validUntil', 'notes', 'internalNotes',
   'inclusions', 'exclusions', 'termsAndConditions', 'backupAccommodations',
+  'optionLabel', 'customerTitle',
 ]);
 
 const UPDATE_FIELDS = new Set([...CREATE_FIELDS, 'status']);
@@ -50,6 +142,8 @@ const SERVER_CONTROLLED_FIELDS = new Set([
   'convertedAt', 'convertedBy', 'isDemo',
   'sharedAt', 'sharedByEmployeeId', 'shareChannel',
   'customerPackageSnapshot',
+  'quoteGroupId', 'optionId', 'optionOrder', 'isRecommended', 'optionStatus',
+  'optionSnapshotCreatedAt',
 ]);
 
 const NESTED_FINANCIAL_FIELDS = new Set([
@@ -215,7 +309,7 @@ function sanitizeInput(value: unknown, mode: 'CREATE' | 'UPDATE'): UnknownRecord
   const stringFields = [
     'leadId', 'customerId', 'customerName', 'customerPhone', 'customerEmail', 'destination',
     'tripId', 'packageId', 'packageName', 'notes', 'internalNotes',
-    'termsAndConditions',
+    'termsAndConditions', 'optionLabel', 'customerTitle',
   ];
   for (const field of stringFields) {
     const normalized = optionalString(input[field], field);
@@ -363,8 +457,9 @@ async function buildStoredCustomerPackage(
   tx: ConversionTransaction,
   quote: Quote,
   generatedAt: string,
+  requireReviewedItinerary = false,
 ): Promise<CustomerPackageDocument> {
-  if (quote.sharedAt && quote.customerPackageSnapshot) {
+  if (quote.customerPackageSnapshot && (quote.sharedAt || quote.optionId)) {
     return quote.customerPackageSnapshot;
   }
   if (quote.sharedAt) {
@@ -393,7 +488,124 @@ async function buildStoredCustomerPackage(
     throw new QuoteDomainError(409, 'QUOTE_TRIP_VERSION_STALE', 'Save a new Quote revision after the latest Trip changes before sharing.');
   }
   const days = await tx.findByField('itinerary_days', 'tripId', quote.tripId, 60);
-  return buildCustomerPackageProjection(quote, days, trip, generatedAt);
+  if (requireReviewedItinerary && days.some(day => day.customerContent?.status === 'REVIEW_NEEDED')) {
+    throw new QuoteDomainError(
+      409,
+      'ITINERARY_REVIEW_REQUIRED',
+      'Review the updated customer itinerary before sharing this Quote.',
+      { itineraryReviewRequired: true },
+    );
+  }
+  try {
+    return buildCustomerPackageProjection(quote, days, trip, generatedAt);
+  } catch (error) {
+    throw new QuoteDomainError(422, 'INVALID_ITINERARY_ORDER', error instanceof Error ? error.message : 'The itinerary day order is invalid.');
+  }
+}
+
+async function assertCustomerShareGroupReady(
+  tx: ConversionTransaction,
+  group: Quote[],
+  actor: QuoteMutationActor,
+): Promise<void> {
+  assertCustomerShareActor(actor);
+  if (!group.length) throw new QuoteDomainError(404, 'QUOTE_GROUP_NOT_FOUND', 'Quote option group not found.');
+  const recommendedCount = group.filter(option => option.isRecommended === true).length;
+  if (recommendedCount !== 1) {
+    throw new QuoteDomainError(409, 'QUOTE_GROUP_RECOMMENDATION_INVALID', 'Choose exactly one recommended option before sharing.');
+  }
+
+  const checkedTrips = new Map<string, UnknownRecord>();
+  for (const option of group) {
+    try {
+      assertAuthorizedResource(actor, 'QUOTE', 'READ_DETAIL', quoteResourceContext(option));
+    } catch (error) {
+      translateAuthorizationError(error);
+    }
+    if (!option.optionId || !option.customerPackageSnapshot) {
+      throw new QuoteDomainError(409, 'QUOTE_OPTION_SNAPSHOT_REQUIRED', 'Every shared option must have a frozen customer snapshot.');
+    }
+    if (['ACCEPTED', 'SUPERSEDED', 'DECLINED'].includes(option.optionStatus || '')) {
+      throw new QuoteDomainError(409, 'QUOTE_SHARE_WORKFLOW_DENIED', 'Accepted, superseded, or declined options cannot enter a new customer share.');
+    }
+    if (option.approval?.required === true && !isLowMarginApprovalCurrent(option.approval, option)) {
+      throw new QuoteDomainError(409, 'COMMERCIAL_APPROVAL_REQUIRED', 'Commercial approval is required before sharing this package.');
+    }
+    if (!option.tripId) throw new QuoteDomainError(422, 'TRIP_LINK_REQUIRED', 'Every shared option must be linked to its authoritative Trip.');
+
+    let trip = checkedTrips.get(option.tripId);
+    if (!trip) {
+      trip = await tx.get('trips', option.tripId) as UnknownRecord | null || undefined;
+      if (!trip) throw new QuoteDomainError(404, 'TRIP_NOT_FOUND', 'The Quote Trip no longer exists.');
+      assertTripCostingFresh(trip, 'create a customer link');
+      const days = await tx.findByField('itinerary_days', 'tripId', option.tripId, 60) as UnknownRecord[];
+      if (days.some(day => day.customerContent?.status === 'REVIEW_NEEDED')) {
+        throw new QuoteDomainError(409, 'ITINERARY_REVIEW_REQUIRED', 'Review the updated customer itinerary before sharing this package.');
+      }
+      checkedTrips.set(option.tripId, trip);
+    }
+    const sourceRevision = option.supplierCostSource?.costingRevision;
+    const tripRevision = Number(trip.costingRevision || 0);
+    const sourceIsStale = sourceRevision !== undefined
+      ? sourceRevision !== tripRevision
+      : Boolean(option.supplierCostSource?.asOf && trip.updatedAt && option.supplierCostSource.asOf !== trip.updatedAt);
+    if (sourceIsStale) {
+      throw new QuoteDomainError(409, 'QUOTE_TRIP_VERSION_STALE', 'Refresh every option from the current reviewed Package before creating a new customer link.');
+    }
+  }
+}
+
+function requireOptionLabel(value: unknown, field = 'optionLabel'): string {
+  const label = requireNonEmptyString(value, field);
+  if (label.length > 80) throw new QuoteDomainError(400, 'INVALID_OPTION_LABEL', `${field} must be 80 characters or fewer.`);
+  return label;
+}
+
+function optionStatusForQuote(status: QuoteStatus): QuoteOptionStatus {
+  if (status === 'SENT' || status === 'VIEWED') return 'SHARED';
+  if (status === 'ACCEPTED') return 'ACCEPTED';
+  if (status === 'REJECTED' || status === 'EXPIRED') return 'DECLINED';
+  return 'READY';
+}
+
+function customerComparison(groupId: string, quotes: Quote[]): CustomerQuoteComparison {
+  const options = quotes
+    .filter(quote => quote.optionId && quote.customerPackageSnapshot)
+    .sort((left, right) => (left.optionOrder || 0) - (right.optionOrder || 0))
+    .map(quote => {
+      const customerPackage = quote.customerPackageSnapshot!;
+      return {
+        optionId: quote.optionId!,
+        quoteId: quote.id,
+        label: quote.optionLabel || 'Package option',
+        ...(quote.customerTitle ? { customerTitle: quote.customerTitle } : {}),
+        order: quote.optionOrder || 0,
+        recommended: quote.isRecommended === true,
+        status: quote.optionStatus || optionStatusForQuote(quote.status),
+        packageSellingPrice: customerPackage.packageSellingPrice,
+        currency: customerPackage.currency,
+        travelerCount: customerPackage.travelerCount,
+        ...(quote.durationDays ? { durationDays: quote.durationDays } : {}),
+        ...(quote.durationNights ? { durationNights: quote.durationNights } : {}),
+        hotelHighlights: customerPackage.hotels.map(hotel => `${hotel.hotelName} — ${hotel.roomCategoryName}`),
+        transportHighlights: customerPackage.transports.map(transport => transport.vehicleName),
+        includedActivityHighlights: customerPackage.activities
+          .filter(activity => activity.inclusionStatus !== 'OPTIONAL' && activity.inclusionStatus !== 'NOT_INCLUDED')
+          .map(activity => activity.activityName),
+        optionalActivityHighlights: customerPackage.activities
+          .filter(activity => activity.inclusionStatus === 'OPTIONAL')
+          .map(activity => activity.activityName),
+        validUntil: quote.validUntil,
+      };
+    });
+  const first = quotes[0];
+  return {
+    quoteGroupId: groupId,
+    customerName: first?.customerName || 'Guest',
+    destination: first?.destination || 'Your destination',
+    title: first?.customerTitle || `${first?.destination || 'Holiday'} Package Options`,
+    options,
+  };
 }
 
 function translateAuthorizationError(error: unknown): never {
@@ -472,6 +684,573 @@ export class QuoteService {
     });
   }
 
+  async getOptionComparison(groupIdValue: unknown, actor: QuoteMutationActor): Promise<CustomerQuoteComparison> {
+    const groupId = requireNonEmptyString(groupIdValue, 'quoteGroupId');
+    return this.storage.runTransaction(async tx => {
+      const quotes = await tx.findByField('quotes', 'quoteGroupId', groupId, 25) as Quote[];
+      if (!quotes.length) throw new QuoteDomainError(404, 'QUOTE_GROUP_NOT_FOUND', 'Quote option group not found.');
+      for (const quote of quotes) {
+        try {
+          assertAuthorizedResource(actor, 'QUOTE', 'READ_DETAIL', quoteResourceContext(quote));
+        } catch (error) {
+          translateAuthorizationError(error);
+        }
+      }
+      return customerComparison(groupId, quotes);
+    });
+  }
+
+  async createCustomerShare(
+    groupIdValue: unknown,
+    rawInput: unknown,
+    actor: QuoteMutationActor,
+  ): Promise<CustomerShareCreateResult> {
+    const groupId = requireNonEmptyString(groupIdValue, 'quoteGroupId');
+    const input = requireRecord(rawInput);
+    const unknown = Object.keys(input).find(key => key !== 'expiresInDays');
+    if (unknown) throw new QuoteDomainError(400, 'UNSUPPORTED_SHARE_FIELD', `Unsupported share field: ${unknown}.`);
+    const requestedExpiry = input.expiresInDays;
+    if (requestedExpiry !== undefined && requestedExpiry !== null && !CUSTOMER_SHARE_EXPIRY_DAYS.has(requestedExpiry)) {
+      throw new QuoteDomainError(400, 'INVALID_SHARE_EXPIRY', 'expiresInDays must be 7, 14, 30, or null.');
+    }
+    const expiresInDays = requestedExpiry === null
+      ? undefined
+      : (requestedExpiry === undefined ? 14 : requestedExpiry as CustomerShareExpiryDays);
+    const token = randomBytes(32).toString('base64url');
+    const tokenHash = hashCustomerShareToken(token);
+    const shareId = `share-${randomUUID()}`;
+    const now = new Date().toISOString();
+
+    return this.storage.runTransaction(async tx => {
+      const group = await tx.findByField('quotes', 'quoteGroupId', groupId, 25) as Quote[];
+      await assertCustomerShareGroupReady(tx, group, actor);
+      const owner = group[0].salesEmployeeId;
+      const team = group[0].salesTeamId;
+      if (!owner || group.some(option => option.salesEmployeeId !== owner || option.salesTeamId !== team)) {
+        throw new QuoteDomainError(409, 'QUOTE_GROUP_SCOPE_INVALID', 'Quote Group ownership metadata is inconsistent.');
+      }
+      const collision = await tx.findByField('customer_shares', 'tokenHash', tokenHash, 2);
+      if (collision.length) throw new QuoteDomainError(500, 'SHARE_TOKEN_COLLISION', 'Unable to create a secure customer link.');
+      const priorShares = await tx.findByField('customer_shares', 'quoteGroupId', groupId, 100) as CustomerShareRecord[];
+      const version = priorShares.reduce((highest, share) => Math.max(highest, Number(share.version || 0)), 0) + 1;
+      // Firestore rejects undefined values. The public projection is deliberately
+      // allowlisted; serializing it also removes optional undefined leaves before
+      // the immutable snapshot is persisted.
+      const snapshot = JSON.parse(JSON.stringify(
+        buildCustomerSharePublicView(group, now),
+      )) as CustomerSharePublicView;
+      const record: CustomerShareRecord = {
+        id: shareId,
+        quoteGroupId: groupId,
+        leadId: group[0].leadId,
+        customerId: group[0].customerId,
+        ...(group[0].tripId ? { tripId: group[0].tripId } : {}),
+        version,
+        quoteVersions: group.map(option => ({ quoteId: option.id, version: option.version || 1 })),
+        tokenHash,
+        status: 'ACTIVE',
+        createdByEmployeeId: actor.employeeId,
+        createdByName: actor.name,
+        salesEmployeeId: owner,
+        ...(team ? { salesTeamId: team } : {}),
+        createdAt: now,
+        ...(expiresInDays ? { expiresAt: new Date(Date.parse(now) + expiresInDays * 86_400_000).toISOString() } : {}),
+        viewCount: 0,
+        snapshot,
+      };
+      for (const option of group) {
+        tx.update('quotes', option.id, {
+          status: 'SENT',
+          optionStatus: 'SHARED',
+          sharedAt: now,
+          sharedByEmployeeId: actor.employeeId,
+          shareChannel: 'DOCUMENT',
+          version: (option.version || 1) + 1,
+          versionHistory: [...(option.versionHistory || []), versionSnapshot(option, actor)],
+          updatedAt: now,
+          updatedByEmployeeId: actor.employeeId,
+        });
+      }
+      const history = customerShareHistory(record, now);
+      const audit = {
+        ...auditEvent('CUSTOMER_SHARE_CREATED', shareId, actor, null, {
+          shareId,
+          quoteGroupId: groupId,
+          version,
+          createdAt: now,
+          ...(record.expiresAt ? { expiresAt: record.expiresAt } : {}),
+        }, now),
+        entityType: 'CUSTOMER_SHARE',
+        reason: 'Secure customer Quote Group link created from frozen option snapshots.',
+      } as AuditLog;
+      tx.set('customer_shares', shareId, record);
+      tx.set('audit_logs', audit.id, audit);
+      return { share: history, publicPath: `/quote/share/${token}` };
+    });
+  }
+
+  async listCustomerShares(groupIdValue: unknown, actor: QuoteMutationActor): Promise<CustomerShareHistoryItem[]> {
+    const groupId = requireNonEmptyString(groupIdValue, 'quoteGroupId');
+    return this.storage.runTransaction(async tx => {
+      const group = await tx.findByField('quotes', 'quoteGroupId', groupId, 25) as Quote[];
+      if (!group.length) throw new QuoteDomainError(404, 'QUOTE_GROUP_NOT_FOUND', 'Quote option group not found.');
+      for (const option of group) {
+        try {
+          assertAuthorizedResource(actor, 'QUOTE', 'READ_DETAIL', quoteResourceContext(option));
+        } catch (error) {
+          translateAuthorizationError(error);
+        }
+      }
+      const now = new Date().toISOString();
+      const shares = await tx.findByField('customer_shares', 'quoteGroupId', groupId, 100) as CustomerShareRecord[];
+      return shares
+        .map(record => customerShareHistory(record, now))
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    });
+  }
+
+  async revokeCustomerShare(shareIdValue: unknown, actor: QuoteMutationActor): Promise<CustomerShareHistoryItem> {
+    const shareId = requireNonEmptyString(shareIdValue, 'shareId');
+    assertCustomerShareActor(actor);
+    return this.storage.runTransaction(async tx => {
+      const stored = await tx.get('customer_shares', shareId) as CustomerShareRecord | null;
+      if (!stored) throw new QuoteDomainError(404, 'CUSTOMER_SHARE_NOT_FOUND', 'Customer share not found.');
+      try {
+        assertAuthorizedResource(actor, 'QUOTE', 'READ_DETAIL', quoteResourceContext({
+          salesEmployeeId: stored.salesEmployeeId,
+          salesTeamId: stored.salesTeamId,
+        }));
+      } catch (error) {
+        translateAuthorizationError(error);
+      }
+      if (stored.status === 'REVOKED') return customerShareHistory(stored);
+      const now = new Date().toISOString();
+      const updated: CustomerShareRecord = {
+        ...stored,
+        status: 'REVOKED',
+        revokedAt: now,
+        revokedByEmployeeId: actor.employeeId,
+      };
+      const audit = {
+        ...auditEvent('CUSTOMER_SHARE_REVOKED', shareId, actor,
+          { shareId, quoteGroupId: stored.quoteGroupId, status: effectiveCustomerShareStatus(stored, now) },
+          { shareId, quoteGroupId: stored.quoteGroupId, status: 'REVOKED', revokedAt: now }, now),
+        entityType: 'CUSTOMER_SHARE',
+        reason: 'Customer access token revoked without deleting Quote history.',
+      } as AuditLog;
+      tx.update('customer_shares', shareId, updated);
+      tx.set('audit_logs', audit.id, audit);
+      return customerShareHistory(updated, now);
+    });
+  }
+
+  async openCustomerShare(tokenValue: unknown): Promise<CustomerSharePublicView> {
+    const token = typeof tokenValue === 'string' ? tokenValue.trim() : '';
+    if (!CUSTOMER_SHARE_TOKEN_PATTERN.test(token)) {
+      throw new QuoteDomainError(404, 'CUSTOMER_SHARE_NOT_FOUND', 'This package link could not be found.');
+    }
+    const tokenHash = hashCustomerShareToken(token);
+    return this.storage.runTransaction(async tx => {
+      const matches = await tx.findByField('customer_shares', 'tokenHash', tokenHash, 2) as CustomerShareRecord[];
+      if (matches.length !== 1) {
+        throw new QuoteDomainError(404, 'CUSTOMER_SHARE_NOT_FOUND', 'This package link could not be found.');
+      }
+      const stored = matches[0];
+      const now = new Date().toISOString();
+      const status = effectiveCustomerShareStatus(stored, now);
+      if (status === 'REVOKED') {
+        throw new QuoteDomainError(410, 'CUSTOMER_SHARE_REVOKED', 'This package link is no longer available.');
+      }
+      if (status === 'EXPIRED') {
+        if (stored.status !== 'EXPIRED') tx.update('customer_shares', stored.id, { status: 'EXPIRED' });
+        throw new QuoteDomainError(410, 'CUSTOMER_SHARE_EXPIRED', 'This package link has expired. Please contact Booking Bridge for an updated itinerary.');
+      }
+      tx.update('customer_shares', stored.id, {
+        ...(stored.firstViewedAt ? {} : { firstViewedAt: now }),
+        lastViewedAt: now,
+        viewCount: (stored.viewCount || 0) + 1,
+      });
+      return JSON.parse(JSON.stringify(stored.snapshot)) as CustomerSharePublicView;
+    });
+  }
+
+  async generateCustomerSharePdf(
+    shareIdValue: unknown,
+    actor: QuoteMutationActor,
+  ): Promise<{ bytes: Uint8Array; filename: string; share: CustomerShareHistoryItem }> {
+    const shareId = requireNonEmptyString(shareIdValue, 'shareId');
+    assertCustomerShareActor(actor);
+    return this.storage.runTransaction(async tx => {
+      const stored = await tx.get('customer_shares', shareId) as CustomerShareRecord | null;
+      if (!stored) throw new QuoteDomainError(404, 'CUSTOMER_SHARE_NOT_FOUND', 'Customer share not found.');
+      try {
+        assertAuthorizedResource(actor, 'QUOTE', 'READ_DETAIL', quoteResourceContext({
+          salesEmployeeId: stored.salesEmployeeId,
+          salesTeamId: stored.salesTeamId,
+        }));
+      } catch (error) {
+        translateAuthorizationError(error);
+      }
+      const now = new Date().toISOString();
+      const bytes = buildCustomerSharePdf(stored.snapshot, stored.version);
+      const updated: CustomerShareRecord = {
+        ...stored,
+        pdfGeneratedCount: (stored.pdfGeneratedCount || 0) + 1,
+        lastPdfGeneratedAt: now,
+      };
+      const audit = {
+        ...auditEvent('QUOTE_PDF_GENERATED', shareId, actor, null, {
+          shareId,
+          quoteGroupId: stored.quoteGroupId,
+          version: stored.version,
+          channel: 'PDF',
+          linkStatus: effectiveCustomerShareStatus(stored, now),
+          generatedAt: now,
+        }, now),
+        entityType: 'CUSTOMER_SHARE',
+        reason: 'Customer-safe PDF generated from the immutable CustomerShare snapshot.',
+      } as AuditLog;
+      tx.update('customer_shares', shareId, updated);
+      tx.set('audit_logs', audit.id, audit);
+      return {
+        bytes,
+        filename: customerSharePdfFilename(stored.snapshot, new Date(stored.createdAt).getUTCFullYear()),
+        share: customerShareHistory(updated, now),
+      };
+    });
+  }
+
+  async prepareCustomerShareDelivery(
+    shareIdValue: unknown,
+    rawInput: unknown,
+    publicOriginValue: string,
+    actor: QuoteMutationActor,
+  ): Promise<CustomerDeliveryPreparation> {
+    const shareId = requireNonEmptyString(shareIdValue, 'shareId');
+    assertCustomerShareActor(actor);
+    const input = requireRecord(rawInput);
+    const unsupported = Object.keys(input).find(key => !['channel', 'token'].includes(key));
+    if (unsupported) throw new QuoteDomainError(400, 'UNSUPPORTED_DELIVERY_FIELD', `Unsupported delivery field: ${unsupported}.`);
+    const channel = input.channel;
+    if (channel !== 'WHATSAPP' && channel !== 'EMAIL') {
+      throw new QuoteDomainError(400, 'INVALID_DELIVERY_CHANNEL', 'channel must be WHATSAPP or EMAIL.');
+    }
+    const token = typeof input.token === 'string' ? input.token.trim() : '';
+    if (!CUSTOMER_SHARE_TOKEN_PATTERN.test(token)) {
+      throw new QuoteDomainError(409, 'ACTIVE_CUSTOMER_LINK_REQUIRED', 'Create or select a valid active customer link before preparing delivery.');
+    }
+    let publicOrigin: string;
+    try {
+      const parsed = new URL(publicOriginValue);
+      if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('Unsupported public protocol.');
+      publicOrigin = parsed.origin;
+    } catch {
+      throw new QuoteDomainError(500, 'PUBLIC_APP_ORIGIN_INVALID', 'The public Booking Bridge URL is not configured correctly.');
+    }
+
+    return this.storage.runTransaction(async tx => {
+      const stored = await tx.get('customer_shares', shareId) as CustomerShareRecord | null;
+      if (!stored) throw new QuoteDomainError(404, 'CUSTOMER_SHARE_NOT_FOUND', 'Customer share not found.');
+      try {
+        assertAuthorizedResource(actor, 'QUOTE', 'READ_DETAIL', quoteResourceContext({
+          salesEmployeeId: stored.salesEmployeeId,
+          salesTeamId: stored.salesTeamId,
+        }));
+      } catch (error) {
+        translateAuthorizationError(error);
+      }
+      const now = new Date().toISOString();
+      const status = effectiveCustomerShareStatus(stored, now);
+      if (status !== 'ACTIVE') {
+        throw new QuoteDomainError(409, 'ACTIVE_CUSTOMER_LINK_REQUIRED', `This customer link is ${status.toLowerCase()}. Create a fresh link before delivery.`);
+      }
+      if (hashCustomerShareToken(token) !== stored.tokenHash) {
+        throw new QuoteDomainError(409, 'ACTIVE_CUSTOMER_LINK_REQUIRED', 'The selected secure link does not match this Quote version.');
+      }
+      const quoteReference = stored.quoteVersions[0];
+      const quote = quoteReference ? await tx.get('quotes', quoteReference.quoteId) as Quote | null : null;
+      const customer = quote?.customerId ? await tx.get('customers', quote.customerId) as UnknownRecord | null : null;
+      const customerPhone = customer?.whatsApp || customer?.phone || quote?.customerPhone;
+      const customerEmail = customer?.email || quote?.customerEmail;
+      const prepared = buildCustomerDeliveryPreparation({
+        shareId,
+        quoteGroupId: stored.quoteGroupId,
+        version: stored.version,
+        channel: channel as CustomerDeliveryChannel,
+        snapshot: stored.snapshot,
+        customerLink: `${publicOrigin}/quote/share/${token}`,
+        customerPhone,
+        customerEmail,
+        preparedAt: now,
+      });
+      const isWhatsapp = channel === 'WHATSAPP';
+      const updated: CustomerShareRecord = {
+        ...stored,
+        ...(isWhatsapp
+          ? { whatsappPreparedCount: (stored.whatsappPreparedCount || 0) + 1, lastWhatsappPreparedAt: now }
+          : { emailPreparedCount: (stored.emailPreparedCount || 0) + 1, lastEmailPreparedAt: now }),
+      };
+      const action = isWhatsapp ? 'WHATSAPP_SHARE_PREPARED' : 'EMAIL_SHARE_PREPARED';
+      const audit = {
+        ...auditEvent(action, shareId, actor, null, {
+          shareId,
+          quoteGroupId: stored.quoteGroupId,
+          version: stored.version,
+          channel,
+          preparedAt: now,
+          recipientAvailable: prepared.recipientAvailable,
+        }, now),
+        entityType: 'CUSTOMER_SHARE',
+        reason: `${channel === 'WHATSAPP' ? 'WhatsApp' : 'Email'} delivery prepared for the immutable CustomerShare snapshot; external sending is not claimed.`,
+      } as AuditLog;
+      tx.update('customer_shares', shareId, updated);
+      tx.set('audit_logs', audit.id, audit);
+      return prepared;
+    });
+  }
+
+  async duplicateOption(sourceQuoteIdValue: unknown, rawInput: unknown, actor: QuoteMutationActor): Promise<Quote> {
+    const sourceQuoteId = requireNonEmptyString(sourceQuoteIdValue, 'quoteId');
+    const input = requireRecord(rawInput);
+    const supported = new Set(['label', 'customerTitle', 'totalAmount', 'discountAmount', 'validUntil']);
+    const unknown = Object.keys(input).find(key => !supported.has(key));
+    if (unknown) throw new QuoteDomainError(400, 'UNSUPPORTED_OPTION_FIELD', `Unsupported option field: ${unknown}.`);
+    const label = requireOptionLabel(input.label, 'label');
+    const customerTitle = input.customerTitle === undefined ? undefined : requireOptionLabel(input.customerTitle, 'customerTitle');
+    const totalAmount = input.totalAmount === undefined ? undefined : finiteNonNegative(input.totalAmount, 'totalAmount');
+    const discountAmount = input.discountAmount === undefined ? undefined : finiteNonNegative(input.discountAmount, 'discountAmount');
+    const validUntil = input.validUntil === undefined ? undefined : optionalIsoDate(input.validUntil, 'validUntil');
+    const now = new Date().toISOString();
+    const quoteId = `quote-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    return this.storage.runTransaction(async tx => {
+      const source = await tx.get('quotes', sourceQuoteId) as Quote | null;
+      if (!source?.optionId || !source.quoteGroupId || !source.customerPackageSnapshot) {
+        throw new QuoteDomainError(409, 'QUOTE_OPTION_REQUIRED', 'Only a frozen Quote option can be duplicated.');
+      }
+      try {
+        assertAuthorizedResource(actor, 'QUOTE', 'UPDATE_COMMERCIAL', quoteResourceContext(source));
+      } catch (error) {
+        translateAuthorizationError(error);
+      }
+      const group = await tx.findByField('quotes', 'quoteGroupId', source.quoteGroupId, 25) as Quote[];
+      if (group.some(option => option.convertedBookingId || option.optionStatus === 'ACCEPTED')) {
+        throw new QuoteDomainError(409, 'QUOTE_GROUP_ALREADY_ACCEPTED', 'This option group already has an accepted Booking.');
+      }
+      const financials = calculateFinancials(
+        totalAmount ?? source.totalAmount,
+        discountAmount ?? source.discountAmount,
+        source.totalSupplierCost,
+      );
+      const threshold = source.approval?.thresholdPercent;
+      const approval = assessLowMarginPolicy(Number(financials.grossMargin || 0), threshold, now);
+      if (approval.required) {
+        throw new QuoteDomainError(409, 'COMMERCIAL_APPROVAL_REQUIRED', 'The duplicated option requires low-margin approval before it can be frozen.');
+      }
+      const clone = JSON.parse(JSON.stringify(source)) as Quote;
+      const option: Quote = {
+        ...clone,
+        ...financials,
+        id: quoteId,
+        optionId: quoteId,
+        optionLabel: label,
+        ...(customerTitle ? { customerTitle } : {}),
+        optionOrder: group.length + 1,
+        isRecommended: false,
+        optionStatus: 'READY',
+        optionSnapshotCreatedAt: now,
+        status: 'DRAFT',
+        approval,
+        createdAt: now,
+        updatedAt: now,
+        createdByEmployeeId: actor.employeeId,
+        updatedByEmployeeId: actor.employeeId,
+        version: 1,
+        versionHistory: [],
+        customerPackageSnapshot: {
+          ...clone.customerPackageSnapshot!,
+          packageReference: quoteId,
+          packageSellingPrice: Number(financials.finalAmount),
+          generatedAt: now,
+        },
+      };
+      delete option.sharedAt;
+      delete option.sharedByEmployeeId;
+      delete option.shareChannel;
+      delete option.convertedBookingId;
+      const audit = auditEvent('QUOTE_OPTION_DUPLICATED', quoteId, actor, null, option as UnknownRecord, now);
+      tx.set('quotes', quoteId, option);
+      tx.set('audit_logs', audit.id, audit);
+      return option;
+    });
+  }
+
+  async updateOption(quoteIdValue: unknown, rawInput: unknown, actor: QuoteMutationActor): Promise<Quote> {
+    const quoteId = requireNonEmptyString(quoteIdValue, 'quoteId');
+    const input = requireRecord(rawInput);
+    const supported = new Set(['label', 'customerTitle', 'totalAmount', 'discountAmount', 'validUntil', 'inclusions', 'exclusions', 'termsAndConditions', 'backupAccommodations']);
+    const unknown = Object.keys(input).find(key => !supported.has(key));
+    if (unknown) throw new QuoteDomainError(400, 'UNSUPPORTED_OPTION_FIELD', `Unsupported option field: ${unknown}.`);
+    if (!Object.keys(input).length) throw new QuoteDomainError(400, 'EMPTY_OPTION_UPDATE', 'No option fields were supplied.');
+    return this.storage.runTransaction(async tx => {
+      const stored = await tx.get('quotes', quoteId) as Quote | null;
+      if (!stored?.optionId || !stored.customerPackageSnapshot) throw new QuoteDomainError(409, 'QUOTE_OPTION_REQUIRED', 'Quote option not found.');
+      try {
+        assertAuthorizedResource(actor, 'QUOTE', 'UPDATE_COMMERCIAL', quoteResourceContext(stored));
+      } catch (error) {
+        translateAuthorizationError(error);
+      }
+      if (['ACCEPTED', 'SUPERSEDED'].includes(stored.optionStatus || '')) {
+        throw new QuoteDomainError(409, 'OPTION_IMMUTABLE', 'Accepted or superseded options cannot be edited.');
+      }
+      const now = new Date().toISOString();
+      const totalAmount = input.totalAmount === undefined ? stored.totalAmount : finiteNonNegative(input.totalAmount, 'totalAmount');
+      const discountAmount = input.discountAmount === undefined ? stored.discountAmount : finiteNonNegative(input.discountAmount, 'discountAmount');
+      const financials = calculateFinancials(totalAmount, discountAmount, stored.totalSupplierCost);
+      const approval = assessLowMarginPolicy(Number(financials.grossMargin || 0), stored.approval?.thresholdPercent, now);
+      const label = input.label === undefined ? stored.optionLabel : requireOptionLabel(input.label, 'label');
+      const customerTitle = input.customerTitle === undefined ? stored.customerTitle : requireOptionLabel(input.customerTitle, 'customerTitle');
+      const inclusions = input.inclusions === undefined ? stored.inclusions : sanitizeStringArray(input.inclusions, 'inclusions');
+      const exclusions = input.exclusions === undefined ? stored.exclusions : sanitizeStringArray(input.exclusions, 'exclusions');
+      const termsAndConditions = input.termsAndConditions === undefined ? stored.termsAndConditions : optionalString(input.termsAndConditions, 'termsAndConditions');
+      const validUntil = input.validUntil === undefined ? stored.validUntil : optionalIsoDate(input.validUntil, 'validUntil')!;
+      const backupSelections = input.backupAccommodations === undefined
+        ? undefined
+        : sanitizeItems(input.backupAccommodations, 'backupAccommodations', BACKUP_ACCOMMODATION_FIELDS)!;
+      const backupAccommodations = backupSelections === undefined
+        ? stored.backupAccommodations
+        : await this.resolveBackupAccommodations(tx, backupSelections, (stored.hotels || []) as UnknownRecord[]);
+      const updated: Quote = {
+        ...stored,
+        ...financials,
+        optionLabel: label,
+        ...(customerTitle ? { customerTitle } : {}),
+        inclusions,
+        exclusions,
+        termsAndConditions,
+        backupAccommodations: backupAccommodations as Quote['backupAccommodations'],
+        validUntil,
+        approval,
+        optionStatus: approval.required ? 'DRAFT' : (stored.sharedAt ? 'SHARED' : 'READY'),
+        version: (stored.version || 1) + 1,
+        versionHistory: [...(stored.versionHistory || []), versionSnapshot(stored, actor)],
+        updatedAt: now,
+        updatedByEmployeeId: actor.employeeId,
+        customerPackageSnapshot: {
+          ...stored.customerPackageSnapshot,
+          packageSellingPrice: Number(financials.finalAmount),
+          inclusions: inclusions || [],
+          exclusions: exclusions || [],
+          ...(termsAndConditions ? { termsAndConditions } : {}),
+          generatedAt: now,
+        },
+      };
+      delete updated.sharedAt;
+      delete updated.sharedByEmployeeId;
+      delete updated.shareChannel;
+      const audit = auditEvent('QUOTE_OPTION_UPDATED', quoteId, actor, stored as UnknownRecord, updated as UnknownRecord, now);
+      tx.update('quotes', quoteId, updated);
+      tx.set('audit_logs', audit.id, audit);
+      return updated;
+    });
+  }
+
+  async refreshOptionFromTrip(quoteIdValue: unknown, actor: QuoteMutationActor): Promise<Quote> {
+    const quoteId = requireNonEmptyString(quoteIdValue, 'quoteId');
+    return this.storage.runTransaction(async tx => {
+      const stored = await tx.get('quotes', quoteId) as Quote | null;
+      if (!stored?.optionId || !stored.tripId) throw new QuoteDomainError(409, 'QUOTE_OPTION_REQUIRED', 'A Trip-linked Quote option is required.');
+      try {
+        assertAuthorizedResource(actor, 'QUOTE', 'UPDATE_COMMERCIAL', quoteResourceContext(stored));
+      } catch (error) {
+        translateAuthorizationError(error);
+      }
+      if (['ACCEPTED', 'SUPERSEDED'].includes(stored.optionStatus || '')) throw new QuoteDomainError(409, 'OPTION_IMMUTABLE', 'Accepted or superseded options cannot be refreshed.');
+      const resolved = await this.resolveSupplierCostAndLinks(tx, stored as unknown as UnknownRecord, actor);
+      if (resolved.ownerEmployeeId !== stored.salesEmployeeId || resolved.salesTeamId !== stored.salesTeamId) {
+        throw new QuoteDomainError(409, 'QUOTE_OWNERSHIP_TRANSFER_NOT_ALLOWED', 'Refreshing cannot change option ownership or team.');
+      }
+      const financials = calculateFinancials(
+        resolved.sellingPrice ?? stored.totalAmount,
+        resolved.sellingPrice !== undefined ? 0 : stored.discountAmount,
+        resolved.cost,
+      );
+      const now = new Date().toISOString();
+      const refreshed: Quote = {
+        ...stored,
+        ...(resolved.quoteFields || {}),
+        ...financials,
+        ...(resolved.source ? { supplierCostSource: resolved.source } : {}),
+        optionStatus: 'READY',
+        optionSnapshotCreatedAt: now,
+        version: (stored.version || 1) + 1,
+        versionHistory: [...(stored.versionHistory || []), versionSnapshot(stored, actor)],
+        updatedAt: now,
+        updatedByEmployeeId: actor.employeeId,
+      };
+      delete refreshed.sharedAt;
+      delete refreshed.sharedByEmployeeId;
+      delete refreshed.shareChannel;
+      delete refreshed.customerPackageSnapshot;
+      if (refreshed.approval?.required === true && !isLowMarginApprovalCurrent(refreshed.approval, refreshed)) {
+        throw new QuoteDomainError(409, 'COMMERCIAL_APPROVAL_REQUIRED', 'The refreshed option requires commercial approval before it can be frozen.');
+      }
+      refreshed.customerPackageSnapshot = await buildStoredCustomerPackage(tx, refreshed, now, true);
+      const audit = auditEvent('QUOTE_OPTION_UPDATED', quoteId, actor, stored as UnknownRecord, refreshed as UnknownRecord, now);
+      tx.update('quotes', quoteId, refreshed);
+      tx.set('audit_logs', audit.id, audit);
+      return refreshed;
+    });
+  }
+
+  async recommendOption(quoteIdValue: unknown, actor: QuoteMutationActor): Promise<Quote> {
+    const quoteId = requireNonEmptyString(quoteIdValue, 'quoteId');
+    const now = new Date().toISOString();
+    return this.storage.runTransaction(async tx => {
+      const selected = await tx.get('quotes', quoteId) as Quote | null;
+      if (!selected?.optionId || !selected.quoteGroupId) throw new QuoteDomainError(409, 'QUOTE_OPTION_REQUIRED', 'Quote option not found.');
+      try {
+        assertAuthorizedResource(actor, 'QUOTE', 'UPDATE_COMMERCIAL', quoteResourceContext(selected));
+      } catch (error) {
+        translateAuthorizationError(error);
+      }
+      const group = await tx.findByField('quotes', 'quoteGroupId', selected.quoteGroupId, 25) as Quote[];
+      for (const option of group) {
+        tx.update('quotes', option.id, { isRecommended: option.id === quoteId, updatedAt: now, updatedByEmployeeId: actor.employeeId });
+      }
+      const updated = { ...selected, isRecommended: true, updatedAt: now, updatedByEmployeeId: actor.employeeId };
+      const audit = auditEvent('QUOTE_OPTION_RECOMMENDED', quoteId, actor, selected as UnknownRecord, updated as UnknownRecord, now);
+      tx.set('audit_logs', audit.id, audit);
+      return updated;
+    });
+  }
+
+  async reorderOptions(groupIdValue: unknown, rawInput: unknown, actor: QuoteMutationActor): Promise<Quote[]> {
+    const groupId = requireNonEmptyString(groupIdValue, 'quoteGroupId');
+    const input = requireRecord(rawInput);
+    if (!Array.isArray(input.optionIds) || input.optionIds.some(value => typeof value !== 'string')) {
+      throw new QuoteDomainError(400, 'INVALID_OPTION_ORDER', 'optionIds must be an array of option IDs.');
+    }
+    return this.storage.runTransaction(async tx => {
+      const group = await tx.findByField('quotes', 'quoteGroupId', groupId, 25) as Quote[];
+      if (!group.length) throw new QuoteDomainError(404, 'QUOTE_GROUP_NOT_FOUND', 'Quote option group not found.');
+      try {
+        assertAuthorizedResource(actor, 'QUOTE', 'UPDATE_COMMERCIAL', quoteResourceContext(group[0]));
+      } catch (error) {
+        translateAuthorizationError(error);
+      }
+      const expected = new Set(group.map(option => option.optionId));
+      if (input.optionIds.length !== group.length || new Set(input.optionIds).size !== group.length || input.optionIds.some(id => !expected.has(id))) {
+        throw new QuoteDomainError(400, 'INVALID_OPTION_ORDER', 'optionIds must contain every option in this group exactly once.');
+      }
+      const now = new Date().toISOString();
+      const updated = group.map(option => ({ ...option, optionOrder: input.optionIds.indexOf(option.optionId) + 1, updatedAt: now, updatedByEmployeeId: actor.employeeId }));
+      for (const option of updated) tx.update('quotes', option.id, option);
+      const audit = auditEvent('QUOTE_OPTIONS_REORDERED', groupId, actor, null, { optionIds: input.optionIds }, now);
+      tx.set('audit_logs', audit.id, audit);
+      return updated.sort((left, right) => (left.optionOrder || 0) - (right.optionOrder || 0));
+    });
+  }
+
   async shareQuote(
     quoteIdValue: unknown,
     rawInput: unknown,
@@ -503,10 +1282,13 @@ export class QuoteService {
       if (!['DRAFT', 'PENDING_APPROVAL', 'SENT'].includes(stored.status)) {
         throw new QuoteDomainError(409, 'QUOTE_SHARE_WORKFLOW_DENIED', `A ${stored.status} Quote cannot enter the share workflow.`);
       }
+      if (stored.optionId && ['ACCEPTED', 'SUPERSEDED', 'DECLINED'].includes(stored.optionStatus || '')) {
+        throw new QuoteDomainError(409, 'QUOTE_SHARE_WORKFLOW_DENIED', `A ${stored.optionStatus} option cannot be shared.`);
+      }
       if (stored.approval?.required === true && !isLowMarginApprovalCurrent(stored.approval, stored)) {
         throw new QuoteDomainError(409, 'COMMERCIAL_APPROVAL_REQUIRED', 'This low-margin Quote requires commercial approval before sharing.');
       }
-      if (stored.tripId) {
+      if (stored.tripId && !stored.optionId) {
         const trip = await tx.get('trips', stored.tripId) as UnknownRecord | null;
         if (!trip) throw new QuoteDomainError(404, 'TRIP_NOT_FOUND', 'The Quote Trip no longer exists.');
         assertTripCostingFresh(trip, 'share this Quote');
@@ -520,20 +1302,21 @@ export class QuoteService {
         }
       }
       const now = new Date().toISOString();
-      const customerPackage = await buildStoredCustomerPackage(tx, stored, now);
+      const customerPackage = await buildStoredCustomerPackage(tx, stored, now, true);
       const updated: Quote = {
         ...stored,
         status: 'SENT',
         sharedAt: now,
         sharedByEmployeeId: actor.employeeId,
         shareChannel: channel,
-        customerPackageSnapshot: { ...customerPackage, generatedAt: now },
+        customerPackageSnapshot: stored.optionId ? customerPackage : { ...customerPackage, generatedAt: now },
+        ...(stored.optionId ? { optionStatus: 'SHARED' as const } : {}),
         version: (stored.version || 1) + 1,
         versionHistory: [...(stored.versionHistory || []), versionSnapshot(stored, actor)],
         updatedAt: now,
         updatedByEmployeeId: actor.employeeId,
       };
-      const audit = auditEvent('QUOTE_SHARED', quoteId, actor, stored as UnknownRecord, updated as UnknownRecord, now);
+      const audit = auditEvent(stored.optionId ? 'QUOTE_OPTION_SHARED_STATE_CHANGED' : 'QUOTE_SHARED', quoteId, actor, stored as UnknownRecord, updated as UnknownRecord, now);
       tx.update('quotes', quoteId, updated);
       tx.set('audit_logs', audit.id, audit);
       return { quote: updated, customerPackage: updated.customerPackageSnapshot! };
@@ -558,11 +1341,12 @@ export class QuoteService {
     const now = new Date().toISOString();
 
     return this.storage.runTransaction(async tx => {
+      let tripQuotes: Quote[] = [];
       if (input.tripId) {
-        const existingQuotes = await tx.findByField('quotes', 'tripId', input.tripId, 25) as Quote[];
-        const existing = existingQuotes
+        tripQuotes = await tx.findByField('quotes', 'tripId', input.tripId, 25) as Quote[];
+        const existing = tripQuotes
           .sort((left, right) => String(right.updatedAt || right.createdAt || '').localeCompare(String(left.updatedAt || left.createdAt || '')))[0];
-        if (existing) {
+        if (existing && !input.optionLabel) {
           try {
             assertAuthorizedResource(actor, 'QUOTE', 'UPDATE_COMMERCIAL', quoteResourceContext(existing));
           } catch (error) {
@@ -600,13 +1384,30 @@ export class QuoteService {
         ...(actor.isDemo ? { isDemo: true } : {}),
       } as Quote;
 
+      if (input.optionLabel) {
+        const existingOption = tripQuotes.find(candidate => candidate.optionId && candidate.quoteGroupId);
+        const optionOrder = tripQuotes.filter(candidate => candidate.optionId).length + 1;
+        quote.optionId = quoteId;
+        quote.quoteGroupId = existingOption?.quoteGroupId || quoteId;
+        quote.optionLabel = requireOptionLabel(input.optionLabel);
+        if (input.customerTitle) quote.customerTitle = requireOptionLabel(input.customerTitle, 'customerTitle');
+        quote.optionOrder = optionOrder;
+        quote.isRecommended = optionOrder === 1;
+        quote.optionStatus = 'READY';
+        quote.optionSnapshotCreatedAt = now;
+        if (quote.approval?.required === true && !isLowMarginApprovalCurrent(quote.approval, quote)) {
+          throw new QuoteDomainError(409, 'COMMERCIAL_APPROVAL_REQUIRED', 'This option requires commercial approval before it can be frozen.');
+        }
+        quote.customerPackageSnapshot = await buildStoredCustomerPackage(tx, quote, now, true);
+      }
+
       try {
         assertAuthorizedResource(actor, 'QUOTE', 'UPDATE_COMMERCIAL', quoteResourceContext(quote));
       } catch (error) {
         translateAuthorizationError(error);
       }
 
-      const audit = auditEvent('QUOTE_CREATED', quoteId, actor, null, quote as UnknownRecord, now);
+      const audit = auditEvent(input.optionLabel ? 'QUOTE_OPTION_CREATED' : 'QUOTE_CREATED', quoteId, actor, null, quote as UnknownRecord, now);
       tx.set('quotes', quoteId, quote);
       tx.set('audit_logs', audit.id, audit);
       return quote;

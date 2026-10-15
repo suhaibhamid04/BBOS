@@ -10,6 +10,7 @@ import { LeadStageControl } from './LeadStageControl';
 import { CreateLeadModal } from './CreateLeadModal';
 import { LeadAssignmentPanel } from './LeadAssignmentPanel';
 import { LeadInteractionPanel } from '../sales/LeadInteractionPanel';
+import { LeadConversationTab } from './LeadConversationTab';
 import type { Lead } from '../../types';
 
 interface Props {
@@ -20,7 +21,7 @@ interface Props {
 export const LeadDetailView: React.FC<Props> = ({ leadId, onNavigate }) => {
   const { currentUser } = useAuth();
   const { leads, customers, trips, quotes, bookings, createOrResumeLeadTrip, updateLead, loadLead, runSalesAiAnalysis } = useData();
-  const [activeTab, setActiveTab] = useState<'SUMMARY' | 'AI_SALES_HEAD' | 'QUOTES'>('SUMMARY');
+  const [activeTab, setActiveTab] = useState<'SUMMARY' | 'CONVERSATION' | 'AI_SALES_HEAD' | 'QUOTES'>('SUMMARY');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiMenuOpen, setAiMenuOpen] = useState(false);
   const [isBuildingPackage, setIsBuildingPackage] = useState(false);
@@ -187,7 +188,7 @@ export const LeadDetailView: React.FC<Props> = ({ leadId, onNavigate }) => {
       {/* Tabs */}
       <div className="bg-white border-b border-slate-200 px-6">
         <div className="flex space-x-6 overflow-x-auto custom-scrollbar">
-          {(['SUMMARY', 'AI_SALES_HEAD', 'QUOTES'] as const).map(tab => (
+          {(['SUMMARY', 'CONVERSATION', 'AI_SALES_HEAD', 'QUOTES'] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab as any)}
@@ -372,6 +373,8 @@ export const LeadDetailView: React.FC<Props> = ({ leadId, onNavigate }) => {
           )}
 
           {activeTab === 'AI_SALES_HEAD' && <AiSalesHeadTab leadId={leadId} />}
+
+          {activeTab === 'CONVERSATION' && <LeadConversationTab leadId={leadId} />}
 
           {activeTab === 'QUOTES' && (
             <div className="space-y-4">

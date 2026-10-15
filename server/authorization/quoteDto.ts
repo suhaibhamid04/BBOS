@@ -29,6 +29,8 @@ const QUOTE_ROOT_FIELDS = [
   'convertedBookingId', 'requiresLowMarginApproval',
   'supplierCostBreakdown', 'pricingMode', 'pricingInput', 'approval',
   'sharedAt', 'sharedByEmployeeId', 'shareChannel',
+  'quoteGroupId', 'optionId', 'optionLabel', 'customerTitle', 'optionOrder',
+  'isRecommended', 'optionStatus', 'optionSnapshotCreatedAt',
 ] as const;
 
 const HOTEL_FIELDS = [
@@ -121,6 +123,7 @@ const BOOKING_FIELDS = [
   'customerEmail', 'leadId', 'quoteId', 'quoteVersion', 'status', 'paymentStatus',
   'totalSellingPrice', 'totalAmount', 'amountReceived', 'amountPending',
   'travelStartDate', 'travelEndDate',
+  'quoteGroupId', 'quoteOptionId',
   'assignedSalesEmployeeId', 'salesTeamId', 'schemaVersion', 'createdAt', 'updatedAt',
   'isDemo',
 ] as const;

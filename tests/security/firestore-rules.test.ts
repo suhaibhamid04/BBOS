@@ -142,7 +142,12 @@ describe('3. Firestore Security Rules Specification Verification', () => {
   it('Documents security invariants enforced by firestore.rules', async () => {
     const rules = await Bun.file('firestore.rules').text();
     const quoteRules = rules.match(/match \/quotes\/\{quoteId\} \{([\s\S]*?)\n    \}/)?.[1] || '';
+    const customerShareRules = rules.match(/match \/customer_shares\/\{shareId\} \{([\s\S]*?)\n    \}/)?.[1] || '';
     const paymentRules = rules.match(/match \/payments\/\{paymentId\} \{([\s\S]*?)\n    \}/)?.[1] || '';
+    const conversationEntryRules = rules.match(/match \/conversation_entries\/\{entryId\} \{([\s\S]*?)\n    \}/)?.[1] || '';
+    const unmatchedWhatsAppRules = rules.match(/match \/unmatched_whatsapp\/\{messageId\} \{([\s\S]*?)\n    \}/)?.[1] || '';
+    const whatsAppWebhookEventRules = rules.match(/match \/whatsapp_webhook_events\/\{eventId\} \{([\s\S]*?)\n    \}/)?.[1] || '';
+    const whatsAppPendingStatusRules = rules.match(/match \/whatsapp_pending_statuses\/\{statusId\} \{([\s\S]*?)\n    \}/)?.[1] || '';
     const auditRules = rules.match(/match \/audit_logs\/\{logId\} \{([\s\S]*?)\n    \}/)?.[1] || '';
     const securityInvariants = {
       unauthenticatedAccessDenied: true,
@@ -153,11 +158,25 @@ describe('3. Firestore Security Rules Specification Verification', () => {
       auditLogsReadableOnlyByAdminAndAccounts: true,
       catchAllRuleDeniesUnlistedPaths: true,
       quotesAreServerOnly: /allow read, create, update, delete: if false;/.test(quoteRules),
+      customerSharesAreServerOnly: /allow read, create, update, delete: if false;/.test(customerShareRules),
       paymentsAreServerOnly: /allow read, create, update, delete: if false;/.test(paymentRules),
+      conversationEntriesAreServerOnly: /allow read, create, update, delete: if false;/.test(conversationEntryRules),
+      whatsappProviderStateIsServerOnly:
+        /allow read, create, update, delete: if false;/.test(unmatchedWhatsAppRules) &&
+        /allow read, create, update, delete: if false;/.test(whatsAppWebhookEventRules) &&
+        /allow read, create, update, delete: if false;/.test(whatsAppPendingStatusRules),
       quoteAuditEventsAreServerOnly:
         auditRules.includes('QUOTE_CREATED') &&
         auditRules.includes('QUOTE_UPDATED') &&
         auditRules.includes('QUOTE_CONVERTED_TO_BOOKING'),
+      customerShareAuditsAreServerOnly: auditRules.includes("entityType != 'CUSTOMER_SHARE'"),
+      conversationAuditsAreServerOnly:
+        auditRules.includes("entityType != 'CONVERSATION_ENTRY'") &&
+        auditRules.includes('INTERNAL_NOTE_ADDED') &&
+        auditRules.includes('CUSTOMER_CONTACT_LOGGED') &&
+        auditRules.includes('WHATSAPP_MESSAGE_SEND_REQUESTED') &&
+        auditRules.includes('WHATSAPP_MESSAGE_RETRY_REQUESTED') &&
+        auditRules.includes('UNMATCHED_WHATSAPP_LINKED'),
       paymentAuditEventsAreServerOnly:
         auditRules.includes("entityType != 'PAYMENT'") &&
         auditRules.includes('PAYMENT_RECORDED') &&
@@ -174,8 +193,13 @@ describe('3. Firestore Security Rules Specification Verification', () => {
     expect(securityInvariants.messagesAppendOnly).toBe(true);
     expect(securityInvariants.employeePermissionsModifiableOnlyByAdminOrFounder).toBe(true);
     expect(securityInvariants.quotesAreServerOnly).toBe(true);
+    expect(securityInvariants.customerSharesAreServerOnly).toBe(true);
     expect(securityInvariants.paymentsAreServerOnly).toBe(true);
+    expect(securityInvariants.conversationEntriesAreServerOnly).toBe(true);
+    expect(securityInvariants.whatsappProviderStateIsServerOnly).toBe(true);
     expect(securityInvariants.quoteAuditEventsAreServerOnly).toBe(true);
+    expect(securityInvariants.customerShareAuditsAreServerOnly).toBe(true);
+    expect(securityInvariants.conversationAuditsAreServerOnly).toBe(true);
     expect(securityInvariants.paymentAuditEventsAreServerOnly).toBe(true);
     expect(securityInvariants.operationsAssignmentAuditsAreServerOnly).toBe(true);
   });

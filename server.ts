@@ -9,7 +9,14 @@ async function startServer() {
   const PORT = Number(process.env.PORT || 3000);
 
   // Body parser for JSON
-  app.use(express.json({ limit: '10mb' }));
+  app.use(express.json({
+    limit: '10mb',
+    verify: (req, _res, buffer) => {
+      // Meta signs the exact request bytes. Keeping the raw buffer here avoids
+      // re-serializing JSON and is never exposed to application clients.
+      (req as express.Request & { rawBody?: Buffer }).rawBody = Buffer.from(buffer);
+    },
+  }));
 
   // Mount API routes FIRST
   app.use('/api', apiRouter);

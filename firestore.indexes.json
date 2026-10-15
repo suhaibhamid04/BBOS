@@ -1,6 +1,24 @@
 {
   "indexes": [
     {
+      "collectionGroup": "conversation_entries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "leadId", "order": "ASCENDING" },
+        { "fieldPath": "occurredAt", "order": "DESCENDING" },
+        { "fieldPath": "entryId", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "lead_events",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "leadId", "order": "ASCENDING" },
+        { "fieldPath": "timestamp", "order": "DESCENDING" },
+        { "fieldPath": "id", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "leads",
       "queryScope": "COLLECTION",
       "fields": [

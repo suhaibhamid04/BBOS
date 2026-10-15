@@ -17,8 +17,15 @@ import { employeesRouter } from './employees.js';
 import { supplierPayablesRouter } from './supplierPayables.js';
 import { operationsRouter } from './operations.js';
 import { approvalsRouter } from './approvals.js';
+import { customerSharesPublicRouter } from './customerSharesPublic.js';
+import { metaWhatsAppWebhookRouter } from './metaWhatsAppWebhook.js';
 
 export const apiRouter = Router();
+
+// Public customer access is token-authorized and intentionally mounted before
+// employee authentication. It exposes only immutable customer-safe snapshots.
+apiRouter.use('/public/quote-shares', customerSharesPublicRouter);
+apiRouter.use('/public/meta-whatsapp', metaWhatsAppWebhookRouter);
 
 // Apply global authentication resolution to all API routes
 apiRouter.use(authenticate);

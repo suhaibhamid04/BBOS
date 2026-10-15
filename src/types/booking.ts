@@ -59,6 +59,10 @@ export interface Booking {
   leadId?: string;
   quoteId?: string;
   quoteVersion?: number;
+  quoteGroupId?: string;
+  quoteOptionId?: string;
+  /** Frozen customer-safe artifact accepted by the customer. */
+  customerPackageSnapshot?: import('./customerPackage').CustomerPackageDocument;
 
   // Commercial state (Server-authoritative, client-immutable)
   status: BookingStatus;

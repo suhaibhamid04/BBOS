@@ -18,6 +18,11 @@ import { calculateTransportCost } from '../../src/services/transportEngine.js';
 import { calculateActivityCost } from '../../src/services/activityEngine.js';
 import type { TransportServiceDay } from '../../src/types/transport.js';
 import { APP_CONFIG } from '../../src/config.js';
+import {
+  composeDetailedCustomerItinerary,
+  itineraryContentFingerprint,
+  itineraryItemAffectsCustomerContent,
+} from '../../src/services/itinerary/customerItinerary.js';
 
 type UnknownRecord = Record<string, any>;
 
@@ -68,7 +73,7 @@ const ITINERARY_ITEM_FIELDS = new Set([
 const ITINERARY_SERVER_CONTROLLED_FIELDS = new Set([
   'id', 'tripId', 'dayId', 'dayNumber', 'items', 'status', 'owner', 'team',
   'assignedSalesEmployeeId', 'salesTeamId', 'supplierCost', 'totalSupplierCost',
-  'grossProfit', 'grossMargin', 'costingStatus', 'createdAt', 'updatedAt',
+  'grossProfit', 'grossMargin', 'costingStatus', 'customerContent', 'createdAt', 'updatedAt',
 ]);
 const NESTED_PROTECTED_ITINERARY_FIELDS = new Set([
   'supplierCost', 'totalSupplierCost', 'grossProfit', 'grossMargin',
@@ -228,7 +233,7 @@ const TRIP_COSTING_FIELDS = new Set([
   'customerId', 'leadId', 'title', 'destination', 'startDate', 'endDate',
   'travelerCount', 'adults', 'children', 'childAges', 'tripType', 'currency',
 ]);
-const ITINERARY_DAY_COMMERCIAL_FIELDS = ['date', 'title', 'description', 'location'] as const;
+const ITINERARY_DAY_COMMERCIAL_FIELDS = ['date', 'location'] as const;
 
 function canonicalValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalValue);
@@ -311,6 +316,38 @@ function itineraryItemCommercialValue(item: ItineraryItem | UnknownRecord): Unkn
 
 function itineraryItemCostingChanged(before: ItineraryItem, after: ItineraryItem): boolean {
   return !valuesEqual(itineraryItemCommercialValue(before), itineraryItemCommercialValue(after));
+}
+
+function markCustomerContentReviewNeeded(
+  day: ItineraryDay,
+  actor: TripMutationActor,
+  now: string,
+  sourceFingerprint = day.customerContent?.sourceFingerprint || itineraryContentFingerprint(day),
+): ItineraryDay {
+  return {
+    ...day,
+    customerContent: {
+      style: 'DETAILED',
+      status: 'REVIEW_NEEDED',
+      sourceFingerprint,
+      updatedAt: now,
+      updatedByEmployeeId: actor.employeeId,
+      ...(day.customerContent?.reviewedAt ? { reviewedAt: day.customerContent.reviewedAt } : {}),
+      ...(day.customerContent?.reviewedByEmployeeId ? { reviewedByEmployeeId: day.customerContent.reviewedByEmployeeId } : {}),
+    },
+  };
+}
+
+function currentCustomerContent(day: ItineraryDay, actor: TripMutationActor, now: string): ItineraryDay['customerContent'] {
+  return {
+    style: 'DETAILED',
+    status: 'CURRENT',
+    sourceFingerprint: itineraryContentFingerprint(day),
+    updatedAt: now,
+    updatedByEmployeeId: actor.employeeId,
+    reviewedAt: now,
+    reviewedByEmployeeId: actor.employeeId,
+  };
 }
 
 function normalizeTransportServiceDays(
@@ -1193,7 +1230,7 @@ export class TripService {
       const existingDays = await tx.findByField('itinerary_days', 'tripId', tripId, 500) as ItineraryDay[];
       const dayNumber = existingDays.reduce((highest, day) => Math.max(highest, Number(day.dayNumber) || 0), 0) + 1;
       const now = new Date().toISOString();
-      const day: ItineraryDay = {
+      let day: ItineraryDay = {
         id: `day-${tripId}-${dayNumber}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         tripId,
         dayNumber,
@@ -1204,6 +1241,15 @@ export class TripService {
         ...(typeof input.notes === 'string' ? { notes: input.notes } : {}),
         items: [],
       };
+      if (typeof input.title !== 'string' || typeof input.description !== 'string') {
+        const composed = composeDetailedCustomerItinerary(day);
+        day = {
+          ...day,
+          title: typeof input.title === 'string' ? input.title : composed.title,
+          description: typeof input.description === 'string' ? input.description : composed.description,
+        };
+      }
+      day.customerContent = currentCustomerContent(day, actor, now);
       const updatedTrip = this.markCostingPending(tx, trip, actor, now, 'Itinerary day added.');
       tx.set('itinerary_days', day.id, day);
       tx.update('trips', tripId, updatedTrip);
@@ -1224,8 +1270,13 @@ export class TripService {
       if (!storedDay) throw new TripDomainError(404, 'ITINERARY_DAY_NOT_FOUND', 'Itinerary day not found.');
       const trip = await this.loadAuthorizedCommercialTrip(tx, storedDay.tripId, actor);
       const now = new Date().toISOString();
-      const day = { ...storedDay, ...input, id: storedDay.id, tripId: storedDay.tripId, dayNumber: storedDay.dayNumber, items: storedDay.items || [] } as ItineraryDay;
+      let day = { ...storedDay, ...input, id: storedDay.id, tripId: storedDay.tripId, dayNumber: storedDay.dayNumber, items: storedDay.items || [] } as ItineraryDay;
       const invalidatesCosting = itineraryDayCostingChanged(storedDay, day);
+      const changesCustomerFacts = ['date', 'location'].some(field =>
+        input[field] !== undefined && !valuesEqual((storedDay as UnknownRecord)[field], (day as UnknownRecord)[field]),
+      );
+      if (changesCustomerFacts) day = markCustomerContentReviewNeeded(day, actor, now);
+      else if (!day.customerContent) day.customerContent = currentCustomerContent(day, actor, now);
       const updatedTrip = invalidatesCosting
         ? this.markCostingPending(tx, trip, actor, now, 'Commercial itinerary day details changed.')
         : trip;
@@ -1233,7 +1284,84 @@ export class TripService {
       if (invalidatesCosting) tx.update('trips', trip.id, updatedTrip);
       const audit = auditEvent('ITINERARY_DAY_UPDATED', 'ITINERARY_DAY', dayId, actor, storedDay as UnknownRecord, day as UnknownRecord, now);
       tx.set('audit_logs', audit.id, audit);
+      if (input.title !== undefined && input.title !== storedDay.title) {
+        const titleAudit = auditEvent('ITINERARY_DAY_TITLE_CHANGED', 'ITINERARY_DAY', dayId, actor, { title: storedDay.title }, { title: day.title }, now);
+        tx.set('audit_logs', titleAudit.id, titleAudit);
+      }
+      if (input.description !== undefined && input.description !== storedDay.description) {
+        const descriptionAudit = auditEvent('ITINERARY_DAY_DESCRIPTION_CHANGED', 'ITINERARY_DAY', dayId, actor, { description: storedDay.description }, { description: day.description }, now);
+        tx.set('audit_logs', descriptionAudit.id, descriptionAudit);
+      }
       return { day, trip: updatedTrip as Trip };
+    });
+  }
+
+  async composeItineraryDayCustomerContent(
+    dayId: string,
+    rawInput: unknown,
+    actor: TripMutationActor,
+  ): Promise<{ day: ItineraryDay; trip: Trip }> {
+    nonEmptyString(dayId, 'dayId');
+    const input = rawInput === undefined ? {} : rawInput;
+    if (!isRecord(input) || Object.keys(input).some(key => key !== 'confirmReplace') ||
+      (input.confirmReplace !== undefined && typeof input.confirmReplace !== 'boolean')) {
+      throw new TripDomainError(400, 'INVALID_ITINERARY_COMPOSE_REQUEST', 'Only confirmReplace may be supplied for itinerary composition.');
+    }
+    return this.storage.runTransaction(async tx => {
+      const storedDay = await tx.get('itinerary_days', dayId) as ItineraryDay | null;
+      if (!storedDay) throw new TripDomainError(404, 'ITINERARY_DAY_NOT_FOUND', 'Itinerary day not found.');
+      const trip = await this.loadAuthorizedCommercialTrip(tx, storedDay.tripId, actor);
+      const composed = composeDetailedCustomerItinerary(storedDay);
+      const replacesCopy = Boolean(String(storedDay.title || '').trim() || String(storedDay.description || '').trim()) &&
+        (storedDay.title !== composed.title || storedDay.description !== composed.description);
+      if (replacesCopy && input.confirmReplace !== true) {
+        throw new TripDomainError(
+          409,
+          'ITINERARY_CONTENT_REPLACE_CONFIRMATION_REQUIRED',
+          'Rebuilding will replace the current customer title and description. Confirm the replacement to continue.',
+        );
+      }
+      const now = new Date().toISOString();
+      const day: ItineraryDay = {
+        ...storedDay,
+        title: composed.title,
+        description: composed.description,
+        customerContent: {
+          style: 'DETAILED', status: 'CURRENT', sourceFingerprint: composed.sourceFingerprint,
+          updatedAt: now, updatedByEmployeeId: actor.employeeId,
+          reviewedAt: now, reviewedByEmployeeId: actor.employeeId,
+        },
+      };
+      tx.update('itinerary_days', dayId, day);
+      const audit = auditEvent('ITINERARY_DAY_CONTENT_COMPOSED', 'ITINERARY_DAY', dayId, actor, storedDay as UnknownRecord, day as UnknownRecord, now);
+      tx.set('audit_logs', audit.id, audit);
+      if (storedDay.title !== day.title) {
+        const titleAudit = auditEvent('ITINERARY_DAY_TITLE_CHANGED', 'ITINERARY_DAY', dayId, actor, { title: storedDay.title }, { title: day.title }, now);
+        tx.set('audit_logs', titleAudit.id, titleAudit);
+      }
+      if (storedDay.description !== day.description) {
+        const descriptionAudit = auditEvent('ITINERARY_DAY_DESCRIPTION_CHANGED', 'ITINERARY_DAY', dayId, actor, { description: storedDay.description }, { description: day.description }, now);
+        tx.set('audit_logs', descriptionAudit.id, descriptionAudit);
+      }
+      return { day, trip: trip as Trip };
+    });
+  }
+
+  async reviewItineraryDayCustomerContent(dayId: string, actor: TripMutationActor): Promise<{ day: ItineraryDay; trip: Trip }> {
+    nonEmptyString(dayId, 'dayId');
+    return this.storage.runTransaction(async tx => {
+      const storedDay = await tx.get('itinerary_days', dayId) as ItineraryDay | null;
+      if (!storedDay) throw new TripDomainError(404, 'ITINERARY_DAY_NOT_FOUND', 'Itinerary day not found.');
+      const trip = await this.loadAuthorizedCommercialTrip(tx, storedDay.tripId, actor);
+      if (!String(storedDay.title || '').trim() || !String(storedDay.description || '').trim()) {
+        throw new TripDomainError(409, 'ITINERARY_CONTENT_INCOMPLETE', 'Add a customer title and detailed description before marking this day reviewed.');
+      }
+      const now = new Date().toISOString();
+      const day: ItineraryDay = { ...storedDay, customerContent: currentCustomerContent(storedDay, actor, now) };
+      tx.update('itinerary_days', dayId, day);
+      const audit = auditEvent('ITINERARY_DAY_REVIEWED', 'ITINERARY_DAY', dayId, actor, storedDay as UnknownRecord, day as UnknownRecord, now);
+      tx.set('audit_logs', audit.id, audit);
+      return { day, trip: trip as Trip };
     });
   }
 
@@ -1268,7 +1396,9 @@ export class TripService {
         dayId,
         tripId: storedDay.tripId,
       }) as ItineraryItem;
-      const day: ItineraryDay = { ...storedDay, items: [...(storedDay.items || []), item] };
+      const day = markCustomerContentReviewNeeded(
+        { ...storedDay, items: [...(storedDay.items || []), item] }, actor, now,
+      );
       const updatedTrip = this.markCostingPending(tx, trip, actor, now, 'Commercial itinerary service added.');
       tx.update('itinerary_days', dayId, day);
       tx.update('trips', trip.id, updatedTrip);
@@ -1306,7 +1436,10 @@ export class TripService {
         }
       }
       const item = withoutUndefined({ ...resolvedInput, id: existing.id, dayId, tripId: storedDay.tripId }) as ItineraryItem;
-      const day = { ...storedDay, items: (storedDay.items || []).map(candidate => candidate.id === itemId ? item : candidate) } as ItineraryDay;
+      let day = { ...storedDay, items: (storedDay.items || []).map(candidate => candidate.id === itemId ? item : candidate) } as ItineraryDay;
+      if (itineraryItemAffectsCustomerContent(existing, item)) {
+        day = markCustomerContentReviewNeeded(day, actor, now);
+      }
       const invalidatesCosting = itineraryItemCostingChanged(existing, item);
       const updatedTrip = invalidatesCosting
         ? this.markCostingPending(tx, trip, actor, now, 'Commercial itinerary service changed.')
@@ -1340,7 +1473,9 @@ export class TripService {
       if (!item) throw new TripDomainError(404, 'ITINERARY_ITEM_NOT_FOUND', 'Itinerary item not found.');
       const trip = await this.loadAuthorizedCommercialTrip(tx, storedDay.tripId, actor);
       const now = new Date().toISOString();
-      const day: ItineraryDay = { ...storedDay, items: (storedDay.items || []).filter(candidate => candidate.id !== itemId) };
+      const day = markCustomerContentReviewNeeded(
+        { ...storedDay, items: (storedDay.items || []).filter(candidate => candidate.id !== itemId) }, actor, now,
+      );
       const updatedTrip = this.markCostingPending(tx, trip, actor, now, 'Commercial itinerary service removed.');
       tx.update('itinerary_days', dayId, day);
       tx.update('trips', trip.id, updatedTrip);

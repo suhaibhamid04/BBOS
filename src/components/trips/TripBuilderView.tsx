@@ -52,6 +52,8 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
     updateTrip,
     addItineraryDay,
     updateItineraryDay,
+    composeItineraryDayCustomerContent,
+    reviewItineraryDayCustomerContent,
     deleteItineraryDay,
     addItineraryItem,
     updateItineraryItem,
@@ -82,6 +84,8 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
   const [isSavingPricing, setIsSavingPricing] = useState(false);
   const [pricingMode, setPricingMode] = useState<PackagePricingMode>('SELLING_PRICE');
   const [pricingInput, setPricingInput] = useState('0');
+  const [dayCopyDraft, setDayCopyDraft] = useState({ dayId: '', title: '', description: '', location: '' });
+  const [isSavingDayCopy, setIsSavingDayCopy] = useState(false);
 
   // Form state for New / Edit Trip
   const [tripForm, setTripForm] = useState({
@@ -178,6 +182,55 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
     ? itineraryDays.filter(d => d.tripId === activeTrip.id).sort((a, b) => a.dayNumber - b.dayNumber)
     : [];
   const activeDay = tripDays[selectedDayIndex] || tripDays[0];
+  useEffect(() => {
+    if (!activeDay) return;
+    setDayCopyDraft({
+      dayId: activeDay.id,
+      title: activeDay.title || '',
+      description: activeDay.description || '',
+      location: activeDay.location || '',
+    });
+  }, [activeDay?.id, activeDay?.title, activeDay?.description, activeDay?.location]);
+
+  const saveCustomerDayCopy = async () => {
+    if (!activeDay || !dayCopyDraft.title.trim() || !dayCopyDraft.description.trim() || !dayCopyDraft.location.trim()) {
+      notify('Add a title, detailed description, and location before saving.');
+      return;
+    }
+    setIsSavingDayCopy(true);
+    try {
+      await updateItineraryDay(activeDay.id, {
+        title: dayCopyDraft.title.trim(),
+        description: dayCopyDraft.description.trim(),
+        location: dayCopyDraft.location.trim(),
+      });
+      notify('Customer itinerary copy saved.');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Unable to save the itinerary copy.');
+    } finally {
+      setIsSavingDayCopy(false);
+    }
+  };
+
+  const rebuildCustomerDayCopy = async () => {
+    if (!activeDay || !confirm('Rebuild this day from its current services? This replaces the current customer title and description.')) return;
+    try {
+      await composeItineraryDayCustomerContent(activeDay.id, true);
+      notify('Customer itinerary rebuilt from current services.');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Unable to rebuild the itinerary copy.');
+    }
+  };
+
+  const markCustomerDayReviewed = async () => {
+    if (!activeDay) return;
+    try {
+      await reviewItineraryDayCustomerContent(activeDay.id);
+      notify('Customer itinerary marked reviewed.');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Unable to review the itinerary copy.');
+    }
+  };
 
   const getCustomerName = (id: string) => {
     const cust = customers.find(c => c.id === id);
@@ -938,6 +991,7 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
               {tripDays.map((day, idx) => (
                 <button
                   key={day.id}
+                  data-testid={`itinerary-day-${day.dayNumber}`}
                   onClick={() => setSelectedDayIndex(idx)}
                   className={`w-full text-left px-3 py-2.5 rounded-lg text-sm transition-all ${
                     selectedDayIndex === idx
@@ -1000,13 +1054,20 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
                     )}
                   </div>
 
+                  {activeDay.customerContent?.status === 'REVIEW_NEEDED' && (
+                    <div data-testid="itinerary-review-warning" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                      <p className="font-bold">Customer itinerary needs review</p>
+                      <p className="mt-1">Package services or routing changed. Existing customer copy has been preserved until you review or rebuild it.</p>
+                    </div>
+                  )}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Day Title</label>
+                      <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Customer day title</label>
                       <input
                         type="text"
-                        value={activeDay.title}
-                        onChange={(e) => updateItineraryDay(activeDay.id, { title: e.target.value })}
+                        data-testid="itinerary-customer-title"
+                        value={dayCopyDraft.dayId === activeDay.id ? dayCopyDraft.title : activeDay.title}
+                        onChange={(e) => setDayCopyDraft(previous => ({ ...previous, title: e.target.value }))}
                         className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-semibold focus:outline-hidden focus:ring-1 focus:ring-[#7056EE]"
                         placeholder="e.g. Arrival & Sunset Shikara Ride"
                       />
@@ -1015,11 +1076,31 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
                       <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Location / Hub</label>
                       <input
                         type="text"
-                        value={activeDay.location}
-                        onChange={(e) => updateItineraryDay(activeDay.id, { location: e.target.value })}
+                        data-testid="itinerary-customer-location"
+                        value={dayCopyDraft.dayId === activeDay.id ? dayCopyDraft.location : activeDay.location}
+                        onChange={(e) => setDayCopyDraft(previous => ({ ...previous, location: e.target.value }))}
                         className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-semibold focus:outline-hidden focus:ring-1 focus:ring-[#7056EE]"
                         placeholder="e.g. Srinagar / Gulmarg"
                       />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Detailed customer description</label>
+                    <textarea
+                      data-testid="itinerary-customer-description"
+                      value={dayCopyDraft.dayId === activeDay.id ? dayCopyDraft.description : activeDay.description}
+                      onChange={(event) => setDayCopyDraft(previous => ({ ...previous, description: event.target.value }))}
+                      rows={5}
+                      className="w-full resize-y bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs leading-5 focus:outline-hidden focus:ring-1 focus:ring-[#7056EE]"
+                      placeholder="Describe the day's route, included experiences, stay, and supported meals for the customer."
+                    />
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-[10px] text-slate-500">Detailed style · Customer copy only · Costing is unchanged by wording edits</p>
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" data-testid="rebuild-itinerary-content" onClick={() => void rebuildCustomerDayCopy()} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:border-[#7056EE]">Rebuild from services</button>
+                      {activeDay.customerContent?.status === 'REVIEW_NEEDED' && <button type="button" data-testid="mark-itinerary-reviewed" onClick={() => void markCustomerDayReviewed()} className="rounded-lg border border-amber-300 bg-amber-100 px-3 py-1.5 text-xs font-bold text-amber-900">Mark reviewed</button>}
+                      <button type="button" data-testid="save-itinerary-content" disabled={isSavingDayCopy} onClick={() => void saveCustomerDayCopy()} className="rounded-lg bg-[#7056EE] px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50">{isSavingDayCopy ? 'Saving…' : 'Save customer copy'}</button>
                     </div>
                   </div>
                 </div>

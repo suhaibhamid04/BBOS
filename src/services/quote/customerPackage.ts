@@ -1,5 +1,6 @@
 import type { CustomerPackageDocument, CustomerPackageItineraryItem } from '../../types/customerPackage';
 import type { ItineraryDay, Quote, Trip } from '../../types';
+import { deriveCustomerItineraryFacts, validateItineraryDayOrder } from '../itinerary/customerItinerary';
 
 type UnknownRecord = Record<string, any>;
 
@@ -58,6 +59,7 @@ export function buildCustomerPackageProjection(
   trip?: Trip | UnknownRecord | null,
   generatedAt = new Date().toISOString(),
 ): CustomerPackageDocument {
+  validateItineraryDayOrder(itineraryDays as ItineraryDay[]);
   const hotels = Array.isArray(quote.hotels) ? quote.hotels.map((item: UnknownRecord) => ({
     hotelName: text(item.hotelName) || 'Hotel',
     roomCategoryName: text(item.roomType) || 'Room category',
@@ -83,13 +85,21 @@ export function buildCustomerPackageProjection(
     ...(text(item.inclusionStatus) ? { inclusionStatus: text(item.inclusionStatus) as 'INCLUDED' | 'OPTIONAL' | 'NOT_INCLUDED' } : {}),
   })) : [];
   const itinerary = itineraryDays
-    .map((day: UnknownRecord) => ({
+    .map((day: UnknownRecord) => {
+      const facts = deriveCustomerItineraryFacts(day as ItineraryDay);
+      return {
       dayNumber: number(day.dayNumber),
       date: text(day.date) || '',
       title: text(day.title) || `Day ${number(day.dayNumber)}`,
+      ...(text(day.description) ? { description: text(day.description) } : {}),
       ...(text(day.location) ? { location: text(day.location) } : {}),
+      ...(facts.route ? { route: facts.route } : {}),
+      ...(facts.placesCovered.length ? { placesCovered: facts.placesCovered } : {}),
+      ...(facts.overnightLocation ? { overnightLocation: facts.overnightLocation } : {}),
+      ...(facts.meals.length ? { meals: facts.meals } : {}),
       items: (Array.isArray(day.items) ? day.items : []).map(projectItineraryItem).filter(Boolean) as CustomerPackageItineraryItem[],
-    }))
+      };
+    })
     .sort((left, right) => left.dayNumber - right.dayNumber);
 
   return {

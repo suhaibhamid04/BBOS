@@ -16,6 +16,23 @@ import { calculateMixedAllocatedStayTotal, distributeGuestsAcrossRooms } from '.
 import { calculateTransportCost } from '../services/transportEngine';
 import { calculateActivityCost } from '../services/activityEngine';
 import { buildCustomerPackageProjection } from '../services/quote/customerPackage';
+import { buildCustomerSharePublicView } from '../services/quote/customerShareProjection';
+import {
+  demoShareHistory,
+  effectiveDemoShareStatus,
+  generateDemoShareToken,
+  hashDemoShareToken,
+  readDemoCustomerShares,
+  writeDemoCustomerShares,
+  type DemoCustomerShareRecord,
+} from '../services/quote/customerShareDemo';
+import { buildCustomerDeliveryPreparation } from '../services/quote/customerShareDelivery';
+import { buildCustomerSharePdf, customerSharePdfFilename } from '../services/quote/customerSharePdf';
+import {
+  composeDetailedCustomerItinerary,
+  itineraryContentFingerprint,
+  itineraryItemAffectsCustomerContent,
+} from '../services/itinerary/customerItinerary';
 import {
   Lead,
   Customer,
@@ -69,11 +86,35 @@ import {
   ActivityMaster,
   ActivityRatePeriod,
   CustomerPackageDocument,
+  CustomerDeliveryChannel,
+  CustomerDeliveryPreparation,
+  CustomerQuoteComparison,
+  CustomerShareCreateResult,
+  CustomerShareExpiryDays,
+  CustomerShareHistoryItem,
+  CustomerSharePdfDownload,
   QuoteShareChannel,
   QuoteShareResult,
-  LeadInteractionInput
+  LeadInteractionInput,
+  ConversationEntryCreateInput,
+  ConversationEntryCreateResult,
+  ConversationTimelineEntry,
+  ConversationTimelinePage,
+  UnresolvedWhatsAppMessage,
+  WhatsAppConversationContext,
+  WhatsAppSendInput,
+  WhatsAppSendResult
 } from '../types';
 import { getLeadById, recordLeadInteraction as recordLeadInteractionApi } from '../services/leads/leadFollowUpApi';
+import {
+  createLeadConversationEntry,
+  getLeadConversationTimeline,
+  getLeadWhatsAppContext,
+  linkUnresolvedWhatsApp as linkUnresolvedWhatsAppApi,
+  listUnresolvedWhatsApp as listUnresolvedWhatsAppApi,
+  retryLeadWhatsAppMessage,
+  sendLeadWhatsAppMessage,
+} from '../services/leads/conversationTimelineApi';
 import { isTripCostingFresh } from '../utils/costingFreshness';
 import {
   assessLowMarginPolicy,
@@ -179,6 +220,40 @@ function sameValue(left: unknown, right: unknown): boolean {
   return JSON.stringify(stableValue(left)) === JSON.stringify(stableValue(right));
 }
 
+function withoutUndefinedValues<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map(item => withoutUndefinedValues(item)) as T;
+  }
+  if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([, entry]) => entry !== undefined)
+      .map(([key, entry]) => [key, withoutUndefinedValues(entry)]),
+  ) as T;
+}
+
+function mirrorDemoItineraryDay(day: ItineraryDay): void {
+  if (!db || !APP_CONFIG.DEMO_MODE) return;
+  try {
+    void setDoc(doc(db, 'itinerary_days', day.id), withoutUndefinedValues(day))
+      .catch(err => console.warn('Firestore demo itinerary mirror notice:', err));
+  } catch (err) {
+    console.warn('Firestore demo itinerary mirror notice:', err);
+  }
+}
+
+function deleteDemoItineraryDayMirror(dayId: string): void {
+  if (!db || !APP_CONFIG.DEMO_MODE) return;
+  try {
+    void deleteDoc(doc(db, 'itinerary_days', dayId))
+      .catch(err => console.warn('Firestore demo itinerary delete notice:', err));
+  } catch (err) {
+    console.warn('Firestore demo itinerary delete notice:', err);
+  }
+}
+
 function itineraryCommercialValue(item: Partial<ItineraryItem>): Record<string, unknown> {
   const metadata = item.metadata && typeof item.metadata === 'object'
     ? { ...(item.metadata as Record<string, unknown>) }
@@ -233,6 +308,7 @@ const QUOTE_WRITE_FIELDS = [
   'adults', 'children', 'packageId', 'packageName', 'durationDays', 'durationNights',
   'validUntil', 'notes', 'internalNotes', 'inclusions', 'exclusions', 'termsAndConditions',
   'backupAccommodations',
+  'optionLabel', 'customerTitle',
 ] as const;
 
 const QUOTE_ITEM_FINANCIAL_FIELDS = new Set([
@@ -371,6 +447,8 @@ interface DataContextType {
   updateTrip: (id: string, updates: TripUpdateInput) => Promise<void>;
   addItineraryDay: (tripId: string, dayData?: Partial<ItineraryDay>) => Promise<ItineraryDay>;
   updateItineraryDay: (id: string, updates: Partial<ItineraryDay>) => Promise<void>;
+  composeItineraryDayCustomerContent: (id: string, confirmReplace?: boolean) => Promise<ItineraryDay>;
+  reviewItineraryDayCustomerContent: (id: string) => Promise<ItineraryDay>;
   deleteItineraryDay: (id: string) => Promise<void>;
   addItineraryItem: (dayId: string, item: Omit<ItineraryItem, 'id' | 'dayId'>) => Promise<ItineraryItem>;
   updateItineraryItem: (dayId: string, itemId: string, item: Omit<ItineraryItem, 'id' | 'dayId' | 'tripId' | 'supplierCost'>) => Promise<ItineraryItem>;
@@ -387,6 +465,13 @@ interface DataContextType {
   assignLead: (id: string, employeeId: string, employeeName?: string, note?: string) => Promise<void>;
   loadLead: (id: string) => Promise<Lead>;
   recordLeadInteraction: (id: string, input: Omit<LeadInteractionInput, 'expectedUpdatedAt'> & { expectedUpdatedAt?: string }) => Promise<Lead>;
+  loadLeadConversation: (id: string, options?: { limit?: number; cursor?: string }) => Promise<ConversationTimelinePage>;
+  addLeadConversationEntry: (id: string, input: ConversationEntryCreateInput) => Promise<ConversationEntryCreateResult>;
+  loadLeadWhatsAppContext: (id: string) => Promise<WhatsAppConversationContext>;
+  sendLeadWhatsApp: (id: string, input: WhatsAppSendInput) => Promise<WhatsAppSendResult>;
+  retryLeadWhatsApp: (id: string, entryId: string, idempotencyKey: string) => Promise<WhatsAppSendResult>;
+  listUnresolvedWhatsApp: () => Promise<UnresolvedWhatsAppMessage[]>;
+  linkUnresolvedWhatsApp: (unresolvedId: string, leadId: string) => Promise<ConversationTimelineEntry>;
 
   // Customer actions
   createCustomer: (customer: Omit<Customer, 'id' | 'createdAt' | 'updatedAt' | 'totalBookings' | 'lifetimeValue'>) => Promise<Customer>;
@@ -409,6 +494,17 @@ interface DataContextType {
   getQuoteBackupAccommodationOptions: (tripId: string, sourceTripItemId: string) => Promise<QuoteBackupAccommodation[]>;
   getCustomerPackage: (quoteId: string) => Promise<CustomerPackageDocument>;
   shareQuotePackage: (quoteId: string, channel: QuoteShareChannel, expectedVersion: number) => Promise<QuoteShareResult>;
+  duplicateQuoteOption: (quoteId: string, input: { label: string; customerTitle?: string; totalAmount?: number; discountAmount?: number; validUntil?: string }) => Promise<Quote>;
+  updateQuoteOption: (quoteId: string, input: { label?: string; customerTitle?: string; totalAmount?: number; discountAmount?: number; validUntil?: string; inclusions?: string[]; exclusions?: string[]; termsAndConditions?: string; backupAccommodations?: QuoteBackupAccommodation[] }) => Promise<Quote>;
+  recommendQuoteOption: (quoteId: string) => Promise<Quote>;
+  refreshQuoteOptionFromTrip: (quoteId: string) => Promise<Quote>;
+  reorderQuoteOptions: (groupId: string, optionIds: string[]) => Promise<Quote[]>;
+  getQuoteOptionComparison: (groupId: string) => Promise<CustomerQuoteComparison>;
+  createCustomerShare: (groupId: string, expiresInDays: CustomerShareExpiryDays | null) => Promise<CustomerShareCreateResult>;
+  listCustomerShares: (groupId: string) => Promise<CustomerShareHistoryItem[]>;
+  revokeCustomerShare: (shareId: string) => Promise<CustomerShareHistoryItem>;
+  downloadCustomerSharePdf: (shareId: string) => Promise<CustomerSharePdfDownload>;
+  prepareCustomerShareDelivery: (shareId: string, channel: CustomerDeliveryChannel, publicUrl: string) => Promise<CustomerDeliveryPreparation>;
 
   // Booking actions
   createBooking: (bookingData: Omit<Booking, 'id' | 'createdAt' | 'updatedAt' | 'bookingReference'>) => Promise<Booking>;
@@ -1004,6 +1100,124 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const authoritativeLead = await getLeadById(id, currentUser.employeeId);
     setLeads(items => [authoritativeLead, ...items.filter(lead => lead.id !== id)]);
     return authoritativeLead;
+  };
+
+  const demoConversationProjection = (leadId: string): ConversationTimelineEntry[] => {
+    if (!APP_CONFIG.DEMO_MODE) return [];
+    const relevantQuotes = quotes.filter(quote => quote.leadId === leadId);
+    const groupIds = new Set(relevantQuotes.map(quote => quote.quoteGroupId).filter((value): value is string => Boolean(value)));
+    const relevantShares = readDemoCustomerShares().filter(share => groupIds.has(share.quoteGroupId));
+    const projected: ConversationTimelineEntry[] = [];
+    const quoteGroups = new Map<string, Quote[]>();
+    for (const quote of relevantQuotes) {
+      const key = quote.quoteGroupId || quote.id;
+      quoteGroups.set(key, [...(quoteGroups.get(key) || []), quote]);
+    }
+    for (const [groupId, group] of quoteGroups) {
+      const representative = group[0];
+      const occurredAt = group.map(quote => quote.optionSnapshotCreatedAt || quote.createdAt).sort()[0];
+      const version = 1;
+      projected.push({
+        entryId: `quote-group-created:${groupId}`, leadId, customerId: representative.customerId,
+        ...(representative.tripId ? { tripId: representative.tripId } : {}),
+        entryType: 'QUOTE_EVENT', channel: 'SYSTEM', direction: 'SYSTEM', visibility: 'SYSTEM',
+        title: group.length > 1 ? 'Quote options created' : `Quote V${version} created`,
+        ...(group.length > 1 ? { body: `${group.length} customer package options are available.` } : {}),
+        actorType: 'SYSTEM', actorName: 'BBOS', occurredAt, createdAt: occurredAt, attachmentIds: [],
+        metadata: { sourceType: 'QUOTE_GROUP', sourceId: groupId, quoteVersion: version },
+      });
+      const recommended = group.find(quote => quote.isRecommended);
+      if (recommended) projected.push({
+        entryId: `quote-recommended:${recommended.id}`, leadId, customerId: recommended.customerId,
+        ...(recommended.tripId ? { tripId: recommended.tripId } : {}),
+        entryType: 'QUOTE_EVENT', channel: 'SYSTEM', direction: 'SYSTEM', visibility: 'SYSTEM',
+        title: `Option “${recommended.optionLabel || 'Recommended'}” recommended`, actorType: 'SYSTEM', actorName: 'BBOS',
+        occurredAt: recommended.updatedAt || recommended.optionSnapshotCreatedAt || recommended.createdAt,
+        createdAt: recommended.updatedAt || recommended.optionSnapshotCreatedAt || recommended.createdAt,
+        attachmentIds: [], metadata: { sourceType: 'QUOTE', sourceId: recommended.id, quoteVersion: recommended.version || 1 },
+      });
+    }
+    for (const share of relevantShares) {
+      const quote = relevantQuotes.find(candidate => candidate.quoteGroupId === share.quoteGroupId);
+      const customerId = quote?.customerId;
+      projected.push({
+        entryId: `share-created:${share.shareId}`, leadId, ...(customerId ? { customerId } : {}),
+        entryType: 'SHARE_EVENT', channel: 'SYSTEM', direction: 'OUTBOUND', visibility: 'SYSTEM',
+        title: `Customer package V${share.version} shared`, actorType: 'EMPLOYEE',
+        actorEmployeeId: share.salesEmployeeId, actorName: share.createdByName, occurredAt: share.createdAt,
+        createdAt: share.createdAt, attachmentIds: [], metadata: { sourceType: 'CUSTOMER_SHARE', sourceId: share.shareId, shareVersion: share.version },
+      });
+      if (share.lastViewedAt || share.firstViewedAt) {
+        const occurredAt = share.lastViewedAt || share.firstViewedAt!;
+        projected.push({
+          entryId: `share-viewed:${share.shareId}:${occurredAt}`, leadId, ...(customerId ? { customerId } : {}),
+          entryType: 'SHARE_EVENT', channel: 'SYSTEM', direction: 'INBOUND', visibility: 'SYSTEM',
+          title: 'Package link viewed', body: `${Math.max(1, share.viewCount || 1)} recorded view${(share.viewCount || 1) === 1 ? '' : 's'}.`,
+          actorType: 'CUSTOMER', actorName: 'Customer', occurredAt, createdAt: occurredAt, attachmentIds: [],
+          metadata: { sourceType: 'CUSTOMER_SHARE', sourceId: share.shareId, shareVersion: share.version, viewCount: Math.max(1, share.viewCount || 1) },
+        });
+      }
+      if (share.revokedAt) projected.push({
+        entryId: `share-revoked:${share.shareId}`, leadId, ...(customerId ? { customerId } : {}),
+        entryType: 'SHARE_EVENT', channel: 'SYSTEM', direction: 'SYSTEM', visibility: 'SYSTEM',
+        title: 'Package link revoked', actorType: 'EMPLOYEE', actorEmployeeId: share.revokedByEmployeeId,
+        actorName: 'Sales team', occurredAt: share.revokedAt, createdAt: share.revokedAt, attachmentIds: [],
+        metadata: { sourceType: 'CUSTOMER_SHARE', sourceId: share.shareId, shareVersion: share.version },
+      });
+      for (const event of auditLogs.filter(log => log.entityId === share.shareId && ['WHATSAPP_SHARE_PREPARED', 'EMAIL_SHARE_PREPARED'].includes(log.action))) {
+        const whatsapp = event.action === 'WHATSAPP_SHARE_PREPARED';
+        projected.push({
+          entryId: `share-delivery:${event.id}`, leadId, ...(customerId ? { customerId } : {}),
+          entryType: 'SHARE_EVENT', channel: whatsapp ? 'WHATSAPP' : 'EMAIL', direction: 'OUTBOUND', visibility: 'CUSTOMER_COMMUNICATION',
+          title: `${whatsapp ? 'WhatsApp' : 'Email'} package message prepared`, body: 'Prepared for external delivery; provider sending is not confirmed.',
+          actorType: 'EMPLOYEE', actorEmployeeId: event.actorId, actorName: event.actorName.replace(/\s+\([^)]*\)$/, ''),
+          occurredAt: event.timestamp, createdAt: event.timestamp, attachmentIds: [],
+          metadata: { sourceType: 'AUDIT_EVENT', sourceId: event.id, shareVersion: share.version },
+        });
+      }
+    }
+    for (const booking of bookings.filter(item => item.leadId === leadId && ['CONFIRMED', 'IN_OPERATIONS', 'TRAVELLING', 'COMPLETED'].includes(item.status))) {
+      projected.push({
+        entryId: `booking-confirmed:${booking.id}`, leadId, customerId: booking.customerId, bookingId: booking.id, tripId: booking.tripId,
+        entryType: 'BOOKING_EVENT', channel: 'SYSTEM', direction: 'SYSTEM', visibility: 'SYSTEM', title: 'Booking confirmed',
+        body: booking.bookingReference ? `Booking ${booking.bookingReference}.` : undefined, actorType: 'SYSTEM', actorName: 'BBOS',
+        occurredAt: booking.updatedAt, createdAt: booking.updatedAt, attachmentIds: [], metadata: { sourceType: 'BOOKING', sourceId: booking.id },
+      });
+    }
+    return projected;
+  };
+
+  const loadLeadConversation = async (id: string, options: { limit?: number; cursor?: string } = {}): Promise<ConversationTimelinePage> => {
+    const page = await getLeadConversationTimeline(id, currentUser.employeeId, options);
+    if (!APP_CONFIG.DEMO_MODE || options.cursor) return page;
+    const limit = options.limit || 30;
+    const combined = [...new Map([...page.entries, ...demoConversationProjection(id)].map(entry => [entry.entryId, entry])).values()]
+      .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt) || right.entryId.localeCompare(left.entryId));
+    return { entries: combined.slice(0, limit), hasMore: page.hasMore || combined.length > limit, ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}) };
+  };
+
+  const addLeadConversationEntry = async (id: string, input: ConversationEntryCreateInput): Promise<ConversationEntryCreateResult> => {
+    return createLeadConversationEntry(id, input, currentUser.employeeId);
+  };
+
+  const loadLeadWhatsAppContext = async (id: string): Promise<WhatsAppConversationContext> => {
+    return getLeadWhatsAppContext(id, currentUser.employeeId);
+  };
+
+  const sendLeadWhatsApp = async (id: string, input: WhatsAppSendInput): Promise<WhatsAppSendResult> => {
+    return sendLeadWhatsAppMessage(id, input, currentUser.employeeId);
+  };
+
+  const retryLeadWhatsApp = async (id: string, entryId: string, idempotencyKey: string): Promise<WhatsAppSendResult> => {
+    return retryLeadWhatsAppMessage(id, entryId, idempotencyKey, currentUser.employeeId);
+  };
+
+  const listUnresolvedWhatsApp = async (): Promise<UnresolvedWhatsAppMessage[]> => {
+    return listUnresolvedWhatsAppApi(currentUser.employeeId);
+  };
+
+  const linkUnresolvedWhatsApp = async (unresolvedId: string, leadId: string): Promise<ConversationTimelineEntry> => {
+    return linkUnresolvedWhatsAppApi(unresolvedId, leadId, currentUser.employeeId);
   };
 
   // Accommodation CRUD
@@ -1690,7 +1904,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       nextDate = d.toISOString().split('T')[0];
     }
 
-    const newDay: ItineraryDay = {
+    let newDay: ItineraryDay = {
       id: `day-${tripId}-${nextDayNumber}-${Date.now()}`,
       tripId,
       dayNumber: nextDayNumber,
@@ -1700,6 +1914,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       description: dayData?.description || '',
       notes: dayData?.notes || '',
       items: dayData?.items || []
+    };
+    const composedDay = composeDetailedCustomerItinerary(newDay);
+    newDay = {
+      ...newDay,
+      title: dayData?.title || composedDay.title,
+      description: dayData?.description || composedDay.description,
+      customerContent: {
+        style: 'DETAILED', status: 'CURRENT', sourceFingerprint: composedDay.sourceFingerprint,
+        updatedAt: new Date().toISOString(), updatedByEmployeeId: currentUser.employeeId,
+      },
     };
 
     if (!APP_CONFIG.DEMO_MODE) {
@@ -1730,13 +1954,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } : item));
     logAuditEvent('itinerary.day.created', 'ITINERARY_DAY', newDay.id, null, newDay, `Added Day ${nextDayNumber} to trip ${trip?.title || tripId}`);
 
-    if (db && APP_CONFIG.DEMO_MODE) {
-      try {
-        await setDoc(doc(db, 'itinerary_days', newDay.id), newDay);
-      } catch (err) {
-        console.warn('Firestore add day notice:', err);
-      }
-    }
+    mirrorDemoItineraryDay(newDay);
 
     return newDay;
   };
@@ -1763,24 +1981,88 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setTrips(prev => prev.map(item => item.id === day.tripId ? updatedTrip : item));
       return;
     }
-    setItineraryDays(prev =>
-      prev.map(d => (d.id === id ? { ...d, ...updates } : d))
-    );
-    const invalidatesCosting = (['date', 'title', 'description', 'location'] as const)
+    let updatedDay = { ...day, ...updates };
+    const changesCustomerFacts = (['date', 'location'] as const)
+      .some(field => updates[field] !== undefined && !sameValue(day[field], updates[field]));
+    if (changesCustomerFacts) {
+      updatedDay = {
+        ...updatedDay,
+        customerContent: {
+          style: 'DETAILED', status: 'REVIEW_NEEDED',
+          sourceFingerprint: day.customerContent?.sourceFingerprint || itineraryContentFingerprint(day),
+          updatedAt: new Date().toISOString(), updatedByEmployeeId: currentUser.employeeId,
+        },
+      };
+    }
+    setItineraryDays(prev => prev.map(d => (d.id === id ? updatedDay : d)));
+    const invalidatesCosting = (['date', 'location'] as const)
       .some(field => updates[field] !== undefined && !sameValue(day[field], updates[field]));
     if (invalidatesCosting) setTrips(prev => prev.map(item => item.id === day.tripId ? {
       ...item, costingStatus: 'PENDING',
       costingRevision: Number(item.costingRevision || 0) + 1,
       updatedAt: new Date().toISOString(),
     } : item));
-    if (db && APP_CONFIG.DEMO_MODE) {
-      try {
-        await setDoc(doc(db, 'itinerary_days', id), { ...day, ...updates });
-      } catch (err) {
-        console.warn('Firestore day update notice:', err);
-      }
-    }
+    mirrorDemoItineraryDay(updatedDay);
     
+  };
+
+  const composeItineraryDayCustomerContent = async (id: string, confirmReplace = false): Promise<ItineraryDay> => {
+    const day = itineraryDays.find(candidate => candidate.id === id);
+    if (!day) throw new Error('Itinerary day not found.');
+    if (!APP_CONFIG.DEMO_MODE) {
+      const response = await fetch(`/api/trips/itinerary-days/${encodeURIComponent(id)}/compose-customer-content`, {
+        method: 'POST', headers: await getAuthHeaders(), body: JSON.stringify({ confirmReplace }),
+      });
+      const result = await readApiResponse(response);
+      const updatedDay = result.data.day as ItineraryDay;
+      setItineraryDays(previous => previous.map(candidate => candidate.id === id ? updatedDay : candidate));
+      return updatedDay;
+    }
+    const composed = composeDetailedCustomerItinerary(day);
+    const replacesCopy = Boolean(day.title.trim() || day.description.trim()) &&
+      (day.title !== composed.title || day.description !== composed.description);
+    if (replacesCopy && !confirmReplace) {
+      throw new Error('Rebuilding will replace the current customer title and description.');
+    }
+    const now = new Date().toISOString();
+    const updatedDay: ItineraryDay = {
+      ...day, title: composed.title, description: composed.description,
+      customerContent: {
+        style: 'DETAILED', status: 'CURRENT', sourceFingerprint: composed.sourceFingerprint,
+        updatedAt: now, updatedByEmployeeId: currentUser.employeeId,
+        reviewedAt: now, reviewedByEmployeeId: currentUser.employeeId,
+      },
+    };
+    setItineraryDays(previous => previous.map(candidate => candidate.id === id ? updatedDay : candidate));
+    logAuditEvent('ITINERARY_DAY_CONTENT_COMPOSED', 'ITINERARY_DAY', id, day, updatedDay, 'Rebuilt deterministic customer itinerary copy.');
+    return updatedDay;
+  };
+
+  const reviewItineraryDayCustomerContent = async (id: string): Promise<ItineraryDay> => {
+    const day = itineraryDays.find(candidate => candidate.id === id);
+    if (!day) throw new Error('Itinerary day not found.');
+    if (!APP_CONFIG.DEMO_MODE) {
+      const response = await fetch(`/api/trips/itinerary-days/${encodeURIComponent(id)}/review-customer-content`, {
+        method: 'POST', headers: await getAuthHeaders(), body: JSON.stringify({}),
+      });
+      const result = await readApiResponse(response);
+      const updatedDay = result.data.day as ItineraryDay;
+      setItineraryDays(previous => previous.map(candidate => candidate.id === id ? updatedDay : candidate));
+      return updatedDay;
+    }
+    if (!day.title.trim() || !day.description.trim()) throw new Error('Add a customer title and detailed description before marking this day reviewed.');
+    const now = new Date().toISOString();
+    const updatedDay: ItineraryDay = {
+      ...day,
+      customerContent: {
+        style: 'DETAILED', status: 'CURRENT', sourceFingerprint: itineraryContentFingerprint(day),
+        updatedAt: now, updatedByEmployeeId: currentUser.employeeId,
+        reviewedAt: now, reviewedByEmployeeId: currentUser.employeeId,
+      },
+    };
+    setItineraryDays(previous => previous.map(candidate => candidate.id === id ? updatedDay : candidate));
+    logAuditEvent('ITINERARY_DAY_REVIEWED', 'ITINERARY_DAY', id, day, updatedDay, 'Reviewed customer itinerary content.');
+    return updatedDay;
   };
 
   const deleteItineraryDay = async (id: string) => {
@@ -1806,13 +2088,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       updatedAt: new Date().toISOString(),
     } : item));
 
-    if (db && APP_CONFIG.DEMO_MODE) {
-      try {
-        await deleteDoc(doc(db, 'itinerary_days', id));
-      } catch (err) {
-        console.warn('Firestore day delete notice:', err);
-      }
-    }
+    deleteDemoItineraryDayMirror(id);
   };
 
   const addItineraryItem = async (dayId: string, itemData: Omit<ItineraryItem, 'id' | 'dayId'>): Promise<ItineraryItem> => {
@@ -1846,7 +2122,15 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return createdItem;
     }
 
-    const updatedDay = { ...targetDay, items: [...(targetDay.items || []), newItem] };
+    const updatedDay: ItineraryDay = {
+      ...targetDay,
+      items: [...(targetDay.items || []), newItem],
+      customerContent: {
+        style: 'DETAILED', status: 'REVIEW_NEEDED',
+        sourceFingerprint: targetDay.customerContent?.sourceFingerprint || itineraryContentFingerprint(targetDay),
+        updatedAt: now, updatedByEmployeeId: currentUser.employeeId,
+      },
+    };
     const updatedDays = itineraryDays.map(d => (d.id === dayId ? updatedDay : d));
 
     setItineraryDays(updatedDays);
@@ -1862,13 +2146,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     logAuditEvent(actionName, 'ITINERARY_ITEM', newItem.id, null, newItem, `Added ${itemData.type}: ${itemData.title}`);
 
-    if (db && APP_CONFIG.DEMO_MODE) {
-      try {
-        await setDoc(doc(db, 'itinerary_days', dayId), updatedDay);
-      } catch (err) {
-        console.warn('Firestore add item notice:', err);
-      }
-    }
+    mirrorDemoItineraryDay(updatedDay);
 
     return newItem;
   };
@@ -1891,7 +2169,17 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       ? { ...itemData, metadata: (() => { const { packageRateRequest, ...metadata } = itemData.metadata!; return { ...metadata, packageSupplierRate: { ...packageRateRequest, enteredByEmployeeId: currentUser.employeeId, enteredAt: now } }; })() }
       : itemData;
     const updatedItem = { ...demoItemData, id: itemId, dayId, tripId: targetDay.tripId } as ItineraryItem;
-    const updatedDay = { ...targetDay, items: targetDay.items.map(item => item.id === itemId ? updatedItem : item) };
+    let updatedDay: ItineraryDay = { ...targetDay, items: targetDay.items.map(item => item.id === itemId ? updatedItem : item) };
+    if (itineraryItemAffectsCustomerContent(existing, updatedItem)) {
+      updatedDay = {
+        ...updatedDay,
+        customerContent: {
+          style: 'DETAILED', status: 'REVIEW_NEEDED',
+          sourceFingerprint: targetDay.customerContent?.sourceFingerprint || itineraryContentFingerprint(targetDay),
+          updatedAt: now, updatedByEmployeeId: currentUser.employeeId,
+        },
+      };
+    }
     setItineraryDays(prev => prev.map(day => day.id === dayId ? updatedDay : day));
     const invalidatesCosting = !sameValue(
       itineraryCommercialValue(existing),
@@ -1902,15 +2190,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       costingRevision: Number(trip.costingRevision || 0) + 1,
       updatedAt: new Date().toISOString(),
     } : trip));
-    if (db && APP_CONFIG.DEMO_MODE) {
-      try {
-        await setDoc(doc(db, 'itinerary_days', dayId), updatedDay);
-      } catch (err) {
-        // Demo state is authoritative in localStorage. A best-effort Firebase
-        // mirror must never prevent the in-app demo workflow from completing.
-        console.warn('Firestore demo item update notice:', err);
-      }
-    }
+    // Demo state is authoritative in localStorage. A best-effort Firebase
+    // mirror must never prevent the in-app demo workflow from completing.
+    mirrorDemoItineraryDay(updatedDay);
     return updatedItem;
   };
 
@@ -1930,7 +2212,15 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
 
-    const updatedDay = { ...targetDay, items: (targetDay.items || []).filter(it => it.id !== itemId) };
+    const updatedDay: ItineraryDay = {
+      ...targetDay,
+      items: (targetDay.items || []).filter(it => it.id !== itemId),
+      customerContent: {
+        style: 'DETAILED', status: 'REVIEW_NEEDED',
+        sourceFingerprint: targetDay.customerContent?.sourceFingerprint || itineraryContentFingerprint(targetDay),
+        updatedAt: new Date().toISOString(), updatedByEmployeeId: currentUser.employeeId,
+      },
+    };
     const updatedDays = itineraryDays.map(d => (d.id === dayId ? updatedDay : d));
 
     setItineraryDays(updatedDays);
@@ -1940,13 +2230,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       updatedAt: new Date().toISOString(),
     } : item));
 
-    if (db && APP_CONFIG.DEMO_MODE) {
-      try {
-        await setDoc(doc(db, 'itinerary_days', dayId), updatedDay);
-      } catch (err) {
-        console.warn('Firestore delete item notice:', err);
-      }
-    }
+    mirrorDemoItineraryDay(updatedDay);
   };
 
   // Quotes
@@ -2105,7 +2389,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (linkedTrip && !isTripCostingFresh(linkedTrip)) {
       throw new Error('Package pricing needs updating before you can create a Quote.');
     }
-    if (existingTripQuote) return existingTripQuote;
+    if (existingTripQuote && !payload.optionLabel) return existingTripQuote;
     const tripFields = linkedTrip
       ? buildDemoTripQuoteFields(linkedTrip, (quoteData.backupAccommodations || []) as QuoteBackupAccommodation[])
       : {};
@@ -2113,10 +2397,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const discountAmount = linkedTrip ? 0 : Number(payload.discountAmount) || 0;
     const finalAmount = Math.max(0, totalAmount - discountAmount);
     const totalSupplierCost = linkedTrip?.totalSupplierCost;
+    const newQuoteId = `quote-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const now = new Date().toISOString();
+    const existingOptions = linkedTrip ? quotes.filter(quote => quote.tripId === linkedTrip.id && quote.optionId) : [];
     const newQuote: Quote = {
       ...(payload as unknown as Quote),
       ...tripFields,
-      id: `quote-${Date.now()}`,
+      id: newQuoteId,
       totalAmount,
       discountAmount,
       finalAmount,
@@ -2139,11 +2426,29 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       updatedByEmployeeId: currentUser.employeeId,
       version: 1,
       versionHistory: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
       isDemo: true,
     };
-    setQuotes(prev => [newQuote, ...prev.filter(quote => quote.id !== newQuote.id && quote.tripId !== newQuote.tripId)]);
+    if (payload.optionLabel && linkedTrip) {
+      const reviewPending = itineraryDays.some(day => day.tripId === linkedTrip.id && day.customerContent?.status === 'REVIEW_NEEDED');
+      if (reviewPending) throw new Error('Review the updated customer itinerary before creating a Quote option.');
+      newQuote.optionId = newQuoteId;
+      newQuote.quoteGroupId = existingOptions[0]?.quoteGroupId || newQuoteId;
+      newQuote.optionLabel = String(payload.optionLabel);
+      if (payload.customerTitle) newQuote.customerTitle = String(payload.customerTitle);
+      newQuote.optionOrder = existingOptions.length + 1;
+      newQuote.isRecommended = existingOptions.length === 0;
+      newQuote.optionStatus = 'READY';
+      newQuote.optionSnapshotCreatedAt = now;
+      newQuote.customerPackageSnapshot = buildCustomerPackageProjection(
+        newQuote,
+        itineraryDays.filter(day => day.tripId === linkedTrip.id),
+        linkedTrip,
+        now,
+      );
+    }
+    setQuotes(prev => [newQuote, ...prev.filter(quote => quote.id !== newQuote.id && (payload.optionLabel || quote.tripId !== newQuote.tripId))]);
     return newQuote;
   };
 
@@ -2243,7 +2548,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const body = await readApiResponse(response);
       return body.data as CustomerPackageDocument;
     }
-    if (quote.sharedAt && quote.customerPackageSnapshot) return quote.customerPackageSnapshot;
+    if (quote.customerPackageSnapshot && (quote.sharedAt || quote.optionId)) return quote.customerPackageSnapshot;
     if (quote.sharedAt) return buildCustomerPackageProjection(quote, [], null, quote.sharedAt);
     const trip = quote.tripId ? trips.find(item => item.id === quote.tripId) : undefined;
     if (!trip) throw new Error('A customer package requires a persisted Trip-linked Quote.');
@@ -2280,9 +2585,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return result;
     }
     if ((quote.version || 1) !== expectedVersion) throw new Error('The Quote changed after this package was opened. Reload before sharing.');
+    if (!quote.sharedAt && quote.tripId && itineraryDays.some(day =>
+      day.tripId === quote.tripId && day.customerContent?.status === 'REVIEW_NEEDED')) {
+      throw new Error('ITINERARY_REVIEW_REQUIRED: Review the updated customer itinerary before sharing this Quote.');
+    }
     const customerPackage = await getCustomerPackage(quoteId);
     const now = new Date().toISOString();
-    const sharedSnapshot = { ...customerPackage, generatedAt: now };
+    const sharedSnapshot = quote.optionId ? customerPackage : { ...customerPackage, generatedAt: now };
     const updated: Quote = {
       ...quote,
       status: 'SENT',
@@ -2290,6 +2599,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       sharedByEmployeeId: currentUser.employeeId,
       shareChannel: channel,
       customerPackageSnapshot: sharedSnapshot,
+      ...(quote.optionId ? { optionStatus: 'SHARED' as const } : {}),
       version: (quote.version || 1) + 1,
       versionHistory: [
         ...(quote.versionHistory || []),
@@ -2309,6 +2619,440 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setQuotes(previous => previous.map(item => item.id === quoteId ? updated : item));
     logAuditEvent('QUOTE_SHARED', 'QUOTE', quoteId, quote, updated, `Customer package shared by ${currentUser.name}.`);
     return { quote: updated, customerPackage: sharedSnapshot };
+  };
+
+  const duplicateQuoteOption = async (
+    quoteId: string,
+    input: { label: string; customerTitle?: string; totalAmount?: number; discountAmount?: number; validUntil?: string },
+  ): Promise<Quote> => {
+    if (!APP_CONFIG.DEMO_MODE) {
+      const response = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/duplicate-option`, {
+        method: 'POST', headers: await getAuthHeaders(), body: JSON.stringify(input),
+      });
+      const body = await readApiResponse(response);
+      const created = body.data as Quote;
+      setQuotes(previous => [created, ...previous]);
+      return created;
+    }
+    const source = quotes.find(quote => quote.id === quoteId);
+    if (!source?.optionId || !source.quoteGroupId || !source.customerPackageSnapshot) throw new Error('Only a frozen Quote option can be duplicated.');
+    if (quotes.some(quote => quote.quoteGroupId === source.quoteGroupId && quote.optionStatus === 'ACCEPTED')) throw new Error('This option group already has an accepted Booking.');
+    const now = new Date().toISOString();
+    const id = `quote-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const totalAmount = input.totalAmount ?? source.totalAmount;
+    const discountAmount = input.discountAmount ?? source.discountAmount;
+    const finalAmount = totalAmount - discountAmount;
+    if (source.totalSupplierCost !== undefined && finalAmount < source.totalSupplierCost) throw new Error('Selling price cannot be lower than authoritative supplier cost.');
+    const group = quotes.filter(quote => quote.quoteGroupId === source.quoteGroupId);
+    const created: Quote = {
+      ...JSON.parse(JSON.stringify(source)), id, optionId: id, optionLabel: input.label,
+      ...(input.customerTitle ? { customerTitle: input.customerTitle } : {}),
+      optionOrder: group.length + 1, isRecommended: false, optionStatus: 'READY',
+      optionSnapshotCreatedAt: now, status: 'DRAFT', totalAmount, discountAmount, finalAmount,
+      ...(source.totalSupplierCost !== undefined ? {
+        grossProfit: finalAmount - source.totalSupplierCost,
+        grossMargin: finalAmount > 0 ? Number((((finalAmount - source.totalSupplierCost) / finalAmount) * 100).toFixed(1)) : 0,
+      } : {}),
+      validUntil: input.validUntil || source.validUntil, createdAt: now, updatedAt: now,
+      createdByEmployeeId: currentUser.employeeId, updatedByEmployeeId: currentUser.employeeId,
+      version: 1, versionHistory: [],
+      customerPackageSnapshot: { ...source.customerPackageSnapshot, packageReference: id, packageSellingPrice: finalAmount, generatedAt: now },
+    };
+    delete created.sharedAt; delete created.sharedByEmployeeId; delete created.shareChannel; delete created.convertedBookingId;
+    setQuotes(previous => [created, ...previous]);
+    logAuditEvent('QUOTE_OPTION_DUPLICATED', 'QUOTE', id, null, created, `Quote option duplicated by ${currentUser.employeeId}.`);
+    return created;
+  };
+
+  const updateQuoteOption = async (
+    quoteId: string,
+    input: { label?: string; customerTitle?: string; totalAmount?: number; discountAmount?: number; validUntil?: string; inclusions?: string[]; exclusions?: string[]; termsAndConditions?: string; backupAccommodations?: QuoteBackupAccommodation[] },
+  ): Promise<Quote> => {
+    if (!APP_CONFIG.DEMO_MODE) {
+      const requestInput = input.backupAccommodations
+        ? { ...input, backupAccommodations: projectBackupAccommodationSelections(input.backupAccommodations) }
+        : input;
+      const response = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/option`, {
+        method: 'PATCH', headers: await getAuthHeaders(), body: JSON.stringify(requestInput),
+      });
+      const body = await readApiResponse(response);
+      const updated = body.data as Quote;
+      setQuotes(previous => previous.map(quote => quote.id === quoteId ? updated : quote));
+      return updated;
+    }
+    const source = quotes.find(quote => quote.id === quoteId);
+    if (!source?.optionId || !source.customerPackageSnapshot) throw new Error('Quote option not found.');
+    const now = new Date().toISOString();
+    const totalAmount = input.totalAmount ?? source.totalAmount;
+    const discountAmount = input.discountAmount ?? source.discountAmount;
+    const finalAmount = totalAmount - discountAmount;
+    if (source.totalSupplierCost !== undefined && finalAmount < source.totalSupplierCost) throw new Error('Selling price cannot be lower than authoritative supplier cost.');
+    const updated: Quote = {
+      ...source, optionLabel: input.label || source.optionLabel, customerTitle: input.customerTitle ?? source.customerTitle,
+      totalAmount, discountAmount, finalAmount, validUntil: input.validUntil || source.validUntil,
+      inclusions: input.inclusions ?? source.inclusions, exclusions: input.exclusions ?? source.exclusions,
+      termsAndConditions: input.termsAndConditions ?? source.termsAndConditions,
+      backupAccommodations: input.backupAccommodations ?? source.backupAccommodations,
+      ...(source.totalSupplierCost !== undefined ? {
+        grossProfit: finalAmount - source.totalSupplierCost,
+        grossMargin: finalAmount > 0 ? Number((((finalAmount - source.totalSupplierCost) / finalAmount) * 100).toFixed(1)) : 0,
+      } : {}),
+      optionStatus: source.sharedAt ? 'SHARED' : 'READY', version: (source.version || 1) + 1,
+      versionHistory: [...(source.versionHistory || []), {
+        version: source.version || 1,
+        updatedAt: source.updatedAt || source.createdAt,
+        updatedBy: source.updatedByEmployeeId || currentUser.employeeId,
+        totalAmount: source.totalAmount,
+        discountAmount: source.discountAmount,
+        finalAmount: source.finalAmount,
+        status: source.status,
+        hotels: source.hotels,
+        transports: source.transports,
+        activities: source.activities,
+        backupAccommodations: source.backupAccommodations,
+        totalSupplierCost: source.totalSupplierCost,
+        grossProfit: source.grossProfit,
+        grossMargin: source.grossMargin,
+        inclusions: source.inclusions,
+        exclusions: source.exclusions,
+        termsAndConditions: source.termsAndConditions,
+        customerPackageSnapshot: source.customerPackageSnapshot,
+      }],
+      updatedAt: now, updatedByEmployeeId: currentUser.employeeId,
+      customerPackageSnapshot: {
+        ...source.customerPackageSnapshot, packageSellingPrice: finalAmount,
+        inclusions: input.inclusions ?? source.customerPackageSnapshot.inclusions,
+        exclusions: input.exclusions ?? source.customerPackageSnapshot.exclusions,
+        termsAndConditions: input.termsAndConditions ?? source.customerPackageSnapshot.termsAndConditions,
+      },
+    };
+    delete updated.sharedAt; delete updated.sharedByEmployeeId; delete updated.shareChannel;
+    setQuotes(previous => previous.map(quote => quote.id === quoteId ? updated : quote));
+    logAuditEvent('QUOTE_OPTION_UPDATED', 'QUOTE', quoteId, source, updated, `Quote option updated by ${currentUser.employeeId}.`);
+    return updated;
+  };
+
+  const recommendQuoteOption = async (quoteId: string): Promise<Quote> => {
+    if (!APP_CONFIG.DEMO_MODE) {
+      const response = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/recommend-option`, { method: 'POST', headers: await getAuthHeaders(), body: '{}' });
+      const body = await readApiResponse(response);
+      const updated = body.data as Quote;
+      setQuotes(previous => previous.map(quote => quote.quoteGroupId === updated.quoteGroupId ? { ...quote, isRecommended: quote.id === quoteId } : quote));
+      return updated;
+    }
+    const selected = quotes.find(quote => quote.id === quoteId);
+    if (!selected?.quoteGroupId) throw new Error('Quote option not found.');
+    const updated = { ...selected, isRecommended: true };
+    setQuotes(previous => previous.map(quote => quote.quoteGroupId === selected.quoteGroupId ? { ...quote, isRecommended: quote.id === quoteId } : quote));
+    logAuditEvent('QUOTE_OPTION_RECOMMENDED', 'QUOTE', quoteId, selected, updated, `Quote option recommended by ${currentUser.employeeId}.`);
+    return updated;
+  };
+
+  const refreshQuoteOptionFromTrip = async (quoteId: string): Promise<Quote> => {
+    if (!APP_CONFIG.DEMO_MODE) {
+      const response = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/refresh-option`, { method: 'POST', headers: await getAuthHeaders(), body: '{}' });
+      const body = await readApiResponse(response);
+      const updated = body.data as Quote;
+      setQuotes(previous => previous.map(quote => quote.id === quoteId ? updated : quote));
+      return updated;
+    }
+    const source = quotes.find(quote => quote.id === quoteId);
+    const trip = source?.tripId ? trips.find(item => item.id === source.tripId) : undefined;
+    if (!source?.optionId || !trip) throw new Error('A Trip-linked Quote option is required.');
+    if (!isTripCostingFresh(trip)) throw new Error('Package pricing needs updating before this option can be refreshed.');
+    if (itineraryDays.some(day => day.tripId === trip.id && day.customerContent?.status === 'REVIEW_NEEDED')) throw new Error('Review the updated customer itinerary before refreshing this option.');
+    const now = new Date().toISOString();
+    const tripFields = buildDemoTripQuoteFields(trip, source.backupAccommodations || []);
+    const totalAmount = trip.totalSellingPrice || source.totalAmount;
+    const totalSupplierCost = trip.totalSupplierCost;
+    const refreshed: Quote = {
+      ...source, ...tripFields, totalAmount, discountAmount: 0, finalAmount: totalAmount,
+      totalSupplierCost, grossProfit: totalAmount - totalSupplierCost,
+      grossMargin: totalAmount > 0 ? Number((((totalAmount - totalSupplierCost) / totalAmount) * 100).toFixed(1)) : 0,
+      supplierCostSource: { type: 'TRIP', sourceId: trip.id, asOf: trip.updatedAt, costingRevision: Number(trip.costingRevision || 0) },
+      optionStatus: 'READY', optionSnapshotCreatedAt: now, version: (source.version || 1) + 1,
+      updatedAt: now, updatedByEmployeeId: currentUser.employeeId,
+    };
+    refreshed.customerPackageSnapshot = buildCustomerPackageProjection(refreshed, itineraryDays.filter(day => day.tripId === trip.id), trip, now);
+    delete refreshed.sharedAt; delete refreshed.sharedByEmployeeId; delete refreshed.shareChannel;
+    setQuotes(previous => previous.map(quote => quote.id === quoteId ? refreshed : quote));
+    logAuditEvent('QUOTE_OPTION_UPDATED', 'QUOTE', quoteId, source, refreshed, `Quote option refreshed by ${currentUser.employeeId}.`);
+    return refreshed;
+  };
+
+  const reorderQuoteOptions = async (groupId: string, optionIds: string[]): Promise<Quote[]> => {
+    if (!APP_CONFIG.DEMO_MODE) {
+      const response = await fetch(`/api/quotes/groups/${encodeURIComponent(groupId)}/reorder`, {
+        method: 'POST', headers: await getAuthHeaders(), body: JSON.stringify({ optionIds }),
+      });
+      const body = await readApiResponse(response);
+      const updated = body.data as Quote[];
+      const byId = new Map(updated.map(quote => [quote.id, quote]));
+      setQuotes(previous => previous.map(quote => byId.get(quote.id) || quote));
+      return updated;
+    }
+    const group = quotes.filter(quote => quote.quoteGroupId === groupId);
+    if (optionIds.length !== group.length || new Set(optionIds).size !== group.length) throw new Error('Every option must appear exactly once.');
+    const updated = group.map(quote => ({ ...quote, optionOrder: optionIds.indexOf(quote.optionId!) + 1 }));
+    const byId = new Map(updated.map(quote => [quote.id, quote]));
+    setQuotes(previous => previous.map(quote => byId.get(quote.id) || quote));
+    return updated;
+  };
+
+  const getQuoteOptionComparison = async (groupId: string): Promise<CustomerQuoteComparison> => {
+    if (!APP_CONFIG.DEMO_MODE) {
+      const response = await fetch(`/api/quotes/groups/${encodeURIComponent(groupId)}/customer-comparison`, { headers: await authenticatedReadHeaders(currentUser.employeeId) });
+      const body = await readApiResponse(response);
+      return body.data as CustomerQuoteComparison;
+    }
+    const group = quotes.filter(quote => quote.quoteGroupId === groupId && quote.customerPackageSnapshot).sort((a, b) => (a.optionOrder || 0) - (b.optionOrder || 0));
+    if (!group.length) throw new Error('Quote option group not found.');
+    return {
+      quoteGroupId: groupId, customerName: group[0].customerName, destination: group[0].destination,
+      title: group[0].customerTitle || `${group[0].destination} Package Options`,
+      options: group.map(quote => ({
+        optionId: quote.optionId!, quoteId: quote.id, label: quote.optionLabel || 'Package option',
+        ...(quote.customerTitle ? { customerTitle: quote.customerTitle } : {}), order: quote.optionOrder || 0,
+        recommended: quote.isRecommended === true, status: quote.optionStatus || 'READY',
+        packageSellingPrice: quote.customerPackageSnapshot!.packageSellingPrice, currency: quote.customerPackageSnapshot!.currency,
+        travelerCount: quote.travelerCount, durationDays: quote.durationDays, durationNights: quote.durationNights,
+        hotelHighlights: quote.customerPackageSnapshot!.hotels.map(hotel => `${hotel.hotelName} — ${hotel.roomCategoryName}`),
+        transportHighlights: quote.customerPackageSnapshot!.transports.map(item => item.vehicleName),
+        includedActivityHighlights: quote.customerPackageSnapshot!.activities.filter(item => item.inclusionStatus !== 'OPTIONAL' && item.inclusionStatus !== 'NOT_INCLUDED').map(item => item.activityName),
+        optionalActivityHighlights: quote.customerPackageSnapshot!.activities.filter(item => item.inclusionStatus === 'OPTIONAL').map(item => item.activityName),
+        validUntil: quote.validUntil,
+      })),
+    };
+  };
+
+  const assertDemoShareScope = (salesEmployeeId?: string, salesTeamId?: string) => {
+    if (['Founder', 'Admin'].includes(currentUser.role)) return;
+    if (currentUser.role === 'Sales Executive' && salesEmployeeId === currentUser.employeeId) return;
+    if (currentUser.role === 'Sales Manager' && salesTeamId && salesTeamId === currentUser.salesTeamId) return;
+    throw new Error('You do not have access to manage this customer share.');
+  };
+
+  const createCustomerShare = async (
+    groupId: string,
+    expiresInDays: CustomerShareExpiryDays | null,
+  ): Promise<CustomerShareCreateResult> => {
+    if (!APP_CONFIG.DEMO_MODE) {
+      const response = await fetch(`/api/quotes/groups/${encodeURIComponent(groupId)}/customer-shares`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        body: JSON.stringify({ expiresInDays }),
+      });
+      const body = await readApiResponse(response);
+      return body.data as CustomerShareCreateResult;
+    }
+
+    const group = quotes
+      .filter(quote => quote.quoteGroupId === groupId)
+      .sort((left, right) => (left.optionOrder || 0) - (right.optionOrder || 0));
+    if (!group.length) throw new Error('Quote option group not found.');
+    assertDemoShareScope(group[0].salesEmployeeId, group[0].salesTeamId);
+    if (group.filter(option => option.isRecommended).length !== 1) throw new Error('Choose exactly one recommended option before sharing.');
+    for (const option of group) {
+      if (!option.optionId || !option.customerPackageSnapshot) throw new Error('Every option needs a frozen customer snapshot before sharing.');
+      if (['ACCEPTED', 'SUPERSEDED', 'DECLINED'].includes(option.optionStatus || '')) throw new Error('This Quote Group can no longer be shared.');
+      if (option.approval?.required === true && option.approval.state !== 'APPROVED') throw new Error('Commercial approval is required before sharing this package.');
+      const trip = option.tripId ? trips.find(candidate => candidate.id === option.tripId) : undefined;
+      if (!trip || !isTripCostingFresh(trip)) throw new Error('Package pricing needs updating before you can create a customer link.');
+      if (option.supplierCostSource?.costingRevision !== undefined && option.supplierCostSource.costingRevision !== Number(trip.costingRevision || 0)) {
+        throw new Error('Refresh every option from the current reviewed Package before creating a new customer link.');
+      }
+      if (itineraryDays.some(day => day.tripId === trip.id && day.customerContent?.status === 'REVIEW_NEEDED')) {
+        throw new Error('Review the updated customer itinerary before sharing this package.');
+      }
+    }
+    const now = new Date().toISOString();
+    const token = generateDemoShareToken();
+    const tokenHash = await hashDemoShareToken(token);
+    const existing = readDemoCustomerShares();
+    const version = existing.filter(record => record.quoteGroupId === groupId)
+      .reduce((highest, record) => Math.max(highest, record.version), 0) + 1;
+    const shareId = `share-${crypto.randomUUID()}`;
+    const record: DemoCustomerShareRecord = {
+      shareId,
+      quoteGroupId: groupId,
+      version,
+      status: 'ACTIVE',
+      createdByName: currentUser.name,
+      createdAt: now,
+      ...(expiresInDays ? { expiresAt: new Date(Date.parse(now) + expiresInDays * 86_400_000).toISOString() } : {}),
+      viewCount: 0,
+      tokenHash,
+      snapshot: buildCustomerSharePublicView(group, now),
+      salesEmployeeId: group[0].salesEmployeeId!,
+      ...(group[0].salesTeamId ? { salesTeamId: group[0].salesTeamId } : {}),
+    };
+    writeDemoCustomerShares([...existing, record]);
+    setQuotes(previous => previous.map(option => option.quoteGroupId === groupId ? {
+      ...option,
+      status: 'SENT',
+      optionStatus: 'SHARED',
+      sharedAt: now,
+      sharedByEmployeeId: currentUser.employeeId,
+      shareChannel: 'DOCUMENT',
+      version: (option.version || 1) + 1,
+      updatedAt: now,
+      updatedByEmployeeId: currentUser.employeeId,
+    } : option));
+    logAuditEvent('CUSTOMER_SHARE_CREATED', 'CUSTOMER_SHARE', shareId, null, {
+      shareId,
+      quoteGroupId: groupId,
+      version,
+      ...(record.expiresAt ? { expiresAt: record.expiresAt } : {}),
+    }, `Secure customer link created by ${currentUser.employeeId}.`);
+    return { share: demoShareHistory(record, now), publicPath: `/quote/share/${token}` };
+  };
+
+  const listCustomerShares = async (groupId: string): Promise<CustomerShareHistoryItem[]> => {
+    if (!APP_CONFIG.DEMO_MODE) {
+      const response = await fetch(`/api/quotes/groups/${encodeURIComponent(groupId)}/customer-shares`, {
+        headers: await authenticatedReadHeaders(currentUser.employeeId),
+      });
+      const body = await readApiResponse(response);
+      return body.data as CustomerShareHistoryItem[];
+    }
+    const group = quotes.filter(quote => quote.quoteGroupId === groupId);
+    if (!group.length) throw new Error('Quote option group not found.');
+    assertDemoShareScope(group[0].salesEmployeeId, group[0].salesTeamId);
+    const now = new Date().toISOString();
+    return readDemoCustomerShares()
+      .filter(record => record.quoteGroupId === groupId)
+      .map(record => demoShareHistory(record, now))
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  };
+
+  const revokeCustomerShare = async (shareId: string): Promise<CustomerShareHistoryItem> => {
+    if (!APP_CONFIG.DEMO_MODE) {
+      const response = await fetch(`/api/quotes/customer-shares/${encodeURIComponent(shareId)}/revoke`, {
+        method: 'POST', headers: await getAuthHeaders(), body: '{}',
+      });
+      const body = await readApiResponse(response);
+      return body.data as CustomerShareHistoryItem;
+    }
+    const records = readDemoCustomerShares();
+    const index = records.findIndex(record => record.shareId === shareId);
+    if (index < 0) throw new Error('Customer share not found.');
+    const stored = records[index];
+    assertDemoShareScope(stored.salesEmployeeId, stored.salesTeamId);
+    if (stored.status === 'REVOKED') return demoShareHistory(stored);
+    const now = new Date().toISOString();
+    const updated: DemoCustomerShareRecord = {
+      ...stored, status: 'REVOKED', revokedAt: now, revokedByEmployeeId: currentUser.employeeId,
+    };
+    records[index] = updated;
+    writeDemoCustomerShares(records);
+    logAuditEvent('CUSTOMER_SHARE_REVOKED', 'CUSTOMER_SHARE', shareId,
+      { shareId, quoteGroupId: stored.quoteGroupId, status: stored.status },
+      { shareId, quoteGroupId: stored.quoteGroupId, status: 'REVOKED', revokedAt: now },
+      `Customer link revoked by ${currentUser.employeeId}.`);
+    return demoShareHistory(updated, now);
+  };
+
+  const downloadCustomerSharePdf = async (shareId: string): Promise<CustomerSharePdfDownload> => {
+    if (!APP_CONFIG.DEMO_MODE) {
+      const response = await fetch(`/api/quotes/customer-shares/${encodeURIComponent(shareId)}/pdf`, {
+        headers: await authenticatedReadHeaders(currentUser.employeeId),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || `PDF generation failed (${response.status}).`);
+      }
+      const disposition = response.headers.get('content-disposition') || '';
+      const filename = disposition.match(/filename="([^"]+)"/i)?.[1] || 'Booking-Bridge-Holiday-Package.pdf';
+      return { blob: await response.blob(), filename };
+    }
+    const records = readDemoCustomerShares();
+    const index = records.findIndex(record => record.shareId === shareId);
+    if (index < 0) throw new Error('Customer share not found.');
+    const stored = records[index];
+    assertDemoShareScope(stored.salesEmployeeId, stored.salesTeamId);
+    const now = new Date().toISOString();
+    const updated: DemoCustomerShareRecord = {
+      ...stored,
+      pdfGeneratedCount: (stored.pdfGeneratedCount || 0) + 1,
+      lastPdfGeneratedAt: now,
+    };
+    records[index] = updated;
+    writeDemoCustomerShares(records);
+    logAuditEvent('QUOTE_PDF_GENERATED', 'CUSTOMER_SHARE', shareId, null, {
+      shareId, quoteGroupId: stored.quoteGroupId, version: stored.version, channel: 'PDF', generatedAt: now,
+    }, `Customer-safe PDF generated from Quote Group V${stored.version}.`);
+    const bytes = buildCustomerSharePdf(stored.snapshot, stored.version);
+    const data = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+    return {
+      blob: new Blob([data], { type: 'application/pdf' }),
+      filename: customerSharePdfFilename(stored.snapshot, new Date(stored.createdAt).getUTCFullYear()),
+    };
+  };
+
+  const prepareCustomerShareDelivery = async (
+    shareId: string,
+    channel: CustomerDeliveryChannel,
+    publicUrl: string,
+  ): Promise<CustomerDeliveryPreparation> => {
+    let parsed: URL;
+    try {
+      parsed = new URL(publicUrl);
+    } catch {
+      throw new Error('Create a valid customer link before preparing delivery.');
+    }
+    const token = parsed.pathname.match(/^\/quote\/share\/([A-Za-z0-9_-]{43})\/?$/)?.[1];
+    if (!token) throw new Error('Create a valid customer link before preparing delivery.');
+    if (!APP_CONFIG.DEMO_MODE) {
+      const response = await fetch(`/api/quotes/customer-shares/${encodeURIComponent(shareId)}/deliveries/prepare`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        body: JSON.stringify({ channel, token }),
+      });
+      const body = await readApiResponse(response);
+      return body.data as CustomerDeliveryPreparation;
+    }
+    const records = readDemoCustomerShares();
+    const index = records.findIndex(record => record.shareId === shareId);
+    if (index < 0) throw new Error('Customer share not found.');
+    const stored = records[index];
+    assertDemoShareScope(stored.salesEmployeeId, stored.salesTeamId);
+    const now = new Date().toISOString();
+    const status = effectiveDemoShareStatus(stored, now);
+    if (status !== 'ACTIVE') throw new Error(`This customer link is ${status.toLowerCase()}. Create a fresh link before delivery.`);
+    if (parsed.origin !== window.location.origin || await hashDemoShareToken(token) !== stored.tokenHash) {
+      throw new Error('The selected secure link does not match this Quote version.');
+    }
+    const quote = quotes.find(candidate => candidate.quoteGroupId === stored.quoteGroupId);
+    const customer = quote?.customerId ? customers.find(candidate => candidate.id === quote.customerId) : undefined;
+    const prepared = buildCustomerDeliveryPreparation({
+      shareId,
+      quoteGroupId: stored.quoteGroupId,
+      version: stored.version,
+      channel,
+      snapshot: stored.snapshot,
+      customerLink: publicUrl,
+      customerPhone: customer?.whatsApp || customer?.phone || quote?.customerPhone,
+      customerEmail: customer?.email || quote?.customerEmail,
+      preparedAt: now,
+    });
+    const updated: DemoCustomerShareRecord = {
+      ...stored,
+      ...(channel === 'WHATSAPP'
+        ? { whatsappPreparedCount: (stored.whatsappPreparedCount || 0) + 1, lastWhatsappPreparedAt: now }
+        : { emailPreparedCount: (stored.emailPreparedCount || 0) + 1, lastEmailPreparedAt: now }),
+    };
+    records[index] = updated;
+    writeDemoCustomerShares(records);
+    const action = channel === 'WHATSAPP' ? 'WHATSAPP_SHARE_PREPARED' : 'EMAIL_SHARE_PREPARED';
+    logAuditEvent(action, 'CUSTOMER_SHARE', shareId, null, {
+      shareId,
+      quoteGroupId: stored.quoteGroupId,
+      version: stored.version,
+      channel,
+      preparedAt: now,
+      recipientAvailable: prepared.recipientAvailable,
+    }, `${channel === 'WHATSAPP' ? 'WhatsApp' : 'Email'} delivery prepared; external sending is not claimed.`);
+    return prepared;
   };
 
   const createBooking = async (bookingData: Omit<Booking, 'id' | 'createdAt' | 'updatedAt' | 'bookingReference'>): Promise<Booking> => {
@@ -2354,9 +3098,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const body = await readApiResponse(response);
       const booking = body.booking as Booking;
       setBookings(prev => prev.some(item => item.id === booking.id) ? prev : [booking, ...prev]);
-      setQuotes(prev => prev.map(item => item.id === quoteId
-        ? { ...item, status: 'ACCEPTED', convertedBookingId: booking.id, updatedAt: new Date().toISOString() }
-        : item));
+      setQuotes(prev => prev.map(item => quote.quoteGroupId && item.quoteGroupId === quote.quoteGroupId
+        ? item.id === quoteId
+          ? { ...item, status: 'ACCEPTED', optionStatus: 'ACCEPTED', convertedBookingId: booking.id, updatedAt: new Date().toISOString() }
+          : { ...item, optionStatus: 'SUPERSEDED', updatedAt: new Date().toISOString() }
+        : item.id === quoteId
+          ? { ...item, status: 'ACCEPTED', convertedBookingId: booking.id, updatedAt: new Date().toISOString() }
+          : item));
       return booking;
     }
 
@@ -2379,7 +3127,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       travelEndDate: trip?.endDate || new Date(Date.now() + 5 * 86400000).toISOString().split('T')[0],
       assignedSalesEmployeeId: quote.salesEmployeeId || currentUser.employeeId,
       salesTeamId: quote.salesTeamId,
-      assignedOperationsEmployeeId: 'emp-05'
+      assignedOperationsEmployeeId: 'emp-05',
+      ...(quote.quoteGroupId ? { quoteGroupId: quote.quoteGroupId } : {}),
+      ...(quote.optionId ? { quoteOptionId: quote.optionId } : {}),
+      ...(quote.customerPackageSnapshot ? { customerPackageSnapshot: quote.customerPackageSnapshot } : {}),
     });
 
     const now = new Date().toISOString();
@@ -2409,7 +3160,15 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       confirmationStatus: 'REQUESTED', voucherStatus: 'PENDING', schemaVersion: '2B-5', createdAt: now, updatedAt: now,
     }))));
 
-    await updateQuote(quote.id, { status: 'ACCEPTED' });
+    if (quote.quoteGroupId) {
+      setQuotes(previous => previous.map(item => item.quoteGroupId === quote.quoteGroupId
+        ? item.id === quote.id
+          ? { ...item, status: 'ACCEPTED', optionStatus: 'ACCEPTED', convertedBookingId: booking.id }
+          : { ...item, optionStatus: 'SUPERSEDED' }
+        : item));
+    } else {
+      await updateQuote(quote.id, { status: 'ACCEPTED' });
+    }
 
     if (trip) {
       await updateTrip(trip.id, { status: 'BOOKED' });
@@ -2593,6 +3352,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Demo Controls
   const seedDemoData = () => {
+    writeDemoCustomerShares([]);
     setLeads(DEMO_LEADS);
     setCustomers(DEMO_CUSTOMERS);
     setCompanies(DEMO_COMPANIES);
@@ -2610,6 +3370,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const clearDemoData = () => {
+    writeDemoCustomerShares([]);
     setLeads(prev => prev.filter(l => !l.isDemo));
     setCustomers(prev => prev.filter(c => !c.isDemo));
     setCompanies(prev => prev.filter(c => !c.isDemo));
@@ -2685,6 +3446,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updateTrip,
         addItineraryDay,
         updateItineraryDay,
+        composeItineraryDayCustomerContent,
+        reviewItineraryDayCustomerContent,
         deleteItineraryDay,
         addItineraryItem,
         updateItineraryItem,
@@ -2699,6 +3462,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         assignLead,
         loadLead,
         recordLeadInteraction,
+        loadLeadConversation,
+        addLeadConversationEntry,
+        loadLeadWhatsAppContext,
+        sendLeadWhatsApp,
+        retryLeadWhatsApp,
+        listUnresolvedWhatsApp,
+        linkUnresolvedWhatsApp,
         createCustomer,
         updateCustomer,
         createTask,
@@ -2711,6 +3481,17 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         getQuoteBackupAccommodationOptions,
         getCustomerPackage,
         shareQuotePackage,
+        duplicateQuoteOption,
+        updateQuoteOption,
+        recommendQuoteOption,
+        refreshQuoteOptionFromTrip,
+        reorderQuoteOptions,
+        getQuoteOptionComparison,
+        createCustomerShare,
+        listCustomerShares,
+        revokeCustomerShare,
+        downloadCustomerSharePdf,
+        prepareCustomerShareDelivery,
         createBooking,
         updateBooking,
         approveAction,
