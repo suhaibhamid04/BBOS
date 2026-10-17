@@ -1,5 +1,7 @@
 # Booking Bridge OS - Project Handoff Context
 
+> Historical handoff: the stack, authentication, build artifact and “Production Ready” statements below are outdated. See the [2026-10-17 engineering audit](docs/audits/BBOS_EXECUTIVE_AUDIT.md) and [current architecture review](docs/audits/BBOS_ARCHITECTURE_REVIEW.md) for verified behavior, unresolved risks and test results. This document is retained as historical context.
+
 ## Project Goal
 **Booking Bridge OS** is a modular, AI-Powered Travel Business Operating System tailored for travel agencies operating in Kashmir, Jammu, Ladakh, and domestic India destinations. The core objective is to centralize and automate CRM, Sales Pipelines, Quotations, and Marketing campaigns using integrated AI Agents (Gemini) acting as copilots to human operators. 
 

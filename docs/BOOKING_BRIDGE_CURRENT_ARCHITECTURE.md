@@ -1,3 +1,5 @@
+> Historical architecture snapshot (2026-09-03). Superseded by the [2026-10-17 audit](audits/BBOS_EXECUTIVE_AUDIT.md) and [architecture review](audits/BBOS_ARCHITECTURE_REVIEW.md). Runtime, authentication, storage and build descriptions below are retained for historical context.
+
 # Booking Bridge OS — Current Architecture Audit
 
 > **Generated:** 2026-09-03  
