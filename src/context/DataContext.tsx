@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { APP_CONFIG } from '../config';
+import { readApiPages } from '../services/auth/readApiPages';
 import {
   CustomerRepo, CompanyRepo, ConversationRepo, MessageRepo,
   TaskRepo, PackageRepo, AuditLogRepo, AiRecommendationRepo,
@@ -741,15 +742,20 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Fetch from Firestore if not in DEMO mode
   useEffect(() => {
     if (APP_CONFIG.DEMO_MODE) return;
+    let disposed = false;
+    const controller = new AbortController();
     
     const loadData = async () => {
       setIsLoading(true);
       try {
         const fetchApi = async (endpoint: string) => {
-          const res = await fetch(endpoint, { headers: await authenticatedReadHeaders(currentUser.employeeId) });
-          const json = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(json.error || `API fetch failed (${res.status})`);
-          return json.data || [];
+          const headers = await authenticatedReadHeaders(currentUser.employeeId);
+          return readApiPages(endpoint, async url => {
+            const res = await fetch(url, { headers, signal: controller.signal });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(json.error || `API fetch failed (${res.status})`);
+            return json;
+          });
         };
 
         const loadErrors: DataContextType['dataLoadErrors'] = {};
@@ -807,6 +813,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           safely(canReadRates ? fetchApi('/api/activities/rates') : Promise.resolve([]))
         ]);
         
+        if (disposed) return;
         setLeads(fetchedLeads as any);
         setCustomers(fetchedCustomers as any);
         setCompanies(fetchedCompanies as any);
@@ -819,36 +826,37 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setAiActions(fetchedActions as any);
         setApprovals(fetchedApprovals as any);
         setAuditLogs(fetchedLogs as any);
-        if (fetchedPackages.length > 0) setPackages(fetchedPackages as any);
-        if (fetchedTrips.length > 0) setTrips(fetchedTrips as any);
-        if (fetchedHotels.length > 0) setHotels(fetchedHotels as any);
-        if (fetchedTransports.length > 0) setTransports(fetchedTransports as any);
-        if (fetchedDrivers.length > 0) setDrivers(fetchedDrivers as any);
-        if (fetchedActivities.length > 0) setActivities(fetchedActivities as any);
-        if (fetchedSuppliers.length > 0) setSuppliers(fetchedSuppliers as any);
-        if (fetchedVouchers.length > 0) setVouchers(fetchedVouchers as any);
+        setPackages(fetchedPackages as any);
+        setTrips(fetchedTrips as any);
+        setHotels(fetchedHotels as any);
+        setTransports(fetchedTransports as any);
+        setDrivers(fetchedDrivers as any);
+        setActivities(fetchedActivities as any);
+        setSuppliers(fetchedSuppliers as any);
+        setVouchers(fetchedVouchers as any);
         setAccommodationProperties(fetchedAccommProps as any);
         setRoomCategories(fetchedRoomCats as any);
-        if (fetchedRatePeriods.length > 0) setRatePeriods(fetchedRatePeriods as any);
-        if (fetchedNegRates.length > 0) setNegotiatedRates(fetchedNegRates as any);
+        setRatePeriods(fetchedRatePeriods as any);
+        setNegotiatedRates(fetchedNegRates as any);
 
         setVehicleCategories(fetchedVehicles as any);
-        if (fetchedDestinations.length > 0) setDestinations(fetchedDestinations as any);
-        if (fetchedRoutes.length > 0) setTransportRoutes(fetchedRoutes as any);
-        if (fetchedTransRates.length > 0) setTransportRatePeriods(fetchedTransRates as any);
-        if (fetchedTransSupps.length > 0) setTransportSupplements(fetchedTransSupps as any);
+        setDestinations(fetchedDestinations as any);
+        setTransportRoutes(fetchedRoutes as any);
+        setTransportRatePeriods(fetchedTransRates as any);
+        setTransportSupplements(fetchedTransSupps as any);
         
         setActivityMasters(fetchedActMasters as any);
-        if (fetchedActRates.length > 0) setActivityRatePeriods(fetchedActRates as any);
+        setActivityRatePeriods(fetchedActRates as any);
         setDataLoadErrors(loadErrors);
       } catch (err) {
         console.error("Failed to load data from Firestore:", err);
       } finally {
-        setIsLoading(false);
+        if (!disposed) setIsLoading(false);
       }
     };
     
     loadData();
+    return () => { disposed = true; controller.abort(); };
   }, [currentUser.employeeId, currentUser.role]);
 
   // Sync to local storage for instant responsiveness (only in DEMO_MODE)

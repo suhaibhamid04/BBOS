@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { RolePermissions, USER_ROLES, UserProfile, UserRole } from '../types';
 import { ROLE_DEFINITIONS, PRESET_USERS } from '../services/permissions';
 import { APP_CONFIG } from '../config';
@@ -49,14 +49,22 @@ const ProductionSignInGate: React.FC<ProductionSignInGateProps> = ({
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [formError, setFormError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const submissionPending = useRef(false);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (submissionPending.current) return;
+    submissionPending.current = true;
+    setSubmitting(true);
     setFormError('');
     try {
       await onLogin(email, password);
     } catch (loginError: any) {
       setFormError(loginError?.message || 'Unable to sign in.');
+    } finally {
+      submissionPending.current = false;
+      setSubmitting(false);
     }
   };
 
@@ -71,7 +79,7 @@ const ProductionSignInGate: React.FC<ProductionSignInGateProps> = ({
         </div>
 
         {(formError || error) && (
-          <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
+          <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
             {formError || error}
           </div>
         )}
@@ -86,7 +94,10 @@ const ProductionSignInGate: React.FC<ProductionSignInGateProps> = ({
           </button>
         ) : (
           <form onSubmit={submit} className="space-y-4">
+            <label htmlFor="employee-email" className="block text-sm font-medium text-slate-700">Employee email</label>
             <input
+              id="employee-email"
+              autoComplete="username"
               type="email"
               required
               value={email}
@@ -94,7 +105,10 @@ const ProductionSignInGate: React.FC<ProductionSignInGateProps> = ({
               placeholder="Employee email"
               className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm"
             />
+            <label htmlFor="employee-password" className="block text-sm font-medium text-slate-700">Password</label>
             <input
+              id="employee-password"
+              autoComplete="current-password"
               type="password"
               required
               value={password}
@@ -104,10 +118,10 @@ const ProductionSignInGate: React.FC<ProductionSignInGateProps> = ({
             />
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || submitting}
               className="w-full rounded-lg bg-[#7056EE] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
             >
-              {loading ? 'Verifying employee access…' : 'Sign in'}
+              {loading || submitting ? 'Verifying employee access…' : 'Sign in'}
             </button>
           </form>
         )}
@@ -127,6 +141,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isFirebaseAuthenticated, setIsFirebaseAuthenticated] = useState(false);
   const [isIdentityLoading, setIsIdentityLoading] = useState(!APP_CONFIG.DEMO_MODE);
   const [identityError, setIdentityError] = useState('');
+  const identityRequest = useRef(0);
 
   useEffect(() => {
     if (APP_CONFIG.DEMO_MODE && currentUser) {
@@ -138,21 +153,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [currentUser]);
 
   const resolveFirebaseUser = useCallback(async (firebaseUser: User): Promise<UserProfile> => {
+    const request = ++identityRequest.current;
     setIsIdentityLoading(true);
     setIdentityError('');
     try {
       const employee = await fetchAuthoritativeIdentity(firebaseUser);
+      if (request !== identityRequest.current) return employee;
       setCurrentUser(employee);
       setIsFirebaseAuthenticated(true);
       return employee;
     } catch (error: any) {
+      if (request !== identityRequest.current) throw error;
       setCurrentUser(null);
       setIsFirebaseAuthenticated(true);
       const message = error?.message || 'This Firebase account is not authorized for BBOS.';
       setIdentityError(message);
       throw error;
     } finally {
-      setIsIdentityLoading(false);
+      if (request === identityRequest.current) setIsIdentityLoading(false);
     }
   }, []);
 
@@ -173,6 +191,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           // The access gate renders the authoritative server error.
         });
       } else {
+        identityRequest.current++;
         setIsFirebaseAuthenticated(false);
         setIdentityError('');
         setIsIdentityLoading(false);
@@ -182,6 +201,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     return () => {
       active = false;
+      identityRequest.current++;
       unsubscribe();
     };
   }, [resolveFirebaseUser]);
@@ -217,6 +237,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = async () => {
+    identityRequest.current++;
     try {
       if (auth) await firebaseSignOut(auth);
     } finally {
