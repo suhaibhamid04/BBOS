@@ -18,6 +18,7 @@ import type {
 } from '../../src/services/payment/paymentStorageProvider.js';
 import { InMemoryConversionStorageProvider } from '../../src/services/conversion/conversionStorageProvider.js';
 import type { LifecycleStorageProvider } from './bookingLifecycleService.js';
+import type { VoucherStorageProvider } from './voucherService.js';
 import type { ConfirmationStorageProvider } from './serviceConfirmationService.js';
 import type {
   OperationalBookingBundle,
@@ -292,9 +293,35 @@ export const demoPaymentStorageProvider: PaymentStorageProvider = {
 };
 
 export const demoLifecycleStorageProvider: LifecycleStorageProvider = {
+  async runTransaction(operation) {
+    return store.runTransaction(tx => operation({
+      getBooking: id => tx.get('bookings', id),
+      updateBooking: async (id, data) => { tx.update('bookings', id, data); },
+      logAuditEvent: async audit => { tx.set('audit_logs', audit.id, audit); },
+    }));
+  },
   async getBooking(bookingId) { return store.rawGet('bookings', bookingId) as Booking | null; },
   async updateBooking(bookingId, updates) { store.rawUpdate('bookings', bookingId, updates); },
   async logAuditEvent(audit) { store.rawSet('audit_logs', audit.id, audit); },
+};
+
+export const demoVoucherStorageProvider: VoucherStorageProvider = {
+  async runTransaction(operation) {
+    return store.runTransaction(tx => operation({
+      getBooking: id => tx.get('bookings', id),
+      getServicesByBooking: async bookingId => ({
+        accommodations: await tx.findByField('booking_accommodations', 'bookingId', bookingId, 500),
+        transports: await tx.findByField('booking_transports', 'bookingId', bookingId, 500),
+        activities: await tx.findByField('booking_activities', 'bookingId', bookingId, 500),
+      }),
+      getVouchersForBooking: id => tx.findByField('vouchers', 'bookingId', id, 500),
+      saveVoucher: async voucher => { tx.set('vouchers', voucher.id, voucher); },
+      updateAccommodation: async (id, data) => { tx.update('booking_accommodations', id, data); },
+      updateTransport: async (id, data) => { tx.update('booking_transports', id, data); },
+      updateActivity: async (id, data) => { tx.update('booking_activities', id, data); },
+      logAuditEvent: async audit => { tx.set('audit_logs', audit.id, audit); },
+    }));
+  },
 };
 
 export const demoReservationsAssignmentStorage: ReservationsAssignmentStorage = {

@@ -4,7 +4,12 @@ service cloud.firestore {
 
     // Helper functions for Authentication & Role Checking
     function isAuthenticated() {
-      return request.auth != null;
+      // Remaining legacy client paths must not admit arbitrary Firebase users
+      // or employees deactivated through the authoritative employee API.
+      return request.auth != null
+        && exists(/databases/$(database)/documents/employees/$(request.auth.uid))
+        && getUserData().active == true
+        && (!('firebaseUid' in getUserData()) || getUserData().firebaseUid == request.auth.uid);
     }
 
     function getUserData() {
@@ -133,7 +138,7 @@ service cloud.firestore {
 
     // 5. Conversations Collection
     match /conversations/{conversationId} {
-      allow read, write: if isAuthenticated();
+      allow read, create, update: if isAuthenticated();
       allow delete: if isAdmin();
     }
 
@@ -198,7 +203,8 @@ service cloud.firestore {
 
     // 10. Trips & Itinerary Collections
     match /trips/{tripId} {
-      allow read: if isSalesExecutive() || isOperations() || isAccounts();
+      // Reads use the scoped API and its role-specific financial projection.
+      allow read: if false;
       // Stage D2A: commercial Trip creation and updates are server-authoritative.
       // The Admin SDK writes only after the centralized policy has authorized
       // the stable employee owner/team and server-derived financial fields.
@@ -209,7 +215,7 @@ service cloud.firestore {
     }
 
     match /itinerary_days/{dayId} {
-      allow read: if isSalesExecutive() || isOperations();
+      allow read: if false;
       // D2B: the parent Trip is loaded and authorized by Express before every
       // itinerary mutation. Client-side writes cannot bypass that boundary.
       allow create, update, delete: if false;
@@ -319,71 +325,21 @@ service cloud.firestore {
     // =========================================================================
 
     match /booking_accommodations/{docId} {
-      // D3A Booking detail reads are resource-scoped and projected by Express.
-      allow read: if false;
-      allow create: if isAdmin(); // Created via Server Conversion Engine
-      
-      // D3B supplier-confirmation fields are server-only for every browser role.
-      // Sales may modify ONLY guestNames/specialRequests; Operations may modify
-      // unrelated legacy operational fields until their later migration.
-      allow update: if !request.resource.data.diff(resource.data).affectedKeys().hasAny([
-          'sourceQuoteServiceId', 'confirmationStatus', 'supplierConfirmationCode',
-          'allocatedRoomNumbers', 'supplierNotes', 'supplierConfirmation'
-        ]) && (
-          isAdmin() ||
-          (isOperations() && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
-            'bookingId', 'tripId', 'customerId', 'propertyId', 'propertyName', 'roomCategoryId',
-            'roomCategoryName', 'mealPlan', 'checkInDate', 'checkOutDate', 'nightsCount',
-            'roomsCount', 'adultsCount', 'childrenCount', 'schemaVersion'
-          ])) ||
-          (isSalesExecutive() && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'guestNames', 'specialRequests'
-          ]))
-        );
-      allow delete: if isAdmin();
+      // Scope, state transitions, supplierConfirmation, guestNames and
+      // specialRequests are validated by server workflows for every role.
+      allow read, create, update, delete: if false;
     }
 
     match /booking_transports/{docId} {
-      allow read: if false;
-      allow create: if isAdmin(); // Created via Server Conversion Engine
-      
-      // D3C confirmation/dispatch fields are server-only for every browser
-      // role; unrelated legacy edits remain unchanged until their own slice.
-      allow update: if !request.resource.data.diff(resource.data).affectedKeys().hasAny([
-          'confirmationStatus', 'driverId', 'driverName', 'driverPhone',
-          'vehicleRegistrationNumber', 'pickupTime', 'operationalNotes', 'supplierNotes'
-        ]) && (
-          isAdmin() ||
-          (isOperations() && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
-            'bookingId', 'tripId', 'customerId', 'vehicleCategoryId', 'vehicleCategoryName',
-            'routeId', 'routeName', 'serviceDate', 'endDate', 'daysCount', 'pickupLocation',
-            'dropoffLocation', 'pickupTime', 'schemaVersion'
-          ])) ||
-          (isSalesExecutive() && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'passengerCount', 'specialRequests'
-          ]))
-        );
-      allow delete: if isAdmin();
+      // confirmationStatus, driverName, driverPhone and other fields are
+      // server-authoritative; no cross-booking passengerCount write bypass.
+      allow read, create, update, delete: if false;
     }
 
     match /booking_activities/{docId} {
-      allow read: if false;
-      allow create: if isAdmin(); // Created via Server Conversion Engine
-      
-      allow update: if !request.resource.data.diff(resource.data).affectedKeys().hasAny([
-          'confirmationStatus', 'supplierConfirmationCode', 'ticketNumbers',
-          'assignedGuideName', 'assignedGuidePhone', 'operationalNotes'
-        ]) && (
-          isAdmin() ||
-          (isOperations() && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
-            'bookingId', 'tripId', 'customerId', 'activityMasterId', 'activityName',
-            'destinationId', 'destinationName', 'serviceDate', 'sessionTime', 'schemaVersion'
-          ])) ||
-          (isSalesExecutive() && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'participantCount', 'leadGuestName', 'specialRequests'
-          ]))
-        );
-      allow delete: if isAdmin();
+      // confirmationStatus, supplierConfirmationCode, ticketNumbers and
+      // participantCount changes require the server's resource policy.
+      allow read, create, update, delete: if false;
     }
 
     // =========================================================================
@@ -465,8 +421,7 @@ service cloud.firestore {
 
     match /vouchers/{voucherId} {
       allow read: if isSalesExecutive() || isOperations();
-      allow create, update: if isOperations();
-      allow delete: if isAdmin();
+      allow create, update, delete: if false;
     }
 
     // 13. Packages
@@ -483,6 +438,7 @@ service cloud.firestore {
       // client audit behavior for unmigrated domains until their Stage D slice.
       allow create: if isAuthenticated() &&
                     request.resource.data.actorId != null &&
+                    request.resource.data.actorId == getUserData().get('employeeId', getUserData().get('id', request.auth.uid)) &&
                     request.resource.data.entityType != 'PAYMENT' &&
                     request.resource.data.entityType != 'SUPPLIER_PAYMENT' &&
                     request.resource.data.entityType != 'EMPLOYEE' &&
@@ -505,6 +461,9 @@ service cloud.firestore {
                       'PAYMENT_REJECTED',
                       'PAYMENT_VOIDED',
                       'BOOKING_CONFIRMED_FROM_PAYMENT',
+                      'BOOKING_DISPATCHED_TO_OPERATIONS',
+                      'BOOKING_CANCELLED',
+                      'VOUCHERS_GENERATED',
                       'SUPPLIER_PAYMENT_RECORDED',
                       'SUPPLIER_PAYMENT_VERIFIED',
                       'SUPPLIER_PAYMENT_REJECTED',

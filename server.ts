@@ -3,6 +3,7 @@ import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { apiRouter } from './server/routes/api.js';
+import { productionFrontend } from './server/frontend.js';
 
 async function startServer() {
   const app = express();
@@ -20,6 +21,7 @@ async function startServer() {
 
   // Mount API routes FIRST
   app.use('/api', apiRouter);
+  app.use('/api', (_req, res) => res.status(404).json({ error: 'API route not found.' }));
 
   // Vite middleware for development vs static build in production
   if (process.env.NODE_ENV !== 'production') {
@@ -30,10 +32,7 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
+    app.use(productionFrontend(distPath));
   }
 
   app.listen(PORT, '0.0.0.0', () => {

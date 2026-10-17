@@ -209,9 +209,7 @@ describe('Stage D3C Booking authority lockdown', () => {
     const rules = await Bun.file(new URL('../../firestore.rules', import.meta.url)).text();
     const transportRules = rules.match(/match \/booking_transports\/\{docId\} \{([\s\S]*?)\n    \}/)?.[1] ?? '';
     const activityRules = rules.match(/match \/booking_activities\/\{docId\} \{([\s\S]*?)\n    \}/)?.[1] ?? '';
-    expect(transportRules).toContain("'confirmationStatus'");
-    expect(transportRules).toContain("'driverName'");
-    expect(activityRules).toContain("'confirmationStatus'");
-    expect(activityRules).toContain("'supplierConfirmationCode'");
+    expect(transportRules).toContain('allow read, create, update, delete: if false;');
+    expect(activityRules).toContain('allow read, create, update, delete: if false;');
   });
 });

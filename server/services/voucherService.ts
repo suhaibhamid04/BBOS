@@ -8,6 +8,7 @@
 // =====================================================
 
 import { UserRole, AuditLog, Voucher, VoucherType } from '../../src/types';
+import { randomUUID } from 'node:crypto';
 import {
   Booking,
   BookingAccommodation,
@@ -15,11 +16,15 @@ import {
   BookingActivity,
 } from '../../src/types/booking';
 import { getAdminDb } from '../firebaseAdmin.js';
+import { canAccessOperationalBooking } from '../authorization/operationalBookingAccess.js';
+import { firestoreData } from '../storage/firestoreData.js';
 
 // ── Actor & DTOs ──────────────────────────────────────────────────────────────
 
 export interface VoucherActor {
   id: string;
+  employeeId: string;
+  active: boolean;
   uid?: string;
   name: string;
   email?: string;
@@ -49,16 +54,16 @@ export class VoucherError extends Error {
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function generateVoucherId(): string {
-  return `VCHR-${Date.now().toString(36).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+  return `VCHR-${randomUUID()}`;
 }
 
 function generateAuditId(): string {
-  return `AUDIT-VC-${Date.now().toString(36).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+  return `AUDIT-VC-${randomUUID()}`;
 }
 
 // ── Storage abstraction ────────────────────────────────────────────────────────
 
-export interface VoucherStorageProvider {
+export interface VoucherTransaction {
   getBooking(bookingId: string): Promise<Booking | null>;
   getServicesByBooking(bookingId: string): Promise<{
     accommodations: BookingAccommodation[];
@@ -73,8 +78,13 @@ export interface VoucherStorageProvider {
   logAuditEvent(auditLog: AuditLog): Promise<void>;
 }
 
+export interface VoucherStorageProvider {
+  runTransaction<T>(operation: (transaction: VoucherTransaction) => Promise<T>): Promise<T>;
+}
+
 // In-memory implementation for testing
 export class InMemoryVoucherStorageProvider implements VoucherStorageProvider {
+  private transactionQueue: Promise<void> = Promise.resolve();
   private bookings: Map<string, Booking> = new Map();
   private accommodations: Map<string, BookingAccommodation> = new Map();
   private transports: Map<string, BookingTransport> = new Map();
@@ -141,11 +151,64 @@ export class InMemoryVoucherStorageProvider implements VoucherStorageProvider {
   getAccommodationSync(id: string): BookingAccommodation | undefined { return this.accommodations.get(id); }
   getTransportSync(id: string): BookingTransport | undefined { return this.transports.get(id); }
   getActivitySync(id: string): BookingActivity | undefined { return this.activities.get(id); }
+
+  async runTransaction<T>(operation: (transaction: VoucherTransaction) => Promise<T>): Promise<T> {
+    const previous = this.transactionQueue;
+    let release!: () => void;
+    this.transactionQueue = new Promise<void>(resolve => { release = resolve; });
+    await previous;
+    try {
+      const staged = new InMemoryVoucherStorageProvider({
+        bookings: [...this.bookings.values()],
+        accommodations: [...this.accommodations.values()],
+        transports: [...this.transports.values()],
+        activities: [...this.activities.values()],
+        vouchers: [...this.vouchers.values()],
+      });
+      staged.auditLogs = new Map(this.auditLogs);
+      const result = await operation(staged);
+      this.accommodations = staged.accommodations;
+      this.transports = staged.transports;
+      this.activities = staged.activities;
+      this.vouchers = staged.vouchers;
+      this.auditLogs = staged.auditLogs;
+      return result;
+    } finally { release(); }
+  }
 }
 
 // Firestore production implementation
 export class FirestoreVoucherStorageProvider implements VoucherStorageProvider {
   private db() { return getAdminDb(); }
+
+  async runTransaction<T>(operation: (transaction: VoucherTransaction) => Promise<T>): Promise<T> {
+    const db = this.db();
+    return db.runTransaction(tx => operation({
+      getBooking: async id => {
+        const snap = await tx.get(db.collection('bookings').doc(id));
+        return snap.exists ? { ...snap.data(), id: snap.id } as Booking : null;
+      },
+      getServicesByBooking: async bookingId => {
+        const read = async (collection: string) => {
+          const snapshot = await tx.get(db.collection(collection).where('bookingId', '==', bookingId));
+          return snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+        };
+        const [accommodations, transports, activities] = await Promise.all([
+          read('booking_accommodations'), read('booking_transports'), read('booking_activities'),
+        ]);
+        return { accommodations: accommodations as BookingAccommodation[], transports: transports as BookingTransport[], activities: activities as BookingActivity[] };
+      },
+      getVouchersForBooking: async bookingId => {
+        const snapshot = await tx.get(db.collection('vouchers').where('bookingId', '==', bookingId));
+        return snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }) as Voucher);
+      },
+      saveVoucher: async voucher => { tx.set(db.collection('vouchers').doc(voucher.id), firestoreData(voucher)); },
+      updateAccommodation: async (id, data) => { tx.update(db.collection('booking_accommodations').doc(id), data); },
+      updateTransport: async (id, data) => { tx.update(db.collection('booking_transports').doc(id), data); },
+      updateActivity: async (id, data) => { tx.update(db.collection('booking_activities').doc(id), data); },
+      logAuditEvent: async audit => { tx.set(db.collection('audit_logs').doc(audit.id), audit); },
+    }));
+  }
 
   async getBooking(id: string): Promise<Booking | null> {
     const snap = await this.db().collection('bookings').doc(id).get();
@@ -171,7 +234,7 @@ export class FirestoreVoucherStorageProvider implements VoucherStorageProvider {
   }
 
   async saveVoucher(voucher: Voucher): Promise<void> {
-    await this.db().collection('vouchers').doc(voucher.id).set(voucher);
+    await this.db().collection('vouchers').doc(voucher.id).set(firestoreData(voucher));
   }
 
   async updateAccommodation(id: string, data: Partial<BookingAccommodation>): Promise<void> {
@@ -213,114 +276,127 @@ export class VoucherService {
    *   - booking.confirmationProgress.allConfirmed === true
    */
   async generateVouchers(bookingId: string, actor: VoucherActor): Promise<GenerateVouchersResult> {
-    if (!VOUCHER_ROLES.includes(actor.role)) {
+    if (!VOUCHER_ROLES.includes(actor.role) || actor.active !== true || !actor.employeeId?.trim()) {
       throw new VoucherError(403, 'FORBIDDEN', `Role "${actor.role}" is not authorized to generate vouchers.`);
     }
 
-    const booking = await this.storageProvider.getBooking(bookingId);
-    if (!booking) {
-      throw new VoucherError(404, 'BOOKING_NOT_FOUND', `Booking "${bookingId}" not found.`);
-    }
+    return this.storageProvider.runTransaction(async transaction => {
+      const booking = await transaction.getBooking(bookingId);
+      if (!booking) {
+        throw new VoucherError(404, 'BOOKING_NOT_FOUND', `Booking "${bookingId}" not found.`);
+      }
 
-    if (booking.status !== 'IN_OPERATIONS') {
-      throw new VoucherError(
-        422,
-        'INVALID_BOOKING_STATUS',
-        `Vouchers can only be generated for IN_OPERATIONS bookings. Current status: "${booking.status}".`
-      );
-    }
+      if (!canAccessOperationalBooking(actor, booking, 'GENERATE_VOUCHERS')) {
+        throw new VoucherError(403, 'FORBIDDEN', 'The employee is not assigned to this booking.');
+      }
 
-    if (!booking.confirmationProgress?.allConfirmed) {
-      throw new VoucherError(
-        422,
-        'SERVICES_NOT_FULLY_CONFIRMED',
-        'All services must be CONFIRMED before vouchers can be generated.'
-      );
-    }
+      if (booking.status !== 'IN_OPERATIONS') {
+        throw new VoucherError(
+          422,
+          'INVALID_BOOKING_STATUS',
+          `Vouchers can only be generated for IN_OPERATIONS bookings. Current status: "${booking.status}".`
+        );
+      }
 
-    const { accommodations, transports, activities } = await this.storageProvider.getServicesByBooking(bookingId);
+      if (!booking.confirmationProgress?.allConfirmed) {
+        throw new VoucherError(
+          422,
+          'SERVICES_NOT_FULLY_CONFIRMED',
+          'All services must be CONFIRMED before vouchers can be generated.'
+        );
+      }
 
-    // Idempotency: return existing vouchers if already generated
-    const existingVouchers = await this.storageProvider.getVouchersForBooking(bookingId);
-    if (existingVouchers.length > 0) {
+      const { accommodations, transports, activities } = await transaction.getServicesByBooking(bookingId);
+      const services = [...accommodations, ...transports, ...activities];
+      if (services.some(service => service.confirmationStatus !== 'CONFIRMED')) {
+        throw new VoucherError(422, 'SERVICES_NOT_FULLY_CONFIRMED', 'Stored service confirmations must agree with booking progress.');
+      }
+
+      // Idempotency: return existing vouchers if already generated
+      const existingVouchers = await transaction.getVouchersForBooking(bookingId);
+      if (existingVouchers.length > 0) {
+        if (services.some(service => !existingVouchers.some(voucher => voucher.id === service.voucherId))) {
+          throw new VoucherError(409, 'INCOMPLETE_VOUCHERS', 'Existing vouchers are incomplete. Reconcile the service links before retrying.');
+        }
+        return {
+          success: true,
+          vouchers: existingVouchers,
+          message: `Vouchers have already been generated for booking "${bookingId}".`,
+        };
+      }
+
+      const now = new Date().toISOString();
+      const generatedVouchers: Voucher[] = [];
+
+      // Generate one voucher per accommodation service
+      for (const acc of accommodations) {
+        const voucher: Voucher = {
+          id: generateVoucherId(),
+          bookingId,
+          tripId: acc.tripId,
+          type: 'HOTEL' as VoucherType,
+          status: 'GENERATED',
+          generatedAt: now,
+          isDemo: booking.isDemo,
+        };
+        await transaction.saveVoucher(voucher);
+        await transaction.updateAccommodation(acc.id, { voucherId: voucher.id, voucherStatus: 'GENERATED', updatedAt: now });
+        generatedVouchers.push(voucher);
+      }
+
+      // Generate one voucher per transport service
+      for (const trans of transports) {
+        const voucher: Voucher = {
+          id: generateVoucherId(),
+          bookingId,
+          tripId: trans.tripId,
+          type: 'TRANSPORT' as VoucherType,
+          status: 'GENERATED',
+          generatedAt: now,
+          isDemo: booking.isDemo,
+        };
+        await transaction.saveVoucher(voucher);
+        await transaction.updateTransport(trans.id, { voucherId: voucher.id, voucherStatus: 'GENERATED', updatedAt: now });
+        generatedVouchers.push(voucher);
+      }
+
+      // Generate one voucher per activity service
+      for (const act of activities) {
+        const voucher: Voucher = {
+          id: generateVoucherId(),
+          bookingId,
+          tripId: act.tripId,
+          type: 'ACTIVITY' as VoucherType,
+          status: 'GENERATED',
+          generatedAt: now,
+          isDemo: booking.isDemo,
+        };
+        await transaction.saveVoucher(voucher);
+        await transaction.updateActivity(act.id, { voucherId: voucher.id, voucherStatus: 'GENERATED', updatedAt: now });
+        generatedVouchers.push(voucher);
+      }
+
+      // Audit log
+      const auditLog: AuditLog = {
+        id: generateAuditId(),
+        timestamp: now,
+        actorType: 'HUMAN',
+        actorId: actor.employeeId,
+        actorName: `${actor.name} (${actor.role})`,
+        action: 'VOUCHERS_GENERATED',
+        entityType: 'BOOKING',
+        entityId: bookingId,
+        before: {},
+        after: { voucherCount: generatedVouchers.length, voucherIds: generatedVouchers.map(v => v.id) },
+        reason: `${generatedVouchers.length} voucher(s) generated by ${actor.name} (${actor.role})`,
+      };
+      await transaction.logAuditEvent(auditLog);
+
       return {
         success: true,
-        vouchers: existingVouchers,
-        message: `Vouchers have already been generated for booking "${bookingId}".`,
+        vouchers: generatedVouchers,
+        message: `Successfully generated ${generatedVouchers.length} voucher(s) for booking "${bookingId}".`,
       };
-    }
-
-    const now = new Date().toISOString();
-    const generatedVouchers: Voucher[] = [];
-
-    // Generate one voucher per accommodation service
-    for (const acc of accommodations) {
-      const voucher: Voucher = {
-        id: generateVoucherId(),
-        bookingId,
-        tripId: acc.tripId,
-        type: 'HOTEL' as VoucherType,
-        status: 'GENERATED',
-        generatedAt: now,
-        isDemo: booking.isDemo,
-      };
-      await this.storageProvider.saveVoucher(voucher);
-      await this.storageProvider.updateAccommodation(acc.id, { voucherId: voucher.id, voucherStatus: 'GENERATED', updatedAt: now });
-      generatedVouchers.push(voucher);
-    }
-
-    // Generate one voucher per transport service
-    for (const trans of transports) {
-      const voucher: Voucher = {
-        id: generateVoucherId(),
-        bookingId,
-        tripId: trans.tripId,
-        type: 'TRANSPORT' as VoucherType,
-        status: 'GENERATED',
-        generatedAt: now,
-        isDemo: booking.isDemo,
-      };
-      await this.storageProvider.saveVoucher(voucher);
-      await this.storageProvider.updateTransport(trans.id, { voucherId: voucher.id, voucherStatus: 'GENERATED', updatedAt: now });
-      generatedVouchers.push(voucher);
-    }
-
-    // Generate one voucher per activity service
-    for (const act of activities) {
-      const voucher: Voucher = {
-        id: generateVoucherId(),
-        bookingId,
-        tripId: act.tripId,
-        type: 'ACTIVITY' as VoucherType,
-        status: 'GENERATED',
-        generatedAt: now,
-        isDemo: booking.isDemo,
-      };
-      await this.storageProvider.saveVoucher(voucher);
-      await this.storageProvider.updateActivity(act.id, { voucherId: voucher.id, voucherStatus: 'GENERATED', updatedAt: now });
-      generatedVouchers.push(voucher);
-    }
-
-    // Audit log
-    const auditLog: AuditLog = {
-      id: generateAuditId(),
-      timestamp: now,
-      actorType: 'HUMAN',
-      actorId: actor.uid || actor.id,
-      actorName: `${actor.name} (${actor.role})`,
-      action: 'VOUCHERS_GENERATED',
-      entityType: 'BOOKING',
-      entityId: bookingId,
-      before: {},
-      after: { voucherCount: generatedVouchers.length, voucherIds: generatedVouchers.map(v => v.id) },
-      reason: `${generatedVouchers.length} voucher(s) generated by ${actor.name} (${actor.role})`,
-    };
-    await this.storageProvider.logAuditEvent(auditLog);
-
-    return {
-      success: true,
-      vouchers: generatedVouchers,
-      message: `Successfully generated ${generatedVouchers.length} voucher(s) for booking "${bookingId}".`,
-    };
+    });
   }
 }

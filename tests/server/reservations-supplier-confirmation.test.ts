@@ -275,8 +275,8 @@ describe('Stage D3B Reservations supplier confirmation', () => {
 
   it('Firestore rules block direct browser writes to migrated confirmation fields', async () => {
     const rules = await Bun.file('firestore.rules').text();
-    expect(rules).toContain("'supplierConfirmation'");
-    expect(rules).toContain("'confirmationStatus'");
-    expect(rules).toContain('D3B supplier-confirmation fields are server-only');
+    const start = rules.indexOf('match /booking_accommodations/');
+    const block = rules.slice(start, rules.indexOf('\n    }', start));
+    expect(block).toContain('allow read, create, update, delete: if false;');
   });
 });

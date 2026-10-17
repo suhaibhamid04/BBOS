@@ -2,6 +2,7 @@ import { Booking } from '../../types/booking';
 import { PaymentRecord } from '../../types/payment';
 import { AuditLog } from '../../types';
 import { getAdminDb } from '../../../server/firebaseAdmin';
+import { firestoreData } from '../../../server/storage/firestoreData.js';
 
 export interface PaymentTransaction {
   getBooking(bookingId: string): Promise<Booking | null>;
@@ -225,7 +226,7 @@ export class FirestorePaymentStorageProvider implements PaymentStorageProvider {
 
   async savePayment(payment: PaymentRecord): Promise<void> {
     const db = getAdminDb();
-    await db.collection('payments').doc(payment.id).set(payment);
+    await db.collection('payments').doc(payment.id).set(firestoreData(payment));
   }
 
   async updateBooking(bookingId: string, data: Partial<Booking>): Promise<void> {
@@ -255,13 +256,13 @@ export class FirestorePaymentStorageProvider implements PaymentStorageProvider {
           return snap.docs.map((d) => d.data() as PaymentRecord);
         },
         setPayment: (pId: string, data: PaymentRecord) => {
-          firestoreTx.set(db.collection('payments').doc(pId), data);
+          firestoreTx.set(db.collection('payments').doc(pId), firestoreData(data));
         },
         updateBooking: (bId: string, data: Partial<Booking>) => {
           firestoreTx.update(db.collection('bookings').doc(bId), data);
         },
         updatePayment: (pId: string, data: Partial<PaymentRecord>) => {
-          firestoreTx.update(db.collection('payments').doc(pId), data);
+          firestoreTx.update(db.collection('payments').doc(pId), firestoreData(data));
         },
         setAuditLog: (aId: string, aLog: AuditLog) => {
           firestoreTx.set(db.collection('audit_logs').doc(aId), aLog);

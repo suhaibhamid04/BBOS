@@ -29,6 +29,8 @@ const SUPPORTED_ACTIONS: Record<AuthorizationResource, readonly AuthorizationAct
     'MANAGE_OPERATIONAL_ISSUE',
     'REQUEST_OPERATIONAL_SPEND',
     'APPROVE_OPERATIONAL_SPEND',
+    'DISPATCH_OPERATIONS',
+    'GENERATE_VOUCHERS',
   ],
   INVENTORY: ['READ_INVENTORY'],
   ATTRIBUTION_REPORT: ['READ_AGGREGATE'],
@@ -174,6 +176,7 @@ function roleScope(
   }
 
   if (role === 'Operations') {
+    if (resource === 'BOOKING' && ['DISPATCH_OPERATIONS', 'GENERATE_VOUCHERS'].includes(action)) return 'ASSIGNED';
     if (resource === 'SUPPLIER_PAYABLE' && action === 'READ_SUPPLIER_PAYABLE') return 'ASSIGNED';
     if (
       (resource === 'TRIP' || resource === 'BOOKING') &&

@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { requireRole } from '../middleware/auth.js';
 import { calculateActivityCost } from '../../src/services/activityEngine.js';
-import { sanitizeFinancialData } from '../middleware/financialGuard.js';
+import { projectSupplierCalculation } from '../middleware/financialGuard.js';
 import { inventoryManagementService, InventoryManagementError, type InventoryActor } from '../services/inventoryManagementService.js';
 import { APP_CONFIG } from '../../src/config.js';
 import { DEMO_TRIPS } from '../../src/services/demoData.js';
@@ -64,6 +64,6 @@ activitiesRouter.post('/calculate-rate', requireRole([...readRoles]), async (req
     if (!activeRate) return res.json({ success: true, data: { available: false, error: 'No active rate found for the specified activity and date.' } });
     const result = calculateActivityCost({ ratePeriod: activeRate, params: { adults, children, infants, vehicles, groups, tickets, hours, days, sessions, units } });
     const supplier = await inventoryManagementService.supplierSnapshot(activeRate.supplierId);
-    return res.json({ success: true, data: sanitizeFinancialData({ ...result, rateId: activeRate.id, supplierId: activeRate.supplierId, supplierName: supplier?.name, supplierCost: result.totalAmount, pricingModel: activeRate.pricingModel, needsConfirmation: ['NEEDS_CONFIRMATION', 'ON_REQUEST'].includes(activeRate.availabilityStatus), taxDescription: 'GST INCLUDED' }, req.user!.role, financialAuthorization) });
+    return res.json({ success: true, data: projectSupplierCalculation({ ...result, rateId: activeRate.id, supplierId: activeRate.supplierId, supplierName: supplier?.name, supplierCost: result.totalAmount, pricingModel: activeRate.pricingModel, needsConfirmation: ['NEEDS_CONFIRMATION', 'ON_REQUEST'].includes(activeRate.availabilityStatus), taxDescription: 'GST INCLUDED' }, req.user!.role, financialAuthorization) });
   } catch (error) { return fail(error, res, 'POST /activities/calculate-rate'); }
 });

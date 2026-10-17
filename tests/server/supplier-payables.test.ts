@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, spyOn } from 'bun:test';
 import {
   InMemorySupplierPayableStorageProvider,
   SupplierPayableService,
@@ -142,6 +142,18 @@ const paymentInput = {
 };
 
 describe('Stage D4B supplier payables', () => {
+  it('loads complete settlement and payable details independently of the capped global registry', async () => {
+    const { storage, service } = setup();
+    const item = await obligation(service);
+    const recorded = await service.recordPayment('booking-d4b-01', item.obligationId, paymentInput, accountsRecorder);
+    await service.verifyPayment('booking-d4b-01', item.obligationId, recorded.payment.id, accountsVerifier);
+    spyOn(storage, 'listSourceBundles').mockRejectedValue(new Error('registry capacity reached'));
+    spyOn(storage, 'listPayments').mockResolvedValue([]);
+    const detail = await service.getPayable('booking-d4b-01', item.obligationId, accountsRecorder);
+    const settlement = await service.getBookingSettlement('booking-d4b-01', accountsRecorder);
+    expect(detail).toMatchObject({ outstandingMinor: 1_600_000 });
+    expect(settlement.summaries?.[0]).toMatchObject({ totalOutstandingMinor: 1_600_000 });
+  });
   it('allows Accounts, Founder, and Admin to read company supplier dues', async () => {
     for (const accessActor of [accountsRecorder, founder, actor('Admin', 'employee-admin-01')]) {
       const { service } = setup();

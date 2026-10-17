@@ -5,27 +5,13 @@ import type {
   AuthorizationResource,
 } from './policyTypes.js';
 
-const SUPPLIER_KEYS = new Set([
-  'supplierCost', 'internalCost', 'supplierPayment', 'supplierNotes', 'internalNotes',
-  'negotiatedRate', 'negotiatedBaseRate', 'standardBaseRate', 'supplierContractDiscount',
-  'internalSupplierNotes', 'baseRate', 'supplierCostPerNight', 'frozenSupplierUnitRate',
-  'frozenSupplementsCost', 'frozenTotalSupplierCost', 'accommodationSupplierCost',
-  'transportSupplierCost', 'activitySupplierCost', 'otherSupplierCosts',
-  'authoritativeSupplierCost', 'quotedSupplierCost', 'authoritativeTotalSupplierCost',
-  'quotedTotalSupplierCost', 'supplementCost', 'baseSupplierCost',
-  'additionalChargesTotal', 'totalSupplierCost',
-  'supplierCostBreakdown',
-  'packageSupplierRate', 'contractedTotalSupplierCost', 'originalContractedTotal',
-  'nightlyRateBreakdown',
-]);
+import { SUPPLIER_COST_FIELDS, PROFIT_MARGIN_FIELDS } from './financialFields.js';
 
-const PROFIT_KEYS = new Set([
-  'grossProfit', 'grossMargin', 'profit', 'commercialDiscount',
-  'estimatedGrossProfit', 'estimatedGrossMargin',
-  'pricingInput', 'commercialApproval',
-]);
+const SUPPLIER_KEYS = new Set(SUPPLIER_COST_FIELDS);
+const PROFIT_KEYS = new Set(PROFIT_MARGIN_FIELDS);
 
 const COMMERCIAL_AMOUNT_KEYS = new Set([
+  'sellingPrice',
   'totalSellingPrice', 'totalAmount', 'finalAmount', 'discountAmount',
   'amountReceived', 'amountPending', 'overpaidAmount', 'paymentSummary',
 ]);

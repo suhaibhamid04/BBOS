@@ -26,6 +26,9 @@ import {
   VoucherError,
 } from '../services/voucherService.js';
 import { sanitizeFinancialData } from '../middleware/financialGuard.js';
+import { buildBookingListDto } from '../authorization/bookingDto.js';
+import { authorizeResource } from '../authorization/policyEngine.js';
+import { bookingResourceContext } from '../authorization/resourceContext.js';
 import { APP_CONFIG } from '../../src/config.js';
 import {
   demoBookingQueryProvider,
@@ -33,6 +36,7 @@ import {
   demoLifecycleStorageProvider,
   demoPaymentStorageProvider,
   demoReservationsAssignmentStorage,
+  demoVoucherStorageProvider,
 } from '../services/demoBookingWorkflow.js';
 import {
   ReservationsAssignmentError,
@@ -49,7 +53,7 @@ const serviceConfirmationService = new ServiceConfirmationService(APP_CONFIG.DEM
 const reservationsAssignmentService = new ReservationsAssignmentService(
   APP_CONFIG.DEMO_MODE ? demoReservationsAssignmentStorage : undefined,
 );
-const voucherService = new VoucherService();
+const voucherService = new VoucherService(APP_CONFIG.DEMO_MODE ? demoVoucherStorageProvider : undefined);
 
 /**
  * Helper to extract current authenticated actor
@@ -418,7 +422,9 @@ bookingsRouter.post(
     try {
       const actor = getActorFromRequest(req);
       const result = await bookingLifecycleService.dispatchToOperations(req.params.bookingId, actor);
-      return res.status(200).json({ success: true, ...result });
+      const booking = buildBookingListDto(actor, result.booking,
+        authorizeResource(actor, 'BOOKING', 'DISPATCH_OPERATIONS', bookingResourceContext(result.booking)));
+      return res.status(200).json({ ...result, booking });
     } catch (error: any) {
       return handleLifecycleError(error, res, 'POST /bookings/:bookingId/dispatch');
     }

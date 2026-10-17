@@ -266,9 +266,9 @@ describe('Stage D3A - Booking read/query authorization', () => {
   it('blocks direct browser reads of Booking roots and modern Booking services', () => {
     const rules = fs.readFileSync(path.resolve(__dirname, '../../firestore.rules'), 'utf8');
     for (const collection of ['bookings', 'booking_accommodations', 'booking_transports', 'booking_activities']) {
-      const match = rules.match(new RegExp(`match\\s+\\/${collection}\\/\\{[^}]+\\}\\s*\\{([\\s\\S]*?)allow create`));
-      expect(match).not.toBeNull();
-      expect(match![1]).toContain('allow read: if false;');
+      const start = rules.indexOf(`match /${collection}/`);
+      const block = rules.slice(start, rules.indexOf('\n    }', start));
+      expect(block).toMatch(/allow read(?:, create, update, delete)?: if false;/);
     }
   });
 });

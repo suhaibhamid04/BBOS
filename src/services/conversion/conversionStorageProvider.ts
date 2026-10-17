@@ -1,6 +1,7 @@
 import { Booking, BookingAccommodation, BookingTransport, BookingActivity, FinancialSnapshot } from '../../types/booking';
 import { AuditLog } from '../../types';
 import { getAdminDb } from '../../../server/firebaseAdmin';
+import { firestoreData } from '../../../server/storage/firestoreData.js';
 
 export interface BookingWithServices {
   booking: Booking;
@@ -331,13 +332,13 @@ export class FirestoreConversionStorageProvider implements ConversionStorageProv
           const docRef = collectionName.includes('/')
             ? db.doc(`${collectionName}/${docId}`)
             : db.collection(collectionName).doc(docId);
-          firestoreTx.set(docRef, data);
+          firestoreTx.set(docRef, firestoreData(data));
         },
         update(collectionName: string, docId: string, data: any) {
           const docRef = collectionName.includes('/')
             ? db.doc(`${collectionName}/${docId}`)
             : db.collection(collectionName).doc(docId);
-          firestoreTx.update(docRef, data);
+          firestoreTx.update(docRef, firestoreData(data));
         },
         delete(collectionName: string, docId: string) {
           const docRef = collectionName.includes('/')

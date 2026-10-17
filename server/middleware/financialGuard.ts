@@ -1,50 +1,7 @@
 import { isUserRole, UserRole } from '../../src/types/index.js';
 import type { AuthorizationDecision } from '../authorization/policyTypes.js';
 
-const SUPPLIER_COST_KEYS = [
-  'supplierCost',
-  'internalCost',
-  'supplierPayment',
-  'supplierNotes',
-  'internalNotes',
-  'negotiatedRate',
-  'negotiatedBaseRate',
-  'standardBaseRate',
-  'standardRateId',
-  'supplierContractDiscount',
-  'internalSupplierNotes',
-  'baseRate',
-  'supplierCostPerNight',
-  'frozenTotalSupplierCost',
-  'accommodationSupplierCost',
-  'transportSupplierCost',
-  'activitySupplierCost',
-  'otherSupplierCosts',
-  'authoritativeSupplierCost',
-  'quotedSupplierCost',
-  'authoritativeTotalSupplierCost',
-  'quotedTotalSupplierCost',
-  'supplementCost',
-  'baseSupplierCost',
-  'additionalChargesTotal',
-  'totalSupplierCost',
-  'supplierCostBreakdown',
-  'packageSupplierRate',
-  'contractedTotalSupplierCost',
-  'originalContractedTotal',
-  'nightlyRateBreakdown',
-];
-
-const PROFIT_MARGIN_KEYS = [
-  'grossProfit',
-  'grossMargin',
-  'profit',
-  'commercialDiscount',
-  'estimatedGrossProfit',
-  'estimatedGrossMargin',
-  'pricingInput',
-  'commercialApproval',
-];
+import { SUPPLIER_COST_FIELDS as SUPPLIER_COST_KEYS, PROFIT_MARGIN_FIELDS as PROFIT_MARGIN_KEYS } from '../authorization/financialFields.js';
 
 type FinancialVisibility = 'FULL' | 'SUPPLIER_ONLY' | 'SCOPED_SALES' | 'REDACTED';
 
@@ -60,6 +17,32 @@ const ROLE_FINANCIAL_VISIBILITY: Record<UserRole, FinancialVisibility> = {
   Operations: 'REDACTED',
   Marketing: 'REDACTED',
 };
+
+function financialVisibility(userRole: string | null | undefined, authorization?: AuthorizationDecision): Exclude<FinancialVisibility, 'SCOPED_SALES'> {
+  const role = isUserRole(userRole) ? userRole : undefined;
+  const visibility = role ? ROLE_FINANCIAL_VISIBILITY[role] : 'REDACTED';
+  if (visibility !== 'SCOPED_SALES') return visibility;
+  return authorization?.allowed === true && authorization.code === 'ALLOWED' &&
+    ((role === 'Sales Executive' && authorization.scope === 'OWN') ||
+     (role === 'Sales Manager' && authorization.scope === 'TEAM')) ? 'FULL' : 'REDACTED';
+}
+
+/** Cost calculators contain amounts under generic keys such as totalAmount,
+ * displayAmount and breakdown. Project operational metadata explicitly instead
+ * of treating these responses like customer-facing commercial records. */
+export function projectSupplierCalculation<T extends Record<string, unknown>>(
+  data: T, userRole: string | null | undefined, authorization?: AuthorizationDecision,
+): Partial<T> {
+  if (financialVisibility(userRole, authorization) !== 'REDACTED') {
+    return sanitizeFinancialData(data, userRole, authorization);
+  }
+  const safeFields = new Set([
+    'available', 'error', 'reason', 'needsConfirmation', 'availabilityStatus',
+    'propertyId', 'propertyName', 'roomCategoryId', 'roomCategoryName', 'mealPlan', 'nights',
+    'taxIncluded', 'taxDescription', 'missingRateDates',
+  ]);
+  return Object.fromEntries(Object.entries(data).filter(([key]) => safeFields.has(key))) as Partial<T>;
+}
 
 /**
  * Strips confidential supplier cost, profit, and internal margin data based on UserRole.
@@ -83,15 +66,7 @@ export function sanitizeFinancialData<T>(
   // guarantee that a stored role is recognized, so unknown roles must receive
   // the most restrictive response rather than falling through to full access.
   const recognizedRole = isUserRole(userRole) ? userRole : undefined;
-  const configuredVisibility = recognizedRole ? ROLE_FINANCIAL_VISIBILITY[recognizedRole] : 'REDACTED';
-  const visibility: Exclude<FinancialVisibility, 'SCOPED_SALES'> = configuredVisibility === 'SCOPED_SALES'
-    ? resourceAuthorization?.allowed === true &&
-      resourceAuthorization.code === 'ALLOWED' &&
-      ((recognizedRole === 'Sales Executive' && resourceAuthorization.scope === 'OWN') ||
-       (recognizedRole === 'Sales Manager' && resourceAuthorization.scope === 'TEAM'))
-      ? 'FULL'
-      : 'REDACTED'
-    : configuredVisibility;
+  const visibility = financialVisibility(recognizedRole, resourceAuthorization);
 
   if (data instanceof Date) {
     return new Date(data.getTime()) as unknown as T;

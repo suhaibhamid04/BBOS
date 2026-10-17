@@ -227,39 +227,16 @@ describe('Phase 2B-5 Security & Architecture Verification', () => {
     });
   });
 
-  describe('4. Invariant: Field-Level Mutation Ownership on Modern Services', () => {
-    it('Accommodation: Sales Executive can only modify guestNames and specialRequests', () => {
-      const accMatch = firestoreRules.match(/match\s+\/booking_accommodations\/\{docId\}\s*\{([\s\S]*?)\}/);
-      expect(accMatch).not.toBeNull();
-      const accRules = accMatch![1];
-
-      expect(accRules).toMatch(/isSalesExecutive\(\)\s*&&\s*request\.resource\.data\.diff\(resource\.data\)\.affectedKeys\(\)\.hasOnly\(\[\s*'guestNames',\s*'specialRequests'\s*\]\)/);
-      expect(accRules).toContain("'supplierConfirmation'");
-      expect(accRules).toContain('isOperations()');
-      expect(accRules).toContain('nightsCount');
-    });
-
-    it('Transport: Sales Executive can only modify passengerCount and specialRequests', () => {
-      const transMatch = firestoreRules.match(/match\s+\/booking_transports\/\{docId\}\s*\{([\s\S]*?)\}/);
-      expect(transMatch).not.toBeNull();
-      const transRules = transMatch![1];
-
-      expect(transRules).toMatch(/isSalesExecutive\(\)\s*&&\s*request\.resource\.data\.diff\(resource\.data\)\.affectedKeys\(\)\.hasOnly\(\[\s*'passengerCount',\s*'specialRequests'\s*\]\)/);
-      expect(transRules).toContain("'confirmationStatus'");
-      expect(transRules).toContain('isOperations()');
-      expect(transRules).toContain('vehicleCategoryId');
-    });
-
-    it('Activity: Sales Executive can only modify participantCount, leadGuestName, and specialRequests', () => {
-      const actMatch = firestoreRules.match(/match\s+\/booking_activities\/\{docId\}\s*\{([\s\S]*?)\}/);
-      expect(actMatch).not.toBeNull();
-      const actRules = actMatch![1];
-
-      expect(actRules).toMatch(/isSalesExecutive\(\)\s*&&\s*request\.resource\.data\.diff\(resource\.data\)\.affectedKeys\(\)\.hasOnly\(\[\s*'participantCount',\s*'leadGuestName',\s*'specialRequests'\s*\]\)/);
-      expect(actRules).toContain("'confirmationStatus'");
-      expect(actRules).toContain('isOperations()');
-      expect(actRules).toContain('activityMasterId');
-    });
+  describe('4. Invariant: Modern services are server-authoritative', () => {
+    for (const collection of ['booking_accommodations', 'booking_transports', 'booking_activities']) {
+      it(`${collection}: all direct browser mutations are denied`, () => {
+        const start = firestoreRules.indexOf(`match /${collection}/`);
+        const block = firestoreRules.slice(start, firestoreRules.indexOf('\n    }', start));
+        expect(block).toContain('allow read, create, update, delete: if false;');
+        expect(block).not.toContain('isSalesExecutive()');
+        expect(block).not.toContain('isOperations()');
+      });
+    }
   });
 
   describe('5. Invariant: Payment Verification Security & Role Boundaries', () => {

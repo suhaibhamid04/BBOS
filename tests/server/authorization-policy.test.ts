@@ -33,6 +33,15 @@ const ownTrip: ResourceContext = {
 };
 
 describe('Stage C centralized authorization policy', () => {
+  it('removes legacy supplier aliases and nested selling prices from Operations Trip DTOs', () => {
+    const actor = principal('Operations', 'ops-1');
+    const decision = authorizeResource(actor, 'TRIP', 'READ_DETAIL', ownTrip);
+    const result = buildResourceDto(actor, 'TRIP', {
+      id: 'trip-1', totalSupplierCost: 100, totalCost: 100,
+      items: [{ title: 'Hotel', quotedRate: 100, sellingPrice: 150, frozenSupplierUnitRate: 100 }],
+    }, decision);
+    expect(result).toEqual({ id: 'trip-1', items: [{ title: 'Hotel' }] });
+  });
   it('covers all eight roles with explicit scopes', () => {
     const cases: Array<{
       role: string;

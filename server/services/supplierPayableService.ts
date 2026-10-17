@@ -447,22 +447,27 @@ export class SupplierPayableService {
   }
 
   async getBookingSettlement(bookingId: string, actor: SupplierPaymentActor) {
-    const [bundles, payments] = await Promise.all([this.storage.listSourceBundles(), this.storage.listPayments()]);
-    const bundle = bundles.find((candidate) => candidate.booking.id === bookingId);
-    if (!bundle) throw new SupplierPayableError(404, 'BOOKING_PAYABLES_NOT_FOUND', 'Booking supplier obligations not found.');
-    authorize(actor, bundle.booking, 'READ_SUPPLIER_PAYABLE');
-    const payables = allPayables(bundle, payments);
-    if (actor.role === 'Operations') return { obligations: payables.map(operationsProjection) };
-    return { obligations: payables, summaries: summary(payables) };
+    return this.storage.runTransaction(async transaction => {
+      const bundle = await transaction.getSourceBundle(bookingId);
+      if (!bundle) throw new SupplierPayableError(404, 'BOOKING_PAYABLES_NOT_FOUND', 'Booking supplier obligations not found.');
+      authorize(actor, bundle.booking, 'READ_SUPPLIER_PAYABLE');
+      const ids = allPayables(bundle, [], false).map(payable => payable.obligationId);
+      const payments = (await Promise.all(ids.map(id => transaction.getPaymentsForObligation(id)))).flat();
+      const payables = allPayables(bundle, payments);
+      if (actor.role === 'Operations') return { obligations: payables.map(operationsProjection) };
+      return { obligations: payables, summaries: summary(payables) };
+    });
   }
 
   async getPayable(bookingId: string, id: string, actor: SupplierPaymentActor) {
-    const [bundles, payments] = await Promise.all([this.storage.listSourceBundles(), this.storage.listPayments()]);
-    const bundle = bundles.find((candidate) => candidate.booking.id === bookingId);
-    if (!bundle) throw new SupplierPayableError(404, 'BOOKING_PAYABLES_NOT_FOUND', 'Booking supplier obligations not found.');
-    authorize(actor, bundle.booking, 'READ_SUPPLIER_PAYABLE');
-    const payable = findPayable(bundle, payments, id);
-    return actor.role === 'Operations' ? operationsProjection(payable) : payable;
+    return this.storage.runTransaction(async transaction => {
+      const bundle = await transaction.getSourceBundle(bookingId);
+      if (!bundle) throw new SupplierPayableError(404, 'BOOKING_PAYABLES_NOT_FOUND', 'Booking supplier obligations not found.');
+      authorize(actor, bundle.booking, 'READ_SUPPLIER_PAYABLE');
+      const payments = await transaction.getPaymentsForObligation(id);
+      const payable = findPayable(bundle, payments, id);
+      return actor.role === 'Operations' ? operationsProjection(payable) : payable;
+    });
   }
 
   async recordPayment(
@@ -742,12 +747,15 @@ export class FirestoreSupplierPayableStorageProvider implements SupplierPayableS
   async listSourceBundles(): Promise<SupplierSourceBundle[]> {
     const db = this.db();
     const [bookings, snapshots, accommodations, transports, activities] = await Promise.all([
-      db.collection('bookings').orderBy('createdAt', 'desc').limit(200).get(),
-      db.collectionGroup('financial_snapshot').limit(500).get(),
-      db.collection('booking_accommodations').limit(1000).get(),
-      db.collection('booking_transports').limit(1000).get(),
-      db.collection('booking_activities').limit(1000).get(),
+      db.collection('bookings').orderBy('createdAt', 'desc').limit(201).get(),
+      db.collectionGroup('financial_snapshot').limit(501).get(),
+      db.collection('booking_accommodations').limit(1001).get(),
+      db.collection('booking_transports').limit(1001).get(),
+      db.collection('booking_activities').limit(1001).get(),
     ]);
+    if (bookings.size > 200 || snapshots.size > 500 || [accommodations, transports, activities].some(result => result.size > 1000)) {
+      throw new SupplierPayableError(503, 'PAYABLE_LIST_CAPACITY', 'The supplier registry exceeds its safe summary limit. Use a specific booking settlement until paginated reporting is available.');
+    }
     const latest = new Map<string, FinancialSnapshot>();
     for (const document of snapshots.docs) {
       const snapshot = { ...document.data(), id: document.id } as FinancialSnapshot;
@@ -772,7 +780,10 @@ export class FirestoreSupplierPayableStorageProvider implements SupplierPayableS
   }
 
   async listPayments(): Promise<SupplierPaymentRecord[]> {
-    const snapshot = await this.db().collection('supplier_payments').limit(2000).get();
+    const snapshot = await this.db().collection('supplier_payments').limit(2001).get();
+    if (snapshot.size > 2000) {
+      throw new SupplierPayableError(503, 'PAYABLE_LIST_CAPACITY', 'The payment ledger exceeds the safe registry limit. Use a specific booking settlement.');
+    }
     return snapshot.docs.map((document) => ({ ...document.data(), id: document.id } as SupplierPaymentRecord));
   }
 

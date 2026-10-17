@@ -18,6 +18,7 @@ function makeBooking(overrides: Partial<Booking> = {}): Booking {
     bookingReference: 'BB-999001',
     tripId: 'trip-01',
     customerId: 'cust-01',
+    assignedOperationsEmployeeId: 'emp-ops-01',
     customerName: 'Test Customer',
     status: 'CONFIRMED',
     paymentStatus: 'PAID',
@@ -42,10 +43,10 @@ function makeBooking(overrides: Partial<Booking> = {}): Booking {
   };
 }
 
-const opsActor = { id: 'emp-ops-01', name: 'Ops Manager', role: 'Operations' as const };
-const adminActor = { id: 'emp-admin-01', name: 'Admin User', role: 'Admin' as const };
-const founderActor = { id: 'emp-founder-01', name: 'Founder', role: 'Founder' as const };
-const salesActor = { id: 'emp-sales-01', name: 'Sales Exec', role: 'Sales Executive' as const };
+const opsActor = { id: 'emp-ops-01', employeeId: 'emp-ops-01', active: true, name: 'Ops Manager', role: 'Operations' as const };
+const adminActor = { id: 'emp-admin-01', employeeId: 'emp-admin-01', active: true, name: 'Admin User', role: 'Admin' as const };
+const founderActor = { id: 'emp-founder-01', employeeId: 'emp-founder-01', active: true, name: 'Founder', role: 'Founder' as const };
+const salesActor = { id: 'emp-sales-01', employeeId: 'emp-sales-01', active: true, name: 'Sales Exec', role: 'Sales Executive' as const };
 
 describe('BBOS Phase 2B-6 Stage 2 — Booking Lifecycle Service', () => {
 

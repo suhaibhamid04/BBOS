@@ -57,6 +57,9 @@ describe('M5B.1 secure customer shares', () => {
     snapshot.supplierCost = 1;
     snapshot.hotels[0].supplierId = 'supplier-secret';
     snapshot.itinerary[0].items[0].packageSupplierRate = { amount: 1 };
+    snapshot.transports[0].serviceDays = [{ dayNumber: 1, date: '2026-10-15', serviceType: 'AIRPORT_TRANSFER',
+      chargeableTransportDay: true, title: 'Airport welcome', supplierCost: 900, supplierId: 'private-supplier',
+      futureInternalAmount: 500 }];
     return {
       id, optionId: id, quoteGroupId: 'group-kashmir', optionLabel: label, customerTitle: 'Your Kashmir Holiday',
       optionOrder: order, isRecommended: recommended, optionStatus: 'READY', optionSnapshotCreatedAt: '2026-10-01T00:00:00.000Z',
@@ -117,7 +120,9 @@ describe('M5B.1 secure customer shares', () => {
     for (const forbidden of [
       'supplierCost', 'supplierCostBreakdown', 'supplierId', 'packageSupplierRate', 'grossProfit', 'grossMargin',
       'approval', 'employeeId', 'customerId', 'quoteId', 'optionId', 'customerPhone', 'customerEmail', 'audit',
+      'futureInternalAmount',
     ]) expect(serialized).not.toContain(forbidden);
+    expect(publicView.options[0].package.transports[0].serviceDays?.[0].title).toBe('Airport welcome');
     await expect(service.openCustomerShare('quote-recommended'))
       .rejects.toMatchObject({ statusCode: 404, code: 'CUSTOMER_SHARE_NOT_FOUND' });
     await expect(service.openCustomerShare('A'.repeat(43)))

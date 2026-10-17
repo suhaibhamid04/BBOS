@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { requireRole } from '../middleware/auth.js';
 import { calculateMixedAllocatedStayTotal, calculateStayTotal, buildRoleGatedResult } from '../../src/services/accommodationEngine.js';
-import { sanitizeFinancialData } from '../middleware/financialGuard.js';
+import { projectSupplierCalculation } from '../middleware/financialGuard.js';
 import type { PackageSupplierRateInput, RoomAllocation, TaxTreatment } from '../../src/types/accommodation.js';
 import { APP_CONFIG } from '../../src/config.js';
 import { DEMO_TRIPS } from '../../src/services/demoData.js';
@@ -196,7 +196,7 @@ accommodationRouter.post('/calculate-rate', requireRole([...readRoles]), async (
         totalSupplierCost: optionStay.totalAmount,
       };
     });
-    return res.json({ success: true, data: sanitizeFinancialData({
+    return res.json({ success: true, data: projectSupplierCalculation({
       ...full,
       rateId: applied?.id,
       rateOptions,
