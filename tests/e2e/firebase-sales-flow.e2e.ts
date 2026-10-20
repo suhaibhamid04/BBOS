@@ -44,7 +44,7 @@ async function apiPost(request: APIRequestContext, path: string, token: string, 
 
 async function seedAuthoritativeInventory(request: APIRequestContext, token: string) {
   const hotelSupplier = await apiPost(request, '/api/accommodation/suppliers', token, { name: 'QA3 Hotel Supplier', city: 'Srinagar', active: true });
-  const property = await apiPost(request, '/api/accommodation/properties', token, { name: 'QA3 Lake Hotel', propertyType: 'HOTEL', location: 'Dal Lake', city: 'Srinagar', supplierId: hotelSupplier.id, status: 'ACTIVE' });
+  const property = await apiPost(request, '/api/accommodation/properties', token, { name: 'QA3 Lake Hotel', propertyType: 'HOTEL', location: 'Kashmir', city: 'Srinagar', supplierId: hotelSupplier.id, status: 'ACTIVE' });
   const room = await apiPost(request, '/api/accommodation/rooms', token, { propertyId: property.id, name: 'QA3 Deluxe Room', maxAdults: 2, maxChildren: 1, active: true });
   const hotelRate = await apiPost(request, '/api/accommodation/rates', token, { propertyId: property.id, roomCategoryId: room.id, mealPlan: 'MAP', validFrom: '2026-10-01', validTo: '2026-10-31', baseRate: 8750, status: 'ACTIVE' });
 
@@ -108,6 +108,10 @@ test('normal Firebase identity persists the complete Sales workflow and enforces
   await page.locator('#create-lead-trigger').click();
   await page.locator('#lead-customer-name').fill('QA3 Firebase Customer');
   await page.locator('#lead-customer-phone').fill('+919876500003');
+  await page.locator('#lead-destination-select').selectOption('Kashmir');
+  await page.locator('#lead-start-date').fill('2026-10-22');
+  await page.locator('#lead-nights').fill('5');
+  await page.locator('#lead-adults').fill('2');
   await page.locator('#submit-create-lead-btn').click();
   await expect(page.getByText('QA3 Firebase Customer', { exact: true })).toBeVisible();
 
@@ -183,6 +187,9 @@ test('normal Firebase identity persists the complete Sales workflow and enforces
   expect(costedTrip.costingStatus).toBe('CALCULATED');
   expect(costedTrip.totalSupplierCost).toBeGreaterThan(0);
 
+  await page.getByTestId('pricing-input').fill('30000');
+  await page.getByTestId('save-package-pricing').click();
+  await expect(page.getByTestId('commercial-selling-price')).toContainText('30,000');
   await page.getByTestId('create-quote-from-trip').click();
   await expect(page.locator('#quote-builder-editor')).toBeVisible();
   await expect(page.getByTestId('quote-hotel-service')).toContainText('QA3 Lake Hotel');

@@ -170,10 +170,7 @@ export const HotelInventoryPicker: React.FC<HotelInventoryPickerProps> = ({ trip
         childrenWithoutBed: treatments.filter(item => item.category === 'COMPLIMENTARY_NO_BED').length,
         roomAllocations: authoritativeAllocations, childTreatments: treatments,
         needsConfirmation: Boolean(calculatedRate.needsConfirmation), taxDescription: calculatedRate.taxDescription || 'Taxes extra',
-        costSource: calculatedRate.costSource,
         ...(packageRate ? { packageRateRequest: packageRate } : {}),
-        ...(calculatedRate.contractedTotalSupplierCost !== undefined ? { contractedTotalSupplierCost: calculatedRate.contractedTotalSupplierCost } : {}),
-        ...(Array.isArray(calculatedRate.nightlyRateBreakdown) ? { nightlyRateBreakdown: calculatedRate.nightlyRateBreakdown } : {}),
       });
     } catch (selectionError) { setError(selectionError instanceof Error ? selectionError.message : 'The hotel change could not be saved.'); }
   };
