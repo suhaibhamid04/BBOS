@@ -1,23 +1,23 @@
 # BBOS test results
 
-Audit window: 2026-10-16 to 2026-10-17. Windows/PowerShell, Bun 1.4.0. Tests used local fixtures, loopback HTTP servers and explicit local demo/emulator configurations. No production database or live external message was used.
+Audit window: 2026-10-16 to 2026-10-17; Sprint 1 rerun: 2026-10-20. Windows/PowerShell, Bun 1.4.0. Tests used local fixtures, loopback HTTP servers and explicit local demo/emulator configurations. No production database or live external message was used.
 
 ## Final practical verification
 
 | Command | Result | Scope / limit |
 |---|---|---|
-| `bun test` | **673 passed, 0 failed, 7 reported skipped; 2,718 assertions; 680 runner entries across 48 files; 5.09 s** | Unit/domain/HTTP/source-security tests; one Auth case, four Firestore cases and two skipped suite hooks account for the seven reported skips |
+| `bun test` | **680 passed, 0 failed, 8 reported skipped; 2,721 assertions; 688 runner entries across 49 files; 6.52 s** | Unit/domain/HTTP/source-security tests; one Auth case, five substantive Firestore cases and two suite hooks account for the eight reported skips |
 | `bun run test:e2e` | **56 passed, 0 failed; 3.1 min** | Chromium, one worker, explicit demo adapters; includes full Booking lifecycle, inventory, costing, approvals, shares/PDF/mobile layouts and simulated WhatsApp |
 | `bun run test:auth-emulator` | **1 passed, 0 failed, 3 assertions** | Final run 2026-10-17; real emulator-issued Firebase token resolves a canonical employee ID distinct from UID; employee lookup fixture is injected |
 | `bun run lint` | **Passed** | Actual script is `tsc --noEmit`; this is type checking, not a linter |
-| `bun run build` | **Passed after sandbox retry** | Frontend and backend bundles built; Vite large-chunk warning remains |
-| `bun run test:rules` | **Blocked, not passed** | New executable rule suite cannot launch because `java -version` cannot spawn |
-| `bun run test:e2e:firebase` | **Blocked, not passed** | Firestore emulator has the same missing-Java limitation |
+| `bun run build` | **Passed** | Frontend and backend bundles built; Vite large-chunk warning remains |
+| `bun run test:rules` | **BLOCKED_NOT_RUN** | Java is unavailable; no system software was installed |
+| `bun run test:e2e:firebase` | **BLOCKED_NOT_RUN** | Firestore emulator has the same missing-Java limitation |
 | `bun audit` | **Failed advisory check (exit 1)** | 15 advisories: 1 critical, 7 high, 5 moderate, 2 low; no dependency changes |
 | `git diff --check` | **Passed during final review** | Git warns about normal Windows LF/CRLF conversion; no whitespace defects |
 | Standalone formatter / ESLint | **Not run; no configured command** | Do not interpret TypeScript success as formatting/lint success |
 
-The final successful test commands together executed **730 passing tests** (673 + 56 + 1). This is not a coverage percentage. The real Auth test is skipped in the broad run and then executed separately; it is counted once among passing tests. Four executable Firestore cases remain unrun.
+Sprint 1 executed **736 passing tests** (680 + 56). The earlier real Auth-emulator run remains recorded separately as one pass; it was not rerun in Sprint 1. This is not a coverage percentage. Executable Firestore cases remain unrun and are not counted as passing.
 
 ## Baseline and diagnostic failures
 
@@ -37,12 +37,14 @@ Sandbox execution blocked esbuild configuration reads and Firebase CLI's externa
 | `tests/server/audit-production-boundaries.test.ts` | Actual Express denies backend artifacts; actual Firestore SDK rejects old undefined shape and accepts normalized plain records; native sentinels/timestamps preserved |
 | `tests/server/audit-rate-projection.test.ts` | Real routers, policy and costing engines hide generic amount/breakdown aliases from assigned Operations; retain scoped Sales/Reservations/Accounts costs; unknown roles fail closed; production config subprocesses disable demo |
 | `tests/client/api-pagination.test.ts` | All pages loaded with filters retained; invalid or repeated cursor rejected |
+| `tests/server/customer-directory.test.ts` | Customer OWN/TEAM/ALL and cross-scope denial, missing metadata, canonical employeeId instead of UID, protected owner/team/employee/role/financial input rejection, explicit DTO |
+| `tests/server/audit-operational-integrity.test.ts` (Sprint 1 extension) | Booking-scoped voucher list denies inactive/unmapped/unassigned actors and excludes supplier cost, buying price, profit, margin and internal notes |
 | `tests/security/firestore-rules-emulator.integration.test.ts` | Added but **not executed**: inactive/unmapped/mismatched identity denial, modern collection denial, voucher forgery denial, conversation delete restriction, actor binding and reserved audit actions |
 | Existing suites extended | Nested financial alias projection, targeted supplier settlement independent of capped global listings, nested public share fields removed; rule assertions updated to enforce stronger restrictions |
 
 ## Build measurements
 
-Final Vite: 1,792 transformed modules; frontend JS **1,626.91 kB**, gzip **397.92 kB**; CSS **71.64 kB**, gzip **12.25 kB**. Backend approximately **990.5 kB**, source map **1.9 MB**. Backend artifacts now remain outside the served public asset directory.
+Sprint 1 Vite: 1,789 transformed modules; frontend JS **1,432.04 kB**, gzip **352.20 kB**; CSS **71.55 kB**, gzip **12.23 kB**. Backend approximately **1,011.9 kB**, source map **1.9 MB**. Backend artifacts remain outside the served public asset directory.
 
 Baseline frontend JS: 1,738.31 kB / 427.35 kB gzip. Production demo exclusion reduced output, but a >500 kB chunk warning remains. No latency/load benchmark was run.
 

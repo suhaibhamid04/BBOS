@@ -1,6 +1,6 @@
 # BBOS architecture review
 
-Audit window: 2026-10-16 to 2026-10-17. Evidence is repository code, tests and local execution, not a production assessment.
+Audit window: 2026-10-16 to 2026-10-17; Sprint 1 boundary update: 2026-10-20. Evidence is repository code, tests and local execution, not a production assessment.
 
 ## Actual architecture
 
@@ -10,11 +10,11 @@ The baseline contains 285 tracked files. A static inventory measured 193 tracked
 |---|---|
 | Browser | React 19, Vite 6.4.3 installed, Tailwind 4, Motion, Lucide; `src/main.tsx` → `src/App.tsx` |
 | Session | Firebase Auth → `/api/auth/me` → canonical active employee; opt-in local demo identities |
-| Client state | Large `DataContext.tsx`: modern HTTP APIs plus legacy client Firestore repositories and demo localStorage |
-| HTTP | Express 4 in `server.ts`; 139 registered routes under `server/routes/api.ts` |
+| Client state | Large `DataContext.tsx`: authenticated domain HTTP APIs plus demo localStorage; two demo-only itinerary mirror writes remain |
+| HTTP | Express 4 in `server.ts`; 144 registered routes under `server/routes/api.ts` |
 | Authorization | Global token/employee resolution, route role gates, resource policy with OWN/TEAM/ALL/ASSIGNED scope, then DTO projection |
 | Domains | Trip, Quote, conversion, payment, Reservations, lifecycle, supplier payables, Operations and approval services |
-| Persistence | Firebase Admin transactions for modern domains; client Firebase SDK for unmigrated collections; in-memory adapters for demo/tests |
+| Persistence | Firebase Admin SDK/transactions behind domain APIs; in-memory adapters and optional demo itinerary mirrors for demo/tests |
 | External services | Server-side Gemini; Meta WhatsApp adapter and signed webhook; local customer PDF generation |
 | Runtime/build | Bun development/tests; Vite frontend + esbuild ESM backend to `dist/server.js`; no committed CI workflow |
 
@@ -28,16 +28,15 @@ flowchart TD
   DOMAIN --> ADMIN[Firestore Admin SDK]
   DOMAIN --> DTO[Role-specific response projection]
   DTO --> UI
-  DC --> LEGACY[Legacy browser repositories]
-  LEGACY --> RULES[Firestore client rules]
   ADMIN --> DB[Firestore]
+  DEMO[Explicit demo-only itinerary mirrors] --> RULES[Firestore client rules]
   RULES --> DB
   DOMAIN --> EXT[Gemini and WhatsApp adapters]
   PUBLIC[Customer token / signed Meta webhook] --> PUBLICAPI[Explicit public routes]
   PUBLICAPI --> DOMAIN
 ```
 
-Admin access bypasses Firestore client rules. Consequently, API policy and client rules form separate enforcement surfaces, and neither can substitute for the other. The largest remaining weakness is the mixed client/server data-access boundary (S07/B05/B06).
+Admin access bypasses Firestore client rules, so API policy remains the production enforcement surface. Sprint 1 removed the legacy browser repository and production client grants; Firestore rule source now denies every enumerated client collection. B05 database selection remains a separate deployment/topology risk.
 
 ## Identity and role model
 
@@ -45,7 +44,20 @@ The API verifies Firebase tokens with revocation checking, resolves a unique act
 
 Sales Executive scope is OWN and Sales Manager scope is TEAM. Founder/Admin have broad authority, but Accounts remains a financial role rather than a universal writer. Reservations and Operations use assignments and permitted workflow states. Reservations can read supplier costs for its work without receiving package margin authority. Operations requires a dedicated operational projection. Marketing cannot access the core commercial registries merely by knowing an endpoint.
 
-Legacy rules still look up a UID-keyed employee document. Tightening inactive-account access is correct, but does not complete the identity migration. The named browser database/default Admin database divergence must be resolved deliberately.
+Production browser workflows no longer rely on UID-keyed employee documents. The rule helpers were removed and client grants deny direct access; API identity continues to treat Firebase UID as authentication identity and employeeId as business identity. The named browser database/default Admin database divergence must still be resolved deliberately before rule deployment or any approved data migration.
+
+## Sprint 1 direct-Firestore inventory
+
+| Classification | Final paths |
+|---|---|
+| ACTIVE_AND_REQUIRED | No production browser Firestore document read/write remains |
+| ALREADY_API_BACKED | Leads/customers, Trips, Quotes, Bookings/services/payments, inventory, conversations/messages, follow-ups, vouchers and audits |
+| DEMO_ONLY | `DataContext` mirrors itinerary-day set/delete only when `APP_CONFIG.DEMO_MODE` is true; demo fixtures/localStorage remain |
+| TEST_ONLY | Firebase Auth/Firestore emulator setup and synthetic rule regression clients |
+| APPARENTLY_UNUSED_REQUIRES_PROOF | Resolved: repository imports, route cases, global search, dynamic references and tests were searched before removing the generic repository plus Company/global Voucher views |
+| Server persistence, not browser access | Admin SDK providers under server services and shared server-only storage modules |
+
+The final browser-source scan finds `firebase/firestore` only in Firebase initialization and the demo-only itinerary mirror. Production DataContext has no import from the deleted repository and does not read customers, companies, conversations, messages, tasks, vouchers or historical inventory through the client SDK.
 
 ## Business journey and financial review
 

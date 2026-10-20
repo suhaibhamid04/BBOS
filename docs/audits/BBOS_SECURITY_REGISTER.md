@@ -19,17 +19,17 @@ Severity is application priority, not a package advisory's CVSS score. “Fixed�
 - **Attack path / role / data:** Direct browser SDK reads of Trips/itinerary and service collections bypassed API financial projection. Limited-field service writes could change another booking's confirmation/operational fields without parent assignment policy. Clients could forge voucher documents.
 - **Evidence:** [firestore.rules](../../firestore.rules), compared against the scoped Trip, Booking, confirmation and voucher services. A Firestore role-only grant cannot enforce the service's transactional state machine.
 - **Exploitability / impact:** Authenticated users permitted by the old role rules could bypass resource scope; supplier confidentiality and service integrity were at risk.
-- **Remediation:** Deny direct client reads/writes to modern Trips, itinerary days and booking service records; deny voucher mutations. Established API-backed flows retain server access through Admin SDK. Remaining broad voucher reads are S07.
+- **Remediation:** Deny direct client reads/writes to modern Trips, itinerary days, booking service records and vouchers. Established API-backed flows retain server access through Admin SDK. Sprint 1 also removed the remaining legacy browser readers under S07.
 - **Verification:** Existing source-rule assertions now require unconditional denial; new `firestore-rules-emulator.integration.test.ts` attempts real reads/updates and forged voucher writes for Operations and Admin. **These emulator cases have not run.** Effort M; release dependency: successful emulator suite and coordinated rule deployment.
 
 ## S03 — Inactive and unmapped Firebase identities
 
-- **Priority / confidence / status:** P1 / high / confirmed, fixed in source; executable verification pending.
+- **Priority / confidence / status:** P1 / high / confirmed, fixed in source and superseded by the complete direct-client deny boundary; executable verification pending.
 - **Attack path / role / data:** Legacy collections using `isAuthenticated()` admitted any signed-in Firebase account; the helper previously checked only `request.auth != null`. Employee deactivation did not revoke these rule grants.
 - **Evidence:** [firestore.rules](../../firestore.rules), [auth.ts](../../server/middleware/auth.ts). API authentication already requires an active employee, so the two boundaries disagreed.
 - **Exploitability / impact:** A valid Firebase account without current BBOS employment could read or change legacy conversations/tasks and other broadly granted collections.
-- **Remediation:** Require an existing legacy employee mapping, active=true and a matching firebaseUid when present. This intentionally fails closed. Separate canonical employee-ID support remains B06.
-- **Verification:** New executable rule tests cover absent, inactive, mismatched and anonymous identities plus an allowed active legacy identity; not run due to Java. Effort S; dependency: identity migration plan before relying on remaining client paths.
+- **Remediation:** Sprint 1 removed all production client grants, including financial snapshots and conversion markers. Production access now resolves the active canonical employee through authenticated APIs; Firestore rules do not use UID-keyed employee documents.
+- **Verification:** API identity tests reject absent, inactive, duplicate and invalid-role mappings. Executable rule tests cover absent, inactive, mismatched and anonymous identities and the deny-all result, but were not run because Java remains unavailable.
 
 ## S04 — Alternate supplier-cost exposure
 
@@ -60,12 +60,11 @@ Severity is application priority, not a package advisory's CVSS score. “Fixed�
 
 ## S07 — Remaining legacy direct-access scope
 
-- **Priority / confidence / status:** P1 / high / confirmed architectural exposure, open.
-- **Attack path / role / data:** A permitted active employee can read global legacy customers, conversations, messages, tasks, vouchers, hotel bookings, transports or activity bookings according to collection-level role rules. Owner/team/booking assignment is not applied consistently. Historical documents can contain costs.
-- **Evidence:** [firestore.rules](../../firestore.rules), [DataContext.tsx](../../src/context/DataContext.tsx), the client data providers. Modern API DTO restrictions cannot protect a separately readable document.
-- **Exploitability / impact:** Cross-customer operational/PII access and conditional historical financial disclosure through authenticated client SDK calls. Actual deployed document contents were not inspected.
-- **Remediation plan:** Inventory remaining UI consumers, provide scoped server endpoints and explicit DTOs, migrate callers, verify equivalent authorized behavior, then deny client access. Wholesale denial now would break still-used workflows; no undocumented business scope was invented.
-- **Verification needed:** Real rule tests and HTTP negative tests for every migrated collection, two employees/teams, unknown ownership, inactive identity and financial aliases. Effort L; depends on B05/B06 and approved migration/release design.
+- **Priority / confidence / status:** P1 / high / confirmed, **closed in source**; rule deployment and emulator execution remain release checks.
+- **Former attack path / data:** Collection-level browser grants exposed global customer PII, conversations/messages, tasks, vouchers and historical inventory/service documents without OWN/TEAM/ASSIGNED scope; old schemas could contain supplier costs, margin or profit aliases.
+- **Remediation:** Production DataContext now loads domain data only through authenticated APIs. Customer list/detail/create/update uses canonical OWN/TEAM/ALL policy, cursor pagination and an explicit DTO. Conversations use M6A/M6B Lead endpoints; follow-ups derive from M3 `nextFollowUpAt`; vouchers are read only under an authorized Booking and assigned Operations scope. Obsolete Company/global Voucher screens and the generic Firestore repository were removed after reference, route and dynamic-import searches. Historical inventory/service collections are no longer loaded by the browser.
+- **Rules end state:** Every listed production collection, plus conversion markers and Booking financial snapshots, denies direct browser read/write. The only remaining browser Firestore mutations are two `APP_CONFIG.DEMO_MODE`-guarded itinerary mirrors; they are classified DEMO_ONLY and are unreachable in production mode.
+- **Verification:** OWN/TEAM/ALL, cross-owner/team denial, missing metadata, inactive/unmapped identity, forged authority fields, pagination, assigned voucher scope and financial-alias projection tests pass. The 56-case Chromium suite passes. The executable Firestore suite is **BLOCKED_NOT_RUN** because Java is unavailable; no rules were deployed.
 
 ## S08 — Dependency advisories
 
@@ -82,16 +81,16 @@ Severity is application priority, not a package advisory's CVSS score. “Fixed�
 - **Attack path / role / data:** The conversation `allow read, write` grant included delete, overriding the intended admin-only delete restriction because matching allows are additive. Legacy audit creation accepted another actorId and certain server workflow event names.
 - **Evidence:** [firestore.rules](../../firestore.rules). API-generated audit events use canonical employee IDs; browser-generated audit claims did not enforce that binding.
 - **Exploitability / impact:** Active employees could delete conversations and impersonate audit actors or authoritative transitions.
-- **Remediation:** Restrict conversation grant to read/create/update; bind audit actorId to the employee mapping; reserve dispatch/cancel/voucher events for the server.
-- **Verification:** Executable regression cases attempt unauthorized deletion, spoofed actors and reserved actions, with positive admin deletion and legitimate legacy audit controls. Not executed because Java is absent. Effort S.
+- **Remediation:** All direct conversation/message and audit-log access is denied. M6A/M6B and server business workflows create canonical records/audits through Admin SDK.
+- **Verification:** Source regressions require deny-all blocks; executable attempts cover unauthorized deletion and audit writes but were not executed because Java is absent. Effort S.
 
 ## Abuse-case conclusions
 
 | Attempt | Evidence and conclusion |
 |---|---|
-| Sales changes another owner's Trip/Quote ID | Modern APIs reject through OWN policy; missing metadata fails closed. Existing policy/domain tests cover this. Legacy global collections remain S07. |
+| Sales changes another owner's Trip/Quote/Customer ID | Modern APIs reject through OWN policy; missing metadata fails closed. Customer cross-owner/team tests and existing policy/domain tests cover this. |
 | Sales directly invokes Admin routes | Route gates plus services reject employee/inventory/assignment mutations. Client navigation is not the control. |
-| Operations recovers supplier cost elsewhere | Calculator, Trip alias, raw dispatch and direct modern rule paths repaired; legacy historical paths remain S07. |
+| Operations recovers supplier cost elsewhere | Calculator, Trip alias, raw dispatch, voucher DTO and historical direct-client paths are restricted; role projections retain the Operations/Reservations distinction. |
 | Reservations changes selling price/margin | Commercial mutation policy denies; discrepancy confirmation records differences without changing frozen economics. Approved amendment execution remains A01. |
 | Employee supplies owner/team metadata | Modern creation derives identity server-side and service validators reject protected updates; legacy collection gaps are not covered by that claim. |
 | Direct browser writes protected Booking/Quote/payment state | Existing denials retained; service/voucher gaps tightened. Executable rule verification remains required. |

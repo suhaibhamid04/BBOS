@@ -1,18 +1,20 @@
 # BBOS remediation roadmap
 
-Reviewed 2026-10-17. The current branch contains safe source repairs, not a production deployment. Findings and acceptance criteria below distinguish engineering work from decisions requiring approval.
+Reviewed 2026-10-17; Sprint 1 updated 2026-10-20. The current branch contains safe source repairs, not a production deployment. Findings and acceptance criteria below distinguish engineering work from decisions requiring approval.
+
+## Completed in Production Readiness Sprint 1
+
+- **S07/B06 source closure:** inventoried direct browser Firestore consumers; added scoped customer and Booking-voucher reads; reused M3/M6 APIs; retired obsolete task/company/global-voucher paths; removed the generic client repository; denied all production client collection access; removed UID-keyed rule helpers. OWN/TEAM/ALL/ASSIGNED, inactive/unmapped, forged-authority, pagination and financial projection tests pass. Rule emulator execution and deployment remain release work.
 
 ## Immediate
 
-1. **Close the remaining client Firestore boundary (S07, B06).** Map every direct Customer/Company/conversation/message/task/voucher/historical inventory consumer. Implement scoped APIs and explicit projections, migrate clients, then deny direct access. Preserve authorized workflows while moving the boundary. **Acceptance:** two-employee/two-team HTTP and emulator tests prove no cross-scope read/write; deactivation revokes both access paths; Operations cannot recover supplier costs from historical documents. **Effort:** L. **Dependency:** approved identity/data migration design.
+1. **Resolve project/database topology (B05).** Select the canonical database explicitly for browser, Admin, rule/index deployment and migration utilities. Inventory existing records before proposing moves; do not copy production data speculatively. **Acceptance:** a named-database nonproduction fixture is read consistently by both adapters and authoritative identity resolves; configuration is validated at startup; reviewed rollback/data migration plan exists. **Effort:** M-L. **Hard stop:** production configuration/migration approval.
 
-2. **Resolve project/database topology (B05).** Select the canonical database explicitly for browser, Admin, rule/index deployment and migration utilities. Inventory existing records before proposing moves; do not copy production data speculatively. **Acceptance:** a named-database nonproduction fixture is read consistently by both adapters and authoritative identity resolves; configuration is validated at startup; reviewed rollback/data migration plan exists. **Effort:** M-L. **Hard stop:** production configuration/migration approval.
+2. **Run the missing Firestore checks (A03; S02/S03/S07/S09 release dependency).** Provide the compatible Java runtime, run `test:rules` and `test:e2e:firebase`, inspect transaction/index behavior and failures, then review rule deployment. **Acceptance:** all new negative rule cases and real Firestore workflow cases execute and pass; no skipped case is reported as verified. **Effort:** S-M. No production credential is needed for the local checks.
 
-3. **Run the missing Firestore checks (A03; S02/S03/S09 release dependency).** Provide the compatible Java runtime, run `test:rules` and `test:e2e:firebase`, inspect transaction/index behavior and failures, then review rule deployment. **Acceptance:** all new negative/positive rule cases and real Firestore workflow cases execute and pass; no skipped case is reported as verified. **Effort:** S-M. No production credential is needed for the local checks.
+3. **Triage and patch dependencies (S08).** Separate production-reachable packages from build/CLI chains, confirm advisory conditions, propose compatible patched versions and review lockfile changes. **Acceptance:** each advisory is fixed or has a documented reachability decision/owner; all practical tests plus Firebase tests pass; audit rerun recorded. **Effort:** M. **Hard stop:** upgrades with material behavior/migration risk need review.
 
-4. **Triage and patch dependencies (S08).** Separate production-reachable packages from build/CLI chains, confirm advisory conditions, propose compatible patched versions and review lockfile changes. **Acceptance:** each advisory is fixed or has a documented reachability decision/owner; all practical tests plus Firebase tests pass; audit rerun recorded. **Effort:** M. **Hard stop:** upgrades with material behavior/migration risk need review.
-
-5. **Define and implement financial exception workflows (A01).** Agree supplier acknowledgment semantics, material substitutions, date/guest/vehicle amendments, rejection, cancellation/refunds and commission attribution/settlement. **Acceptance:** approved state diagram and monetary examples; immutable before/after snapshots; correct authority and separation of duties; idempotent concurrent execution; no silent change to original sales credit. **Effort:** L. **Hard stop:** unresolved business rules, migrations and potentially irreversible financial effects.
+4. **Define and implement financial exception workflows (A01).** Agree supplier acknowledgment semantics, material substitutions, date/guest/vehicle amendments, rejection, cancellation/refunds and commission attribution/settlement. **Acceptance:** approved state diagram and monetary examples; immutable before/after snapshots; correct authority and separation of duties; idempotent concurrent execution; no silent change to original sales credit. **Effort:** L. **Hard stop:** unresolved business rules, migrations and potentially irreversible financial effects.
 
 ## Next
 
@@ -29,7 +31,7 @@ Reviewed 2026-10-17. The current branch contains safe source repairs, not a prod
 - Split eager views and load scoped domain data on demand. Measure bundle size, initial reads, payload and p95 interaction latency before/after using representative data. Keep the dependency graph comprehensible.
 - Extract DataContext and large Trip/Quote workflows by domain boundary with behavior-preserving tests. Avoid merging distinct Reservations/Sales/Operations authority just because code looks similar.
 - Add backup/restore exercises, observability and provider deadline/retry tests in a controlled environment. Verify public-route rate limiting and deployment headers with the actual proxy configuration.
-- Remove dead code only after static references, dynamic imports, route registration, scripts, tests and migration usage prove it unused. No dead files were deleted in this audit.
+- Remove dead code only after static references, dynamic imports, route registration, scripts, tests and migration usage prove it unused. Sprint 1 applied that proof before removing the generic repository and obsolete Company/global Voucher screens.
 
 ## Release/approval boundaries
 
@@ -37,4 +39,4 @@ The user explicitly required stopping before production migrations/configuration
 
 Source rule tightening, transaction changes and financial projection fixes need normal code review plus the missing emulator verification before deployment. Existing incomplete voucher records require reviewed reconciliation; the new service refuses to disguise them as a successful generation. A global supplier summary may now return 503 at its safety cap; individual settlement remains available. These are material release behaviors to communicate to operators.
 
-The five immediate actions above are the highest-value remaining work. A passing demo/browser suite does not resolve their production dependencies.
+The four immediate actions above are the highest-value remaining work. A passing demo/browser suite does not resolve their production dependencies.

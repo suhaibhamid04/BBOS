@@ -1,6 +1,6 @@
 # BBOS API inventory
 
-Inventory from the TypeScript syntax tree of all route files, reviewed against router mounting in [api.ts](../../server/routes/api.ts). **139 method/path registrations**, reviewed 2026-10-17. This is a code inventory and contract review, not a generated OpenAPI specification.
+Inventory from the TypeScript syntax tree of all route files, reviewed against router mounting in [api.ts](../../server/routes/api.ts). **144 method/path registrations**, updated 2026-10-20. This is a code inventory and contract review, not a generated OpenAPI specification.
 
 Every route in the index below inherits the authentication, scope, request/response, financial, collection, audit and error profile in the matching section. Subroute exceptions are explicit. The index supplies actual method/path, route roles, directly observed request fields, service calls and source location; a field passed inside `req.body` to a service is defined by that service's linked input validator, not inferred to be optional or unrestricted.
 
@@ -24,11 +24,19 @@ GET usually has no audit mutation, except public share opening (view tracking) a
 ## Lead/communication profile: /leads
 
 - **Roles/scope:** Lead CRUD, queue, interaction and conversation: Founder/Admin ALL, SM TEAM, SE OWN. Assignment additionally requires Founder/Admin/SM and validates eligible recipients. Distribution administration, unresolved WhatsApp linking and demo event simulation: Founder/Admin; demo event simulation additionally requires demo mode.
-- **Schemas:** Lead create/update is allowlisted through `buildEnquiryFields` and route validation: customer/contact/source/priority, destination/date/duration, adults/children/ages, room/meal/vehicle preferences, services, budget, specialRequirements/notes/tags and optional creationRequestId. Actor/ownership are server-derived. Customer matching takes normalized phone/email and returns at most five projected identity/contact matches; this is an explicitly broader matching lookup, not a claim of OWN-filtered customer storage.
+- **Schemas:** Lead create/update is allowlisted through `buildEnquiryFields` and route validation: customer/contact/source/priority, destination/date/duration, adults/children/ages, room/meal/vehicle preferences, services, budget, specialRequirements/notes/tags and optional creationRequestId. Actor/ownership are server-derived. Customer matching takes normalized phone/email, applies customer/linked-Lead OWN/TEAM/ALL scope, and returns at most five projected identity/contact matches.
 - **Subresources:** Distribution config/assignment inputs use [leadDistributionService.ts](../../server/services/leadDistributionService.ts); interactions use [leadInteractionService.ts](../../server/services/leadInteractionService.ts); timeline entries use [conversationTimelineService.ts](../../server/services/conversationTimelineService.ts); WhatsApp send/retry/link use [whatsappMessagingService.ts](../../server/services/whatsappMessagingService.ts) through [whatsappRuntime.ts](../../server/services/whatsappRuntime.ts). Queue construction and exact input validators are linked from the route source.
 - **Responses/financial fields:** Lead/contact/enquiry objects, assignment options/history, queue summaries, timeline pages and messaging context/delivery state. Customer budgets are visible within CRM scope; these responses do not grant Booking supplier-cost/profit authority.
 - **Collections/audit:** leads, customers, employees, sales_teams, lead_distribution_configs/state, lead_assignment_history, lead_events, conversation_entries, unmatched_whatsapp, whatsapp_webhook_events and whatsapp_pending_statuses; related quote/share reads and audit_logs. Assignment, interactions, internal notes and messaging create named immutable history/audit events. Ordinary lists do not.
 - **Errors:** Missing team metadata, invalid contact/source/enquiry, duplicate/stale request, unauthorized owner/team, invalid assignee, unknown provider entry and disabled/missing provider configuration. Lead list currently caps at 100 and has no cursor (A02).
+
+## Customer directory profile: /customers
+
+- **Roles/scope:** Founder/Admin ALL, Sales Manager TEAM, Sales Executive OWN. Scope can be established by server-owned customer metadata or an authoritative linked Lead; missing owner/team evidence fails closed.
+- **Schema:** List accepts cursor and limit 1-100. Create/update accepts only name, phone, WhatsApp, email, city, B2C/B2B type, preferences, notes and optional companyId. Owner employee, team, role, actor, normalized lookup values, counts and financial fields are rejected from the body and derived server-side where applicable.
+- **Response:** Explicit Customer directory DTO containing identity/contact, customer type/preferences/notes, booking count/lifetime selling value, company link and timestamps. It excludes owner/team, normalized lookup keys, audit metadata, supplier costs, profit and margin.
+- **Collections/audit:** customers and scoped linked leads; create/update writes canonical employeeId audit events. Ordinary list/detail reads do not audit.
+- **Errors:** Invalid cursor/limit/contact/type, protected fields, missing team metadata, inactive/malformed principal, not found or out-of-scope record.
 
 ## Trip profile: /trips
 
@@ -59,6 +67,7 @@ GET usually has no audit mutation, except public share opening (view tracking) a
 | cancel | Founder/Admin; cancellationReason string 5-2000 chars | Cancel result; existing guest notes preserved | Transactional bookings/audit_logs; BOOKING_CANCELLED; no automatic refund |
 | accommodations PATCH | Founder/Admin or assigned Reservations; ConfirmAccommodationDTO | confirmationProgress, supplierConfirmation, commercial-review flags | Booking/accommodation/audit; supplier evidence and discrepancy events; frozen economics preserved |
 | transports/activities PATCH | Founder/Admin or assigned Operations; ConfirmTransportDTO/ConfirmActivityDTO | Confirmation/operational result with restricted financial projection | Booking/service/audit updates; timestamp conflict checks where defined |
+| vouchers GET | Founder/Admin or assigned Operations; stored Booking is authoritative | Explicit Voucher identity/type/status/file DTO; no supplier cost, buying price, profit, margin or internal notes | vouchers read after Booking assignment policy; no audit mutation |
 | vouchers/generate | Founder/Admin or assigned Operations; IN_OPERATIONS and actually confirmed services | Voucher set/result; no raw cost snapshot | Transactional vouchers/service links/audit; VOUCHERS_GENERATED |
 
 Exact service confirmation schemas in [serviceConfirmationService.ts](../../server/services/serviceConfirmationService.ts): accommodation confirmation code/status, allocated rooms, supplier notes, confirmed room/meal/date/guest/count/rate and discrepancy reason; transport driver/vehicle/pickup/operational fields plus expectedUpdatedAt; activity tickets/guide/operational fields plus expectedUpdatedAt. Unlisted protected fields must not become commercial authority.
@@ -155,7 +164,12 @@ Abbreviations: F Founder; D Admin; A Accounts; SM Sales Manager; SE Sales Execut
 | PATCH `/api/bookings/:bookingId/services/accommodations/:serviceId` | F, D, R | params.bookingId, params.serviceId | `serviceConfirmationService.confirmAccommodation` | [bookings.ts:463](../../server/routes/bookings.ts#L463) |
 | PATCH `/api/bookings/:bookingId/services/transports/:serviceId` | F, D, O | params.bookingId, params.serviceId | `serviceConfirmationService.confirmTransport` | [bookings.ts:485](../../server/routes/bookings.ts#L485) |
 | PATCH `/api/bookings/:bookingId/services/activities/:serviceId` | F, D, O | params.bookingId, params.serviceId | `serviceConfirmationService.confirmActivity` | [bookings.ts:507](../../server/routes/bookings.ts#L507) |
-| POST `/api/bookings/:bookingId/vouchers/generate` | F, D, O | params.bookingId | `voucherService.generateVouchers` | [bookings.ts:529](../../server/routes/bookings.ts#L529) |
+| GET `/api/bookings/:bookingId/vouchers` | F, D, O | params.bookingId | `voucherService.listVouchers` | [bookings.ts:526](../../server/routes/bookings.ts#L526) |
+| POST `/api/bookings/:bookingId/vouchers/generate` | F, D, O | params.bookingId | `voucherService.generateVouchers` | [bookings.ts:547](../../server/routes/bookings.ts#L547) |
+| GET `/api/customers` | F, D, SM, SE | query.cursor, query.limit | Local scoped handler | [customers.ts:240](../../server/routes/customers.ts#L240) |
+| GET `/api/customers/:id` | F, D, SM, SE | params.id | Local scoped handler | [customers.ts:284](../../server/routes/customers.ts#L284) |
+| POST `/api/customers` | F, D, SM, SE | Explicit customer write allowlist | Local scoped handler | [customers.ts:304](../../server/routes/customers.ts#L304) |
+| PATCH `/api/customers/:id` | F, D, SM, SE | params.id, explicit customer write allowlist | Local scoped handler | [customers.ts:337](../../server/routes/customers.ts#L337) |
 | GET `/api/public/quote-shares/:token` | Public capability/signature | params.token | `quoteService.openCustomerShare` | [customerSharesPublic.ts:17](../../server/routes/customerSharesPublic.ts#L17) |
 | GET `/api/employees` | F, D | See linked handler and domain contract | `employeeManagementService.listEmployees` | [employees.ts:39](../../server/routes/employees.ts#L39) |
 | GET `/api/employees/:employeeId` | F, D | params.employeeId | `employeeManagementService.getEmployee` | [employees.ts:52](../../server/routes/employees.ts#L52) |

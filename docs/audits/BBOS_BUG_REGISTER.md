@@ -58,13 +58,12 @@ Reviewed 2026-10-16 to 2026-10-17. Baseline `4997f47`. Security findings are tra
 
 ## B06 — Employee identity mismatch in remaining client rules
 
-- **Priority / status / confidence:** P1 / open / high, confirmed.
-- **Files:** [auth.ts](../../server/middleware/auth.ts), [firestore.rules](../../firestore.rules), [AuthContext.tsx](../../src/context/AuthContext.tsx).
-- **Root cause / trigger:** API identity supports `employees/{employeeId}` with a distinct firebaseUid field. Rules can only load `employees/{request.auth.uid}` in the existing design.
-- **Impact:** A valid canonical employee can authenticate to the API but cannot use remaining direct client collections. Restoring permissive rules would recreate S03.
-- **Reproduction:** Resolve an active canonical employee through the API whose document ID differs from Firebase UID and who has no legacy UID-keyed document; inspect the rule lookup.
-- **Fix proposal / test:** Prefer moving remaining clients to scoped APIs (S07). If a UID mapping is retained, it must be server-managed and synchronized atomically with employee deactivation/role changes. Test duplicate mapping, disabled employee and stale mapping cases.
-- **Commit / effort / dependencies:** Deferred / L / identity migration and database topology decision. Auth emulator already validates distinct-ID API identity, not these Firestore rules.
+- **Priority / status / confidence:** P1 / **closed in source** / high, confirmed; deployment verification remains.
+- **Files:** [auth.ts](../../server/middleware/auth.ts), [firestore.rules](../../firestore.rules), [DataContext.tsx](../../src/context/DataContext.tsx), [customers.ts](../../server/routes/customers.ts).
+- **Root cause / trigger:** API identity supports a stable employeeId distinct from Firebase UID, while legacy rules loaded `employees/{request.auth.uid}`.
+- **Fix:** Production browser workflows no longer use direct Firestore authorization. All client grants are deny-all, the UID-keyed rule helpers were removed, and authenticated APIs resolve exactly one active canonical employee before applying resource policy. Customer ownership, Lead ownership, voucher assignment and audit actors use employeeId.
+- **Test:** Identity middleware rejects unmapped, inactive, duplicate and invalid-role identities; customer tests prove UID is not the owner key and reject forged employee/owner/team fields; voucher tests reject inactive/unmapped/unassigned actors. Static rule tests prove no `request.auth.uid` employee lookup remains. Firestore emulator execution is **BLOCKED_NOT_RUN** because Java is unavailable.
+- **Commit / effort / dependencies:** Sprint 1 / L / no B05 production database decision or data movement was needed for source closure. Rule deployment remains a separate reviewed release action.
 
 ## B07 — First-page-only data loading
 
