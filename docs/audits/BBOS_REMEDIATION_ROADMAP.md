@@ -1,14 +1,18 @@
 # BBOS remediation roadmap
 
-Reviewed 2026-10-17; Sprint 1 updated 2026-10-20. The current branch contains safe source repairs, not a production deployment. Findings and acceptance criteria below distinguish engineering work from decisions requiring approval.
+Reviewed 2026-10-17; Sprint 1/2 updated 2026-10-20. The current branch contains safe source repairs, not a production deployment. Findings and acceptance criteria below distinguish engineering work from decisions requiring approval.
 
 ## Completed in Production Readiness Sprint 1
 
 - **S07/B06 source closure:** inventoried direct browser Firestore consumers; added scoped customer and Booking-voucher reads; reused M3/M6 APIs; retired obsolete task/company/global-voucher paths; removed the generic client repository; denied all production client collection access; removed UID-keyed rule helpers. OWN/TEAM/ALL/ASSIGNED, inactive/unmapped, forged-authority, pagination and financial projection tests pass. Rule emulator execution and deployment remain release work.
 
+## Completed in Production Readiness Sprint 2
+
+- **B05 source closure:** introduced shared project/database normalization; browser and Admin now select the exact same explicit database; production missing/invalid/mismatched topology fails startup; QA emulator, deployment-config generation and the Lead-team migration identify their target database. The production database remains undecided pending approved inspection, and no data/config/deployment operation occurred.
+
 ## Immediate
 
-1. **Resolve project/database topology (B05).** Select the canonical database explicitly for browser, Admin, rule/index deployment and migration utilities. Inventory existing records before proposing moves; do not copy production data speculatively. **Acceptance:** a named-database nonproduction fixture is read consistently by both adapters and authoritative identity resolves; configuration is validated at startup; reviewed rollback/data migration plan exists. **Effort:** M-L. **Hard stop:** production configuration/migration approval.
+1. **Approve and validate the production topology (B05 production gate).** Inspect default and named databases, select the authoritative dataset, then follow `docs/firestore-topology.md`. **Acceptance:** reviewed inventory/backup/decision, approved runtime configuration, rules/index target review, nonproduction validation, rollback rehearsal and post-change checks. **Effort:** M-L. **Hard stop:** production inspection/configuration/migration/deployment approval.
 
 2. **Run the missing Firestore checks (A03; S02/S03/S07/S09 release dependency).** Provide the compatible Java runtime, run `test:rules` and `test:e2e:firebase`, inspect transaction/index behavior and failures, then review rule deployment. **Acceptance:** all new negative rule cases and real Firestore workflow cases execute and pass; no skipped case is reported as verified. **Effort:** S-M. No production credential is needed for the local checks.
 

@@ -48,13 +48,13 @@ Reviewed 2026-10-16 to 2026-10-17. Baseline `4997f47`. Security findings are tra
 
 ## B05 — Different Firestore databases selected
 
-- **Priority / status / confidence:** P1 / open / high source confidence; deployment impact needs verification.
-- **Files:** [firebase.ts](../../src/lib/firebase.ts), [firebaseAdmin.ts](../../server/firebaseAdmin.ts), `firebase-applet-config.json`.
+- **Priority / status / confidence:** P1 / **closed in source** / high source confidence; production target approval and validation remain.
+- **Files:** [firebase.ts](../../src/lib/firebase.ts), [firebaseAdmin.ts](../../server/firebaseAdmin.ts), [firestoreTopology.ts](../../shared/firestoreTopology.ts), [topology guide](../firestore-topology.md).
 - **Root cause / trigger:** The checked-in browser config selects a named database; Admin initialization calls default `getFirestore()`. Emulator mode uses the default database for both and therefore does not reproduce this deployment distinction.
 - **Impact:** Employees/data may be visible to one layer but missing from the other; rules/index deployment may target the wrong database.
 - **Reproduction:** Compare database selection in source; then, in an approved nonproduction project, seed one known record in the intended database and assert both layers resolve it. No live project was queried here.
-- **Fix proposal / test:** Agree the canonical project/database and migration plan, pass database ID explicitly to both adapters, and test named-database identity plus CRUD. No production configuration was changed.
-- **Commit / effort / dependencies:** Deferred / M-L / explicit production configuration and migration hard stop.
+- **Fix / test:** `FIREBASE_PROJECT_ID` and `BBOS_FIRESTORE_DATABASE_ID` now feed browser, Admin, startup validation, QA emulator fixtures, rules/index config generation and migration confirmation. Both SDKs receive the normalized ID explicitly. Tests cover named/default selection, browser/Admin parity, missing/invalid production config, project mismatch and the existing active/inactive/unmapped canonical identity cases.
+- **Commit / effort / dependencies:** Sprint 2 / M-L / `PRODUCTION_DATABASE_SELECTION_REQUIRES_APPROVAL`; no data, live config, rules or indexes were changed.
 
 ## B06 — Employee identity mismatch in remaining client rules
 

@@ -2,6 +2,8 @@
 
 The QA3 target is isolated to the synthetic Firebase project ID `bbos-qa3-local`.
 It must not be pointed at a production project.
+Its Firestore topology is explicitly `(default)` because the installed emulator
+does not support multiple databases.
 
 ## Prerequisites
 
@@ -19,23 +21,24 @@ disabled, and runs only `tests/e2e/firebase-sales-flow.e2e.ts`.
 
 ## Index deployment
 
-After staging review, deploy the repository index definition explicitly:
+Generate a reviewed database-specific Firebase config before any approved deploy:
 
-`firebase deploy --only firestore:indexes --project <staging-or-production-project-id>`
+`bun run firestore:deploy-config -- --confirm-project <project-id> --confirm-database <database-id>`
 
-Deploy rules separately only after rules tests and environment review:
-
-`firebase deploy --only firestore:rules --project <staging-or-production-project-id>`
+The generator requires matching `FIREBASE_PROJECT_ID` and
+`BBOS_FIRESTORE_DATABASE_ID`. Use the resulting config with an explicit
+`--project`; deploy rules/indexes only after review and successful emulator tests.
+See [the topology guide](firestore-topology.md). No deploy is part of local QA.
 
 ## Legacy Lead team backfill
 
 Dry run is the default:
 
-`$env:FIREBASE_PROJECT_ID='<project-id>'; bun run migrate:leads:team`
+`$env:FIREBASE_PROJECT_ID='<project-id>'; $env:BBOS_FIRESTORE_DATABASE_ID='<database-id>'; bun run migrate:leads:team`
 
 Mutation requires both flags and an exact project confirmation:
 
-`$env:FIREBASE_PROJECT_ID='<project-id>'; bun run migrate:leads:team --apply --confirm-project <project-id>`
+`$env:FIREBASE_PROJECT_ID='<project-id>'; $env:BBOS_FIRESTORE_DATABASE_ID='<database-id>'; bun run migrate:leads:team --apply --confirm-project <project-id> --confirm-database <database-id>`
 
 The utility skips missing, ambiguous, inactive, non-Sales, and teamless employee
 records. Apply mode rechecks each Lead transactionally and writes an audit event.

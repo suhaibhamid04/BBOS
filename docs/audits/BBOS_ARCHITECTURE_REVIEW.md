@@ -1,6 +1,6 @@
 # BBOS architecture review
 
-Audit window: 2026-10-16 to 2026-10-17; Sprint 1 boundary update: 2026-10-20. Evidence is repository code, tests and local execution, not a production assessment.
+Audit window: 2026-10-16 to 2026-10-17; Sprint 1/2 boundary updates: 2026-10-20. Evidence is repository code, tests and local execution, not a production assessment.
 
 ## Actual architecture
 
@@ -36,7 +36,7 @@ flowchart TD
   PUBLICAPI --> DOMAIN
 ```
 
-Admin access bypasses Firestore client rules, so API policy remains the production enforcement surface. Sprint 1 removed the legacy browser repository and production client grants; Firestore rule source now denies every enumerated client collection. B05 database selection remains a separate deployment/topology risk.
+Admin access bypasses Firestore client rules, so API policy remains the production enforcement surface. Sprint 1 removed the legacy browser repository and production client grants; Firestore rule source now denies every enumerated client collection. Sprint 2 makes browser/Admin selection use the same explicit normalized database ID and rejects missing production topology. The authoritative production database still requires approved inspection.
 
 ## Identity and role model
 

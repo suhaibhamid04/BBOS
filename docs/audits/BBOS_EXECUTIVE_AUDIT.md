@@ -9,7 +9,7 @@ BBOS has substantial server-authoritative commercial workflows and meaningful au
 - **285 baseline tracked files inventoried; 193 baseline non-test source/config files statically scanned; 144 current API registrations mapped.** Critical domain paths and associated tests were manually traced. This is not a claim that all files received exhaustive manual review.
 - **25 finding records: P0 0, P1 17, P2 8, P3 0.** No application-level P0 was confirmed. A dependency advisory is vendor-rated critical; its BBOS exploitability remains unverified.
 - **22 confirmed defects/gaps/structural risks; 3 require deployment, reachability or business verification** (S08/B05/A01). “Confirmed” includes an observed architecture/testing gap, not necessarily an exploitable vulnerability.
-- **16 records repaired in source** (S07 and B06 added); **9 remain open**, including **3 P1** (S08, B05, A01). Firestore repairs additionally await executable emulator verification and deployment; “fixed” does not claim production protection.
+- **17 records repaired in source** (S07, B06 and B05 added); **8 remain open**, including **2 P1** (S08, A01). B05 still requires an approved production database decision and validation. Firestore repairs additionally await executable emulator verification and deployment; “fixed” does not claim production protection.
 - **Sprint 1 final tests:** 680 unit/service/HTTP tests passed and 56 Chromium browser tests passed. TypeScript and build passed. The earlier real Auth emulator test remains valid; Firestore suites are **BLOCKED_NOT_RUN** because Java is unavailable. See [test results](BBOS_TEST_RESULTS.md).
 - No production credentials/data/configuration, migration, external message, dependency version or irreversible data operation was used. Three obsolete browser files were removed only after reference, route, script, test and dynamic-import searches proved the paths retired.
 
@@ -21,7 +21,7 @@ BBOS has substantial server-authoritative commercial workflows and meaningful au
 
 **Booking/Reservations/Operations:** The browser suite passes the cross-role lifecycle. Dispatch/cancellation and voucher creation now commit their audit/state/links atomically and authorize before idempotent returns. Reservations records discrepancy evidence without silently altering frozen money. Material substitutions, approved commercial amendments and downstream refund/commission execution remain incomplete or require a business decision.
 
-**Firestore:** All enumerated production collections, conversion markers and Booking financial snapshots are server-only in rule source. Two demo-only itinerary mirror calls remain behind explicit demo mode and are not production workflows. The actual rules were not executed because Java is absent; named browser versus default Admin database selection remains B05 and still requires a deliberate decision before deployment.
+**Firestore:** All enumerated production collections, conversion markers and Booking financial snapshots are server-only in rule source. Two demo-only itinerary mirror calls remain behind explicit demo mode and are not production workflows. Browser and Admin now consume one explicit normalized database ID and production fails on missing/mismatched topology. The actual rules were not executed because Java is absent, and the authoritative production database still requires a deliberate approved decision.
 
 **Frontend/UX:** Pagination, empty-result replacement, stale-response guards, sign-in submission handling and labels improved. All 56 browser tests pass, including selected mobile views. Custom dialogs, complete keyboard/screen-reader behavior and production React identity races need further verification.
 
@@ -39,7 +39,7 @@ The most dangerous confirmed class was bypassing modern resource policy through 
 
 ## Five highest-value next actions
 
-1. Agree and validate the canonical Firestore project/database with a reviewed migration/release plan.
+1. Inspect and approve the authoritative production Firestore database, then execute the documented validation/rollback plan.
 2. Provide Java and run real Firestore rule/workflow tests before deploying the tightened rules.
 3. Review advisory reachability and patch dependencies in a dedicated verified change.
 4. Specify and implement amendment/substitution/refund/commission workflows with explicit authority and accounting acceptance cases.
@@ -64,7 +64,7 @@ Production configuration/migrations, materially risky dependency upgrades, API-b
 | B02 | P1 | Voucher creation could duplicate, partially commit or overwrite records | Fixed | Confirmed |
 | B03 | P1 | Optional undefined fields rejected production financial writes | Fixed | Confirmed |
 | B04 | P1 | Supplier settlement could omit older bookings or payment records | Fixed for details; summary fails closed | Confirmed |
-| B05 | P1 | Browser and server choose different Firestore database IDs | Open | Needs deployment verification |
+| B05 | P1 | Browser and server chose different Firestore database IDs | Closed in source; production selection/validation pending | Confirmed |
 | B06 | P1 | Legacy rules could not resolve canonical employee IDs distinct from Firebase UID | Closed in source; production browser no longer depends on client rules | Confirmed |
 | B07 | P1 | Frontend discarded paginated list results beyond the first page | Fixed | Confirmed |
 | B08 | P2 | Stale asynchronous identity/data could overwrite a newer session; sign-in lacked submission guard and labels | Fixed | Confirmed |

@@ -48,9 +48,21 @@ Commit: `a459d8e` — `fix(security): close legacy Firestore client boundary` (3
 
 Findings: S07 and B06 closed in source. B05 was not changed and did not block source closure; deployment topology remains open.
 
+## C5 — Production Readiness Sprint 2: B05 topology closure
+
+Commit: `011bdcf` — `fix(config): unify Firestore database topology` (17 files).
+
+- Added one normalized Firestore topology contract for browser, Admin, emulator fixtures, deployment config generation and migration utilities.
+- Removed the checked-in browser-only database literal; both SDK adapters now receive the exact configured ID, including explicit `(default)` handling.
+- Added production startup failure for missing, invalid or project-mismatched configuration; safe startup logs expose only topology identifiers and runtime mode.
+- Added named/default/parity/fail-closed tests and retained canonical employee, inactive/unmapped identity and S07 direct-client denial regressions.
+- Documented Firebase CLI database targeting plus the production inventory, backup, migration, validation and rollback hard stop. No production inspection, data movement, config change or deployment occurred.
+
+Finding: B05 closed in source. `PRODUCTION_DATABASE_SELECTION_REQUIRES_APPROVAL`; B05 is not production-closed.
+
 ## Verification and review
 
-Original audit verification recorded 673 unit/service/HTTP passes, 56 Chromium passes and one Auth-emulator pass. Sprint 1 now records 680 unit/service/HTTP passes and 56 Chromium passes; TypeScript/build/diff checks pass. Firestore rule and full Firebase browser suites remain **BLOCKED_NOT_RUN** because Java is absent. Dependency audit remains nonclean (15 advisories). Details and initial failed attempts are retained in [test results](BBOS_TEST_RESULTS.md).
+Original audit verification recorded 673 unit/service/HTTP passes, 56 Chromium passes and one Auth-emulator pass. Sprint 2 now records 687 unit/service/HTTP passes and 56 Chromium passes; TypeScript/build/diff checks pass. Firestore rule and full Firebase browser suites remain **BLOCKED_NOT_RUN** because Java is absent. Dependency audit remains nonclean (15 advisories). Details and initial failed attempts are retained in [test results](BBOS_TEST_RESULTS.md).
 
 Security/financial diffs were re-reviewed for authorization before idempotency, canonical IDs, transaction read/write ordering, audit atomicity, role-specific financial distinctions and client access paths. Changes are ready for code review, not an assertion of production readiness.
 
@@ -61,4 +73,4 @@ Security/financial diffs were re-reviewed for authorization before idempotency, 
 - Oversized global supplier summaries return 503 rather than incomplete financial totals; individual settlement reads remain targeted.
 - Production ignores demo opt-in flags.
 - Backend bundles/source maps are no longer public assets.
-- Firestore deployment must be coordinated with the API/client version and successful executable rule tests. Legacy access/identity source paths are closed; B05 database topology remains explicitly open.
+- Firestore deployment must be coordinated with the API/client version and successful executable rule tests. Legacy access/identity source paths and B05 source selection are closed; the authoritative production database decision remains explicitly open.
