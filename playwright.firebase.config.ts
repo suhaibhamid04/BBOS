@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
 const qa3ProjectId = 'bbos-qa3-local';
+const qa3DatabaseId = '(default)';
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -30,6 +31,7 @@ export default defineConfig({
       FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099',
       FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080',
       FIREBASE_PROJECT_ID: qa3ProjectId,
+      BBOS_FIRESTORE_DATABASE_ID: qa3DatabaseId,
       GCLOUD_PROJECT: qa3ProjectId,
       NODE_ENV: 'development',
       PORT: '3200',

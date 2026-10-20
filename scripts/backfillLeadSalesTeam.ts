@@ -1,21 +1,28 @@
 import { randomUUID } from 'node:crypto';
-import { getAdminDb } from '../server/firebaseAdmin.js';
+import { getAdminDb, getFirebaseAdminTopology } from '../server/firebaseAdmin.js';
 
 type UnknownRecord = Record<string, unknown>;
 
 const applyMode = process.argv.includes('--apply');
 const confirmIndex = process.argv.indexOf('--confirm-project');
 const confirmedProject = confirmIndex >= 0 ? process.argv[confirmIndex + 1] : undefined;
+const confirmDatabaseIndex = process.argv.indexOf('--confirm-database');
+const confirmedDatabase = confirmDatabaseIndex >= 0 ? process.argv[confirmDatabaseIndex + 1] : undefined;
 const configuredProject = process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT;
+if (!configuredProject || !process.env.BBOS_FIRESTORE_DATABASE_ID) {
+  throw new Error('Migration requires explicit FIREBASE_PROJECT_ID (or GCLOUD_PROJECT) and BBOS_FIRESTORE_DATABASE_ID.');
+}
+const topology = getFirebaseAdminTopology();
 
-if (applyMode && (!configuredProject || confirmedProject !== configuredProject)) {
-  throw new Error('Apply mode requires --confirm-project matching FIREBASE_PROJECT_ID or GCLOUD_PROJECT.');
+if (applyMode && (!configuredProject || confirmedProject !== configuredProject || confirmedDatabase !== topology.databaseId)) {
+  throw new Error('Apply mode requires --confirm-project and --confirm-database matching the explicit Firebase topology.');
 }
 
 const db = getAdminDb();
 const report = {
   mode: applyMode ? 'APPLY' : 'DRY_RUN',
-  projectId: configuredProject || 'application-default-project',
+  projectId: topology.projectId,
+  databaseId: topology.databaseId,
   scanned: 0,
   alreadyAttributed: 0,
   eligible: 0,

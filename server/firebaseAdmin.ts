@@ -1,31 +1,59 @@
-import { applicationDefault, initializeApp, getApps } from 'firebase-admin/app';
+import { applicationDefault, initializeApp, getApp, getApps } from 'firebase-admin/app';
 import { getFirestore, Firestore } from 'firebase-admin/firestore';
 import { getAuth, Auth } from 'firebase-admin/auth';
+import { FirestoreTopologyError, type FirestoreTopology } from '../shared/firestoreTopology.js';
+import { loadServerFirestoreTopology } from './firestoreTopology.js';
 
-// Initialize the Firebase Admin SDK
-// This requires GOOGLE_APPLICATION_CREDENTIALS to be set in the environment,
-// OR FIREBASE_PROJECT_ID if running in an environment with default credentials.
-// For development/demo without a real service account, it initializes a mock or gracefully fails
-// operations requiring admin rights, preventing hard crashes.
+// Production requires explicit project/database topology plus application
+// default credentials. Local/demo startup may initialize without usable remote
+// credentials, but topology errors are never converted to another database.
 
 let db: Firestore | null = null;
 let auth: Auth | null = null;
+let topology: FirestoreTopology | null = null;
+let initializationError: Error | null = null;
 
 try {
-  // If FIREBASE_MOCK_MODE or similar is set, we could mock entirely.
-  // We attempt standard initialization which auto-discovers GOOGLE_APPLICATION_CREDENTIALS
+  topology = loadServerFirestoreTopology();
   if (!getApps().length) {
-    const emulatorMode = !!process.env.FIRESTORE_EMULATOR_HOST || !!process.env.FIREBASE_AUTH_EMULATOR_HOST;
-    const projectId = process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT;
-    initializeApp(emulatorMode
-      ? { projectId: projectId || 'bbos-qa3-local' }
-      : { credential: applicationDefault(), ...(projectId ? { projectId } : {}) });
+    initializeApp(topology.emulator
+      ? { projectId: topology.projectId }
+      : { credential: applicationDefault(), projectId: topology.projectId });
   }
-  db = getFirestore();
-  auth = getAuth();
-  console.log('[Firebase Admin] Successfully initialized server-side Admin SDK');
+  const adminApp = getApp();
+  const initializedProjectId = adminApp.options.projectId;
+  if (initializedProjectId && initializedProjectId !== topology.projectId) {
+    throw new FirestoreTopologyError(
+      `Firebase project configuration missing or inconsistent. Existing Admin app uses ${initializedProjectId}; configured project is ${topology.projectId}.`,
+    );
+  }
+  db = getFirestore(adminApp, topology.databaseId);
+  auth = getAuth(adminApp);
+  console.log('[Firebase Admin] Initialized', {
+    projectId: topology.projectId,
+    databaseId: topology.databaseId,
+    runtimeMode: topology.runtimeMode,
+    emulator: topology.emulator,
+  });
 } catch (error) {
-  console.warn('[Firebase Admin] Initialization warning: Could not initialize Admin SDK. Secure backend writes will not be available. Error:', (error as Error).message);
+  initializationError = error instanceof Error ? error : new Error(String(error));
+  console.warn('[Firebase Admin] Initialization warning: Secure backend writes are unavailable. Error:', initializationError.message);
+}
+
+export function assertFirebaseAdminStartup(): void {
+  if (initializationError instanceof FirestoreTopologyError) throw initializationError;
+  if (process.env.NODE_ENV === 'production' && (initializationError || !db || !auth || !topology)) {
+    throw new Error(
+      `Firestore database configuration missing or inconsistent. Firebase Admin startup failed: ${initializationError?.message || 'unknown initialization error'}`,
+    );
+  }
+}
+
+export function getFirebaseAdminTopology(): FirestoreTopology {
+  if (!topology) {
+    throw initializationError || new Error('Firestore topology is unavailable.');
+  }
+  return topology;
 }
 
 /**
@@ -33,7 +61,7 @@ try {
  */
 export function getAdminDb(): Firestore {
   if (!db) {
-    throw new Error('Firebase Admin SDK is not initialized. Cannot perform secure backend operations. Check GOOGLE_APPLICATION_CREDENTIALS.');
+    throw new Error(`Firebase Admin SDK is not initialized. Cannot perform secure backend operations. ${initializationError?.message || 'Check credentials and Firestore topology.'}`);
   }
   return db;
 }
@@ -43,7 +71,7 @@ export function getAdminDb(): Firestore {
  */
 export function getAdminAuth(): Auth {
   if (!auth) {
-    throw new Error('Firebase Admin SDK is not initialized. Check GOOGLE_APPLICATION_CREDENTIALS.');
+    throw new Error(`Firebase Admin SDK is not initialized. ${initializationError?.message || 'Check credentials and Firestore topology.'}`);
   }
   return auth;
 }

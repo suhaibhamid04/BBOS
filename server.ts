@@ -4,8 +4,17 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { apiRouter } from './server/routes/api.js';
 import { productionFrontend } from './server/frontend.js';
+import { assertFirebaseAdminStartup, getFirebaseAdminTopology } from './server/firebaseAdmin.js';
 
 async function startServer() {
+  assertFirebaseAdminStartup();
+  const firestoreTopology = getFirebaseAdminTopology();
+  console.log('[Startup] Firestore target', {
+    projectId: firestoreTopology.projectId,
+    databaseId: firestoreTopology.databaseId,
+    runtimeMode: firestoreTopology.runtimeMode,
+    emulator: firestoreTopology.emulator,
+  });
   const app = express();
   const PORT = Number(process.env.PORT || 3000);
 

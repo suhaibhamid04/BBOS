@@ -1,11 +1,16 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import {defineConfig} from 'vite';
+import {defineConfig, loadEnv} from 'vite';
 
-export default defineConfig(() => {
+export default defineConfig(({ mode }) => {
+  const environment = loadEnv(mode, process.cwd(), '');
   return {
     plugins: [react(), tailwindcss()],
+    define: {
+      'import.meta.env.FIREBASE_PROJECT_ID': JSON.stringify(environment.FIREBASE_PROJECT_ID || ''),
+      'import.meta.env.BBOS_FIRESTORE_DATABASE_ID': JSON.stringify(environment.BBOS_FIRESTORE_DATABASE_ID || ''),
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

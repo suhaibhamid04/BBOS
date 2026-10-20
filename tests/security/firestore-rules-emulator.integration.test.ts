@@ -2,8 +2,15 @@ import { afterAll, beforeAll, describe, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { initializeTestEnvironment, assertFails, assertSucceeds, type RulesTestEnvironment } from '@firebase/rules-unit-testing';
 import { doc, getDoc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { DEFAULT_FIRESTORE_DATABASE_ID, normalizeFirestoreDatabaseId } from '../../shared/firestoreTopology';
 
 const host = process.env.FIRESTORE_EMULATOR_HOST;
+const databaseId = normalizeFirestoreDatabaseId(
+  process.env.BBOS_FIRESTORE_DATABASE_ID || DEFAULT_FIRESTORE_DATABASE_ID,
+);
+if (databaseId !== DEFAULT_FIRESTORE_DATABASE_ID) {
+  throw new Error('The installed Firestore Emulator supports only the explicit (default) database topology.');
+}
 // Never clear or seed a remote database. This suite only targets a synthetic
 // project through an explicitly configured loopback emulator.
 if (host && !/^(127\.0\.0\.1|localhost):\d+$/.test(host)) throw new Error('Rules tests require a loopback Firestore emulator.');

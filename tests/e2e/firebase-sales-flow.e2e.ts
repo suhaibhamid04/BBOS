@@ -5,8 +5,10 @@ import { getAuth } from 'firebase-admin/auth';
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 import { initializeTestEnvironment, type RulesTestEnvironment } from '@firebase/rules-unit-testing';
 import { doc, setDoc } from 'firebase/firestore';
+import { DEFAULT_FIRESTORE_DATABASE_ID } from '../../shared/firestoreTopology';
 
 const projectId = 'bbos-qa3-local';
+const databaseId = process.env.BBOS_FIRESTORE_DATABASE_ID || DEFAULT_FIRESTORE_DATABASE_ID;
 const password = 'Qa3-Password-123!';
 const identities = {
   admin: { uid: 'firebase-qa3-admin', employeeId: 'employee-qa3-admin', email: 'admin@qa3.test', role: 'Admin', name: 'QA3 Admin' },
@@ -71,7 +73,7 @@ test.beforeAll(async ({ request }) => {
   await fetch(`http://127.0.0.1:8080/emulator/v1/projects/${projectId}/databases/(default)/documents`, { method: 'DELETE' });
   await fetch(`http://127.0.0.1:9099/emulator/v1/projects/${projectId}/accounts`, { method: 'DELETE' });
   adminApp = initializeApp({ projectId }, `qa3-${Date.now()}`);
-  db = getFirestore(adminApp);
+  db = getFirestore(adminApp, databaseId);
   const auth = getAuth(adminApp);
   for (const identity of Object.values(identities)) {
     await auth.createUser({ uid: identity.uid, email: identity.email, password, displayName: identity.name });
