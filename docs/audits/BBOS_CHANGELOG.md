@@ -1,6 +1,6 @@
 # BBOS audit changelog
 
-Branch: `audit/bbos-comprehensive-remediation`. Baseline: `4997f47`. Audit window: 2026-10-16 to 2026-10-17. Application code changed; dependency versions/lockfile and production configuration did not.
+Branch: `audit/bbos-comprehensive-remediation`. Baseline: `4997f47`. Audit window: 2026-10-16 to 2026-10-17; remediation sprints through 2026-10-20. Application code and dependency resolution changed; production configuration did not.
 
 ## C1 — Server authorization, persistence and financial integrity
 
@@ -60,9 +60,18 @@ Commit: `011bdcf` — `fix(config): unify Firestore database topology` (17 files
 
 Finding: B05 closed in source. `PRODUCTION_DATABASE_SELECTION_REQUIRES_APPROVAL`; B05 is not production-closed.
 
+## C6 — Production Readiness Sprint 3: S08 dependency advisory closure
+
+- Inventoried direct, transitive, runtime, browser, build and Firebase CLI dependency paths and classified all 15 original audit records by vulnerable operation and BBOS reachability.
+- Applied compatible patches for grpc-js's supported Admin copy, proxy-addr, source-map-js and brace-expansion. Added a same-major `qs` 6.16.0 override because public Express query parsing reaches both affected conditions while Express 4's patch range excludes the fix.
+- Reduced the live audit from 15 advisories (1 critical, 7 high, 5 moderate, 2 low) to 6 (0 critical, 3 high, 2 moderate, 1 low). Remaining records are non-invoked gRPC server/UUID buffer APIs or Firebase CLI-only paths with documented controls.
+- Passed 687 unit/service/HTTP tests, 56 Chromium tests, 5 Firestore rule tests and 1 Firebase-backed browser test. WhatsApp server and browser flows pass; Firestore rules were not weakened.
+
+Finding: **S08 closed**. The audit still exits 1 and no zero-vulnerability claim is made; see [the dependency security review](BBOS_DEPENDENCY_SECURITY_REVIEW.md).
+
 ## Verification and review
 
-Original audit verification recorded 673 unit/service/HTTP passes, 56 Chromium passes and one Auth-emulator pass. Sprint 2 now records 687 unit/service/HTTP passes and 56 Chromium passes; TypeScript/build/diff checks pass. Firestore rule and full Firebase browser suites remain **BLOCKED_NOT_RUN** because Java is absent. Dependency audit remains nonclean (15 advisories). Details and initial failed attempts are retained in [test results](BBOS_TEST_RESULTS.md).
+Original audit verification recorded 673 unit/service/HTTP passes, 56 Chromium passes and one Auth-emulator pass. Sprint 3 records 687 unit/service/HTTP passes, 56 Chromium passes, 5 Firestore rule passes and 1 full Firebase browser pass; TypeScript/build/diff checks pass. The dependency audit remains nonclean with six explicitly dispositioned residual advisories. Details and initial failed attempts are retained in [test results](BBOS_TEST_RESULTS.md).
 
 Security/financial diffs were re-reviewed for authorization before idempotency, canonical IDs, transaction read/write ordering, audit atomicity, role-specific financial distinctions and client access paths. Changes are ready for code review, not an assertion of production readiness.
 

@@ -1,10 +1,10 @@
 # BBOS remediation roadmap
 
-Reviewed 2026-10-17; Sprint 1/2 updated 2026-10-20. The current branch contains safe source repairs, not a production deployment. Findings and acceptance criteria below distinguish engineering work from decisions requiring approval.
+Reviewed 2026-10-17; Sprints 1–3 updated 2026-10-20. The current branch contains safe source repairs, not a production deployment. Findings and acceptance criteria below distinguish engineering work from decisions requiring approval.
 
 ## Completed in Production Readiness Sprint 1
 
-- **S07/B06 source closure:** inventoried direct browser Firestore consumers; added scoped customer and Booking-voucher reads; reused M3/M6 APIs; retired obsolete task/company/global-voucher paths; removed the generic client repository; denied all production client collection access; removed UID-keyed rule helpers. OWN/TEAM/ALL/ASSIGNED, inactive/unmapped, forged-authority, pagination and financial projection tests pass. Rule emulator execution and deployment remain release work.
+- **S07/B06 source closure:** inventoried direct browser Firestore consumers; added scoped customer and Booking-voucher reads; reused M3/M6 APIs; retired obsolete task/company/global-voucher paths; removed the generic client repository; denied all production client collection access; removed UID-keyed rule helpers. OWN/TEAM/ALL/ASSIGNED, inactive/unmapped, forged-authority, pagination and financial projection tests pass. Five rule-emulator cases pass; deployment remains release work.
 
 ## Completed in Production Readiness Sprint 2
 
@@ -14,9 +14,9 @@ Reviewed 2026-10-17; Sprint 1/2 updated 2026-10-20. The current branch contains 
 
 1. **Approve and validate the production topology (B05 production gate).** Inspect default and named databases, select the authoritative dataset, then follow `docs/firestore-topology.md`. **Acceptance:** reviewed inventory/backup/decision, approved runtime configuration, rules/index target review, nonproduction validation, rollback rehearsal and post-change checks. **Effort:** M-L. **Hard stop:** production inspection/configuration/migration/deployment approval.
 
-2. **Run the missing Firestore checks (A03; S02/S03/S07/S09 release dependency).** Provide the compatible Java runtime, run `test:rules` and `test:e2e:firebase`, inspect transaction/index behavior and failures, then review rule deployment. **Acceptance:** all new negative rule cases and real Firestore workflow cases execute and pass; no skipped case is reported as verified. **Effort:** S-M. No production credential is needed for the local checks.
+2. **Run the local Firestore checks — CLOSED.** `test:rules` passes 5/5 and `test:e2e:firebase` passes 1/1 with loopback emulators. Production topology validation and reviewed rule/index deployment remain under item 1; A03 still tracks automating these gates in CI. **Effort:** S-M.
 
-3. **Triage and patch dependencies (S08).** Separate production-reachable packages from build/CLI chains, confirm advisory conditions, propose compatible patched versions and review lockfile changes. **Acceptance:** each advisory is fixed or has a documented reachability decision/owner; all practical tests plus Firebase tests pass; audit rerun recorded. **Effort:** M. **Hard stop:** upgrades with material behavior/migration risk need review.
+3. **Triage and patch dependencies (S08) — CLOSED.** Nine advisories were safely remediated; six were proven non-reachable or isolated to trusted development tooling with owners and controls. All practical and Firebase tests pass, and the before/after audit is recorded in [the dependency security review](BBOS_DEPENDENCY_SECURITY_REVIEW.md). **Effort:** M.
 
 4. **Define and implement financial exception workflows (A01).** Agree supplier acknowledgment semantics, material substitutions, date/guest/vehicle amendments, rejection, cancellation/refunds and commission attribution/settlement. **Acceptance:** approved state diagram and monetary examples; immutable before/after snapshots; correct authority and separation of duties; idempotent concurrent execution; no silent change to original sales credit. **Effort:** L. **Hard stop:** unresolved business rules, migrations and potentially irreversible financial effects.
 
@@ -41,6 +41,6 @@ Reviewed 2026-10-17; Sprint 1/2 updated 2026-10-20. The current branch contains 
 
 The user explicitly required stopping before production migrations/configuration changes, destructive data operations, real production credentials, materially risky dependency upgrades, API breaks and ambiguous business-rule changes. Those items were investigated and recorded; no such operation was performed.
 
-Source rule tightening, transaction changes and financial projection fixes need normal code review plus the missing emulator verification before deployment. Existing incomplete voucher records require reviewed reconciliation; the new service refuses to disguise them as a successful generation. A global supplier summary may now return 503 at its safety cap; individual settlement remains available. These are material release behaviors to communicate to operators.
+Source rule tightening, transaction changes and financial projection fixes need normal code review plus production topology and deployment validation. Existing incomplete voucher records require reviewed reconciliation; the new service refuses to disguise them as a successful generation. A global supplier summary may now return 503 at its safety cap; individual settlement remains available. These are material release behaviors to communicate to operators.
 
 The four immediate actions above are the highest-value remaining work. A passing demo/browser suite does not resolve their production dependencies.

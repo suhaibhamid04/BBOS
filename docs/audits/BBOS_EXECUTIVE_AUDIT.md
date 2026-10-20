@@ -1,17 +1,17 @@
 # Booking Bridge OS — executive engineering audit
 
-Audit completed locally on 2026-10-17 and Production Readiness Sprint 1 closed S07/B06 in source on 2026-10-20. Branch: **`audit/bbos-comprehensive-remediation`**, baseline **`4997f47`**. Application code **was changed**. Commit batches are listed in [the changelog](BBOS_CHANGELOG.md).
+Audit completed locally on 2026-10-17; Production Readiness Sprints 1–3 closed S07/B06, B05 and S08 in source on 2026-10-20. Branch: **`audit/bbos-comprehensive-remediation`**, baseline **`4997f47`**. Application code and dependency resolution **were changed**. Commit batches are listed in [the changelog](BBOS_CHANGELOG.md).
 
-BBOS has substantial server-authoritative commercial workflows and meaningful automated coverage, but **is not established as production-ready**. Sprint 1 removed the production browser Firestore authorization surface and canonicalized the remaining customer/voucher flows. Database topology, unexecuted Firestore emulator checks, dependency advisories and incomplete financial exception workflows still prevent a clean readiness conclusion.
+BBOS has substantial server-authoritative commercial workflows and meaningful automated coverage, but **is not established as production-ready**. The sprints removed the production browser Firestore authorization surface, canonicalized customer/voucher flows, unified source topology and dispositioned every dependency advisory. Production topology validation/deployment and incomplete financial exception workflows still prevent a clean readiness conclusion.
 
 ## Outcome and scope
 
 - **285 baseline tracked files inventoried; 193 baseline non-test source/config files statically scanned; 144 current API registrations mapped.** Critical domain paths and associated tests were manually traced. This is not a claim that all files received exhaustive manual review.
-- **25 finding records: P0 0, P1 17, P2 8, P3 0.** No application-level P0 was confirmed. A dependency advisory is vendor-rated critical; its BBOS exploitability remains unverified.
-- **22 confirmed defects/gaps/structural risks; 3 require deployment, reachability or business verification** (S08/B05/A01). “Confirmed” includes an observed architecture/testing gap, not necessarily an exploitable vulnerability.
-- **17 records repaired in source** (S07, B06 and B05 added); **8 remain open**, including **2 P1** (S08, A01). B05 still requires an approved production database decision and validation. Firestore repairs additionally await executable emulator verification and deployment; “fixed” does not claim production protection.
-- **Sprint 1 final tests:** 680 unit/service/HTTP tests passed and 56 Chromium browser tests passed. TypeScript and build passed. The earlier real Auth emulator test remains valid; Firestore suites are **BLOCKED_NOT_RUN** because Java is unavailable. See [test results](BBOS_TEST_RESULTS.md).
-- No production credentials/data/configuration, migration, external message, dependency version or irreversible data operation was used. Three obsolete browser files were removed only after reference, route, script, test and dynamic-import searches proved the paths retired.
+- **25 finding records: P0 0, P1 17, P2 8, P3 0.** No application-level P0 was confirmed. The vendor-critical dependency advisory was not reachable under BBOS proxy configuration and is patched.
+- **22 confirmed defects/gaps/structural risks; 2 require deployment or business verification** (B05/A01). “Confirmed” includes an observed architecture/testing gap, not necessarily an exploitable vulnerability.
+- **18 records repaired or dispositioned in source**; **7 remain open**, including **1 P1** (A01). B05 still requires an approved production database decision and validation. Firestore source repairs passed emulator verification but still require deployment; “fixed” does not claim production protection.
+- **Sprint 3 final tests:** 687 unit/service/HTTP tests, 56 Chromium cases, 5 Firestore rule cases and 1 Firebase-backed browser case passed. TypeScript and build passed. See [test results](BBOS_TEST_RESULTS.md).
+- No production credentials/data/configuration, migration, external message or irreversible data operation was used. Dependency changes were limited to compatible transitive patches and one tested same-major `qs` override. Three obsolete browser files were removed only after reference, route, script, test and dynamic-import searches proved the paths retired.
 
 ## What works and what remains unreliable
 
@@ -21,7 +21,7 @@ BBOS has substantial server-authoritative commercial workflows and meaningful au
 
 **Booking/Reservations/Operations:** The browser suite passes the cross-role lifecycle. Dispatch/cancellation and voucher creation now commit their audit/state/links atomically and authorize before idempotent returns. Reservations records discrepancy evidence without silently altering frozen money. Material substitutions, approved commercial amendments and downstream refund/commission execution remain incomplete or require a business decision.
 
-**Firestore:** All enumerated production collections, conversion markers and Booking financial snapshots are server-only in rule source. Two demo-only itinerary mirror calls remain behind explicit demo mode and are not production workflows. Browser and Admin now consume one explicit normalized database ID and production fails on missing/mismatched topology. The actual rules were not executed because Java is absent, and the authoritative production database still requires a deliberate approved decision.
+**Firestore:** All enumerated production collections, conversion markers and Booking financial snapshots are server-only in rule source. Two demo-only itinerary mirror calls remain behind explicit demo mode and are not production workflows. Browser and Admin now consume one explicit normalized database ID and production fails on missing/mismatched topology. All five executable rule cases and the Firebase-backed browser workflow pass locally; the authoritative production database still requires a deliberate approved decision.
 
 **Frontend/UX:** Pagination, empty-result replacement, stale-response guards, sign-in submission handling and labels improved. All 56 browser tests pass, including selected mobile views. Custom dialogs, complete keyboard/screen-reader behavior and production React identity races need further verification.
 
@@ -40,8 +40,8 @@ The most dangerous confirmed class was bypassing modern resource policy through 
 ## Five highest-value next actions
 
 1. Inspect and approve the authoritative production Firestore database, then execute the documented validation/rollback plan.
-2. Provide Java and run real Firestore rule/workflow tests before deploying the tightened rules.
-3. Review advisory reachability and patch dependencies in a dedicated verified change.
+2. Validate the selected production database, indexes, IAM and deployment target before deploying the emulator-verified tightened rules.
+3. Pin the passing Bun/Java/browser/Firebase gates in CI and monitor supported upstream fixes for the six dispositioned advisories.
 4. Specify and implement amendment/substitution/refund/commission workflows with explicit authority and accounting acceptance cases.
 5. Add CI and stronger schemas/static checks before release.
 
@@ -52,14 +52,14 @@ Production configuration/migrations, materially risky dependency upgrades, API-b
 | ID | Priority | Finding | Status | Evidence classification |
 |---|---|---|---|---|
 | S01 | P1 | Operations could dispatch and generate vouchers across assignments | Fixed | Confirmed |
-| S02 | P1 | Direct Firestore access bypassed modern resource policy | Fixed in source; rules execution pending | Confirmed |
-| S03 | P1 | Legacy rules admitted unmapped or inactive Firebase identities | Fixed in source; rules execution pending | Confirmed |
+| S02 | P1 | Direct Firestore access bypassed modern resource policy | Fixed in source; emulator verified; deployment pending | Confirmed |
+| S03 | P1 | Legacy rules admitted unmapped or inactive Firebase identities | Fixed in source; emulator verified; deployment pending | Confirmed |
 | S04 | P1 | Supplier costs leaked through generic aliases and calculator breakdowns | Fixed | Confirmed |
 | S05 | P2 | Public transport-day projection copied unknown internal fields | Fixed | Confirmed |
 | S06 | P1 | Production static hosting exposed backend bundle and source map | Fixed | Confirmed |
-| S07 | P1 | Remaining legacy client collections lacked record-level scope | Closed in source; rules execution/deployment pending | Confirmed |
-| S08 | P1 | Installed dependency advisories remain | Open | Needs reachability verification |
-| S09 | P1 | Legacy conversation deletion and audit actor spoofing bypassed intended restrictions | Fixed in source; rules execution pending | Confirmed |
+| S07 | P1 | Remaining legacy client collections lacked record-level scope | Closed in source; emulator verified; deployment pending | Confirmed |
+| S08 | P1 | Installed dependency advisories remain | Closed: 9 remediated, 6 dispositioned | Confirmed reachability for 2 `qs` records; all residuals non-reachable/dev-only |
+| S09 | P1 | Legacy conversation deletion and audit actor spoofing bypassed intended restrictions | Fixed in source; emulator verified; deployment pending | Confirmed |
 | B01 | P1 | Booking transitions and audit writes were non-atomic | Fixed | Confirmed |
 | B02 | P1 | Voucher creation could duplicate, partially commit or overwrite records | Fixed | Confirmed |
 | B03 | P1 | Optional undefined fields rejected production financial writes | Fixed | Confirmed |
@@ -72,7 +72,7 @@ Production configuration/migrations, materially risky dependency upgrades, API-b
 | B10 | P2 | Tool gateway reports successful execution without executing a tool | Open | Confirmed |
 | A01 | P1 | Refund, amendment, substitution and commission journeys are incomplete | Open | Needs business verification |
 | A02 | P2 | Capped registries, eager loading and large bundle constrain growth | Open | Confirmed |
-| A03 | P2 | Verification pipeline lacks CI, true linting and executed Firestore regressions | Open | Confirmed |
+| A03 | P2 | Verification pipeline lacks CI, true linting and pinned Firebase regression gates | Open | Confirmed |
 | A04 | P2 | Large mixed-responsibility modules and permissive typing raise change risk | Open | Confirmed |
 | A05 | P2 | Request validation, error contracts and integration resilience are inconsistent | Open | Confirmed |
 | A06 | P2 | Modal semantics and keyboard behavior need broader accessibility work | Open | Confirmed |
