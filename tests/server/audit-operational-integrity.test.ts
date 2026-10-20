@@ -81,6 +81,27 @@ describe('audit: scoped and atomic operational mutations', () => {
     await service.generateVouchers('audit-booking', operations);
     await expect(service.generateVouchers('audit-booking', { ...operations, employeeId: 'ops-b' })).rejects.toMatchObject({ statusCode: 403 });
   });
+  it('lists only booking-scoped voucher fields after assignment and active-identity checks', async () => {
+    const historicalVoucher = {
+      id: 'voucher-history', bookingId: 'audit-booking', tripId: 'audit-trip', type: 'HOTEL' as const,
+      status: 'GENERATED' as const, generatedAt: '2026-10-01T00:00:00Z', fileUrl: '/voucher.pdf',
+      supplierCost: 45_000, buyingPrice: 44_000, profit: 10_000, margin: 18, internalNotes: 'private',
+    };
+    const service = new VoucherService(new InMemoryVoucherStorageProvider({
+      bookings: [booking('IN_OPERATIONS')], vouchers: [historicalVoucher],
+    }));
+
+    const visible = await service.listVouchers('audit-booking', operations);
+    expect(visible).toEqual([{
+      id: 'voucher-history', bookingId: 'audit-booking', tripId: 'audit-trip', type: 'HOTEL',
+      status: 'GENERATED', generatedAt: '2026-10-01T00:00:00Z', fileUrl: '/voucher.pdf',
+    }]);
+    expect(JSON.stringify(visible)).not.toMatch(/supplierCost|buyingPrice|profit|margin|internalNotes/);
+    await expect(service.listVouchers('audit-booking', { ...operations, employeeId: 'ops-b' })).rejects.toMatchObject({ statusCode: 403 });
+    await expect(service.listVouchers('audit-booking', { ...operations, active: false })).rejects.toMatchObject({ statusCode: 403 });
+    await expect(service.listVouchers('audit-booking', { ...operations, employeeId: '', uid: 'unmapped-uid' })).rejects.toMatchObject({ statusCode: 403 });
+    expect(await service.listVouchers('audit-booking', admin)).toHaveLength(1);
+  });
   it('concurrent voucher requests commit one linked set', async () => {
     const store = new InMemoryVoucherStorageProvider({ bookings: [booking('IN_OPERATIONS')], accommodations: [accommodation()] });
     const service = new VoucherService(store);

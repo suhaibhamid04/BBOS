@@ -114,12 +114,12 @@ describe('Stage D3C Booking authority lockdown', () => {
 
   it('prevents Sales from forging CONFIRMED and Operations from forging IN_OPERATIONS through legacy browser paths', async () => {
     const contextSource = await Bun.file(new URL('../../src/context/DataContext.tsx', import.meta.url)).text();
-    const repositorySource = await Bun.file(new URL('../../src/services/db/repositories.ts', import.meta.url)).text();
+    const retiredRepository = Bun.file(new URL('../../src/services/db/repositories.ts', import.meta.url));
 
     expect(contextSource).toContain('Production Booking creation is server-authoritative');
     expect(contextSource).toContain('Production Booking updates are server-authoritative');
     expect(contextSource).not.toContain("setDoc(doc(db, 'bookings'");
-    expect(repositorySource).not.toContain("BookingRepo = new FirestoreRepository<any>('bookings')");
+    expect(await retiredRepository.exists()).toBe(false);
   });
 
   it('allows assigned Operations to confirm transport and activity atomically', async () => {

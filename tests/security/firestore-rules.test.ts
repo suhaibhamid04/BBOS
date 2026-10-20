@@ -149,13 +149,22 @@ describe('3. Firestore Security Rules Specification Verification', () => {
     const whatsAppWebhookEventRules = rules.match(/match \/whatsapp_webhook_events\/\{eventId\} \{([\s\S]*?)\n    \}/)?.[1] || '';
     const whatsAppPendingStatusRules = rules.match(/match \/whatsapp_pending_statuses\/\{statusId\} \{([\s\S]*?)\n    \}/)?.[1] || '';
     const auditRules = rules.match(/match \/audit_logs\/\{logId\} \{([\s\S]*?)\n    \}/)?.[1] || '';
+    const retiredCollections = [
+      'customers', 'companies', 'conversations', 'messages', 'tasks', 'vouchers', 'hotels',
+      'hotel_rooms', 'hotel_bookings', 'transports', 'drivers', 'activities', 'activity_bookings',
+      'packages', 'property_photos', 'negotiated_rates', 'rate_history', 'destinations', 'transport_routes',
+    ];
     const securityInvariants = {
       unauthenticatedAccessDenied: true,
-      auditLogsImmutableAndAppendOnly: true,
-      messagesAppendOnly: true,
+      auditLogsServerOnly: /allow read, create, update, delete: if false;/.test(auditRules),
+      retiredCollectionsServerOnly: retiredCollections.every(collection => {
+        const marker = `match /${collection}/`;
+        const start = rules.indexOf(marker);
+        const block = start < 0 ? '' : rules.slice(start, rules.indexOf('\n    }', start));
+        return block.includes('allow read, create, update, delete: if false;');
+      }),
       employeePermissionsModifiableOnlyByAdminOrFounder: true,
       employeeDeletionRestrictedToFounder: true,
-      auditLogsReadableOnlyByAdminAndAccounts: true,
       catchAllRuleDeniesUnlistedPaths: true,
       quotesAreServerOnly: /allow read, create, update, delete: if false;/.test(quoteRules),
       customerSharesAreServerOnly: /allow read, create, update, delete: if false;/.test(customerShareRules),
@@ -165,42 +174,16 @@ describe('3. Firestore Security Rules Specification Verification', () => {
         /allow read, create, update, delete: if false;/.test(unmatchedWhatsAppRules) &&
         /allow read, create, update, delete: if false;/.test(whatsAppWebhookEventRules) &&
         /allow read, create, update, delete: if false;/.test(whatsAppPendingStatusRules),
-      quoteAuditEventsAreServerOnly:
-        auditRules.includes('QUOTE_CREATED') &&
-        auditRules.includes('QUOTE_UPDATED') &&
-        auditRules.includes('QUOTE_CONVERTED_TO_BOOKING'),
-      customerShareAuditsAreServerOnly: auditRules.includes("entityType != 'CUSTOMER_SHARE'"),
-      conversationAuditsAreServerOnly:
-        auditRules.includes("entityType != 'CONVERSATION_ENTRY'") &&
-        auditRules.includes('INTERNAL_NOTE_ADDED') &&
-        auditRules.includes('CUSTOMER_CONTACT_LOGGED') &&
-        auditRules.includes('WHATSAPP_MESSAGE_SEND_REQUESTED') &&
-        auditRules.includes('WHATSAPP_MESSAGE_RETRY_REQUESTED') &&
-        auditRules.includes('UNMATCHED_WHATSAPP_LINKED'),
-      paymentAuditEventsAreServerOnly:
-        auditRules.includes("entityType != 'PAYMENT'") &&
-        auditRules.includes('PAYMENT_RECORDED') &&
-        auditRules.includes('PAYMENT_VERIFIED') &&
-        auditRules.includes('PAYMENT_REJECTED') &&
-        auditRules.includes('BOOKING_CONFIRMED_FROM_PAYMENT'),
-      operationsAssignmentAuditsAreServerOnly:
-        auditRules.includes('OPERATIONS_ASSIGNED') &&
-        auditRules.includes('OPERATIONS_REASSIGNED'),
     };
 
     expect(securityInvariants.unauthenticatedAccessDenied).toBe(true);
-    expect(securityInvariants.auditLogsImmutableAndAppendOnly).toBe(true);
-    expect(securityInvariants.messagesAppendOnly).toBe(true);
+    expect(securityInvariants.auditLogsServerOnly).toBe(true);
+    expect(securityInvariants.retiredCollectionsServerOnly).toBe(true);
     expect(securityInvariants.employeePermissionsModifiableOnlyByAdminOrFounder).toBe(true);
     expect(securityInvariants.quotesAreServerOnly).toBe(true);
     expect(securityInvariants.customerSharesAreServerOnly).toBe(true);
     expect(securityInvariants.paymentsAreServerOnly).toBe(true);
     expect(securityInvariants.conversationEntriesAreServerOnly).toBe(true);
     expect(securityInvariants.whatsappProviderStateIsServerOnly).toBe(true);
-    expect(securityInvariants.quoteAuditEventsAreServerOnly).toBe(true);
-    expect(securityInvariants.customerShareAuditsAreServerOnly).toBe(true);
-    expect(securityInvariants.conversationAuditsAreServerOnly).toBe(true);
-    expect(securityInvariants.paymentAuditEventsAreServerOnly).toBe(true);
-    expect(securityInvariants.operationsAssignmentAuditsAreServerOnly).toBe(true);
   });
 });

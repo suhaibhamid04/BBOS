@@ -19,6 +19,7 @@ import { operationsRouter } from './operations.js';
 import { approvalsRouter } from './approvals.js';
 import { customerSharesPublicRouter } from './customerSharesPublic.js';
 import { metaWhatsAppWebhookRouter } from './metaWhatsAppWebhook.js';
+import { customersRouter } from './customers.js';
 
 export const apiRouter = Router();
 
@@ -49,6 +50,7 @@ apiRouter.use('/trips', tripsRouter);
 apiRouter.use('/quotes', quotesRouter);
 apiRouter.use('/bookings', bookingsRouter);
 apiRouter.use('/leads', leadsRouter);
+apiRouter.use('/customers', customersRouter);
 apiRouter.use('/employees', employeesRouter);
 apiRouter.use('/supplier-payables', supplierPayablesRouter);
 apiRouter.use('/operations', operationsRouter);

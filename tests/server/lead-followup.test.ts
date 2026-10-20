@@ -135,8 +135,8 @@ describe('Sales Core M3 queue projection and business time', () => {
     const rules = await Bun.file('firestore.rules').text();
     const eventRules = rules.match(/match \/lead_events\/\{eventId\} \{([\s\S]*?)\n    \}/)?.[1] || '';
     expect(eventRules).toContain('allow read, create, update, delete: if false;');
-    expect(rules).toContain("'LEAD_INTERACTION_RECORDED'");
-    expect(rules).toContain("'LEAD_DROPPED'");
+    const auditRules = rules.match(/match \/audit_logs\/\{logId\} \{([\s\S]*?)\n    \}/)?.[1] || '';
+    expect(auditRules).toContain('allow read, create, update, delete: if false;');
   });
 
   test('Asia/Kolkata date keys and midnight boundaries classify overdue/today/upcoming correctly', () => {

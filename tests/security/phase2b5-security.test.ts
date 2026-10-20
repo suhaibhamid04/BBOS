@@ -20,16 +20,13 @@ describe('Phase 2B-5 Security & Architecture Verification', () => {
   const firestoreRules = fs.readFileSync(rulesPath, 'utf8');
 
   describe('1. Invariant: Financial Snapshot Access & Mutation Security', () => {
-    it('Sales Executive and Operations CANNOT read financial_snapshot in firestore.rules', () => {
+    it('all browser roles are denied direct financial_snapshot access', () => {
       // Must contain match block for financial_snapshot under bookings
       const snapshotMatch = firestoreRules.match(/match\s+\/financial_snapshot\/\{snapshotId\}\s*\{([\s\S]*?)\}/);
       expect(snapshotMatch).not.toBeNull();
       const snapshotRules = snapshotMatch![1];
 
-      // Read must only allow Founder, Admin, Accounts
-      expect(snapshotRules).toContain('allow read: if isFounder() || isAdmin() || isAccounts();');
-      expect(snapshotRules).not.toContain('isSalesExecutive');
-      expect(snapshotRules).not.toContain('isOperations');
+      expect(snapshotRules).toContain('allow read, create, update, delete: if false;');
     });
 
     it('Clients (including Founder, Admin, Accounts) CANNOT create, update, or delete financial_snapshot', () => {
@@ -37,8 +34,7 @@ describe('Phase 2B-5 Security & Architecture Verification', () => {
       expect(snapshotMatch).not.toBeNull();
       const snapshotRules = snapshotMatch![1];
 
-      // Must strictly deny client writes
-      expect(snapshotRules).toContain('allow create, update, delete: if false;');
+      expect(snapshotRules).toContain('allow read, create, update, delete: if false;');
     });
 
     it('FinancialSnapshot model strictly retains frozen supplier rates and audit metadata', () => {
@@ -292,35 +288,29 @@ describe('Phase 2B-5 Security & Architecture Verification', () => {
     });
   });
 
-  describe('6. Invariant: Legacy Collections Preserved as Read-Only Historical Freeze', () => {
-    it('hotel_bookings, transports, and activity_bookings deny all create, update, delete', () => {
+  describe('6. Invariant: Legacy Collections Are Server-Only', () => {
+    it('hotel_bookings, transports, and activity_bookings deny every direct browser operation', () => {
       const hotelBookingsMatch = firestoreRules.match(/match\s+\/hotel_bookings\/\{bookingId\}\s*\{([\s\S]*?)\}/);
       expect(hotelBookingsMatch).not.toBeNull();
-      expect(hotelBookingsMatch![1]).toContain('allow create, update, delete: if false;');
+      expect(hotelBookingsMatch![1]).toContain('allow read, create, update, delete: if false;');
 
       const transportsMatch = firestoreRules.match(/match\s+\/transports\/\{transportId\}\s*\{([\s\S]*?)\}/);
       expect(transportsMatch).not.toBeNull();
-      expect(transportsMatch![1]).toContain('allow create, update, delete: if false;');
+      expect(transportsMatch![1]).toContain('allow read, create, update, delete: if false;');
 
       const activityBookingsMatch = firestoreRules.match(/match\s+\/activity_bookings\/\{bookingId\}\s*\{([\s\S]*?)\}/);
       expect(activityBookingsMatch).not.toBeNull();
-      expect(activityBookingsMatch![1]).toContain('allow create, update, delete: if false;');
+      expect(activityBookingsMatch![1]).toContain('allow read, create, update, delete: if false;');
     });
   });
 
   describe('7. Invariant: Quote Conversions Collection Security (Immutable Server-Only Markers)', () => {
-    it('quote_conversions read is restricted to Founder, Admin, Accounts ONLY', () => {
+    it('quote_conversions are server-only for every browser role', () => {
       const convMatch = firestoreRules.match(/match\s+\/quote_conversions\/\{conversionId\}\s*\{([\s\S]*?)\}/);
       expect(convMatch).not.toBeNull();
       const convRules = convMatch![1];
 
-      // Read must only allow Founder, Admin, Accounts
-      expect(convRules).toContain('allow read: if isFounder() || isAdmin() || isAccounts();');
-      // Sales, Ops, Marketing must NOT appear in read rules
-      expect(convRules).not.toContain('isSalesExecutive');
-      expect(convRules).not.toContain('isSalesManager');
-      expect(convRules).not.toContain('isOperations');
-      expect(convRules).not.toContain('isMarketing');
+      expect(convRules).toContain('allow read, create, update, delete: if false;');
     });
 
     it('Clients (ALL roles) CANNOT create, update, or delete quote_conversions', () => {
@@ -328,8 +318,7 @@ describe('Phase 2B-5 Security & Architecture Verification', () => {
       expect(convMatch).not.toBeNull();
       const convRules = convMatch![1];
 
-      // Must strictly deny all client mutations
-      expect(convRules).toContain('allow create, update, delete: if false;');
+      expect(convRules).toContain('allow read, create, update, delete: if false;');
     });
   });
 });

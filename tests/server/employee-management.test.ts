@@ -402,8 +402,6 @@ describe('BBOS Employee & Access Management MVP', () => {
     const auditRules = rules.match(/match \/audit_logs\/\{logId\} \{([\s\S]*?)\n    \}/)?.[1] || '';
     expect(employeeRules).toContain('allow read, create, update, delete: if false;');
     expect(teamRules).toContain('allow read, create, update, delete: if false;');
-    expect(auditRules).toContain("entityType != 'EMPLOYEE'");
-    expect(auditRules).toContain('EMPLOYEE_CREATED');
-    expect(auditRules).toContain('EMPLOYEE_DEACTIVATED');
+    expect(auditRules).toContain('allow read, create, update, delete: if false;');
   });
 });

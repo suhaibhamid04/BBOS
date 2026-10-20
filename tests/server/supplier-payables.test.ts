@@ -402,9 +402,7 @@ describe('Stage D4B supplier payables', () => {
     const paymentRules = rules.match(/match \/supplier_payments\/\{paymentId\} \{([\s\S]*?)\n    \}/)?.[1] || '';
     expect(paymentRules).toContain('allow read, create, update, delete: if false;');
     expect(paymentRules).not.toContain('request.resource.data.status');
-    expect(rules).toContain("entityType != 'SUPPLIER_PAYMENT'");
-    expect(rules).toContain('SUPPLIER_PAYMENT_RECORDED');
-    expect(rules).toContain('SUPPLIER_PAYMENT_VERIFIED');
-    expect(rules).toContain('SUPPLIER_SETTLED');
+    const auditRules = rules.match(/match \/audit_logs\/\{logId\} \{([\s\S]*?)\n    \}/)?.[1] || '';
+    expect(auditRules).toContain('allow read, create, update, delete: if false;');
   });
 });

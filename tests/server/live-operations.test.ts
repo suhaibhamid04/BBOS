@@ -285,10 +285,7 @@ describe('Stage D5B commercial-change escalation and Control Room signals', () =
     }
     const transportRules = rules.match(/match \/booking_transports\/\{docId\} \{([\s\S]*?)\n    \}/)?.[1] || '';
     expect(transportRules).toContain('allow read, create, update, delete: if false;');
-    for (const action of [
-      'OPERATIONS_ISSUE_CREATED', 'OPERATIONS_ISSUE_UPDATED', 'OPERATIONS_ISSUE_RESOLVED',
-      'OPERATIONAL_SERVICE_UPDATED', 'OPERATIONAL_CHANGE_ESCALATED',
-      'EMERGENCY_SPEND_REQUESTED', 'EMERGENCY_SPEND_APPROVED', 'EMERGENCY_SPEND_REJECTED',
-    ]) expect(rules).toContain(action);
+    const auditRules = rules.match(/match \/audit_logs\/\{logId\} \{([\s\S]*?)\n    \}/)?.[1] || '';
+    expect(auditRules).toContain('allow read, create, update, delete: if false;');
   });
 });

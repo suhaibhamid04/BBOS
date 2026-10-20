@@ -47,7 +47,6 @@ export type NavSectionKey =
   | 'lead-detail'
   | 'leads'
   | 'customers'
-  | 'companies'
   | 'conversations'
   | 'sales-pipeline'
   | 'quotes'
@@ -60,7 +59,6 @@ export type NavSectionKey =
   | 'campaigns'
   | 'marketing-ai'
   | 'operations-dashboard'
-  | 'vouchers'
   | 'analytics-overview'
   | 'analytics-sales'
   | 'analytics-marketing'
@@ -144,7 +142,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       items: [
         ...(permissions.canViewAllSales ? [{ key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard } as any] : []),
         ...(permissions.canAccessAiCommand ? [{ key: 'ai-command', label: 'AI Command Center', icon: Bot, badge: 'Live AI', badgeColor: 'bg-[#7056EE]/15 text-[#7056EE]' } as any] : []),
-        { key: 'tasks', label: 'Tasks', icon: CheckSquare, badge: pendingTasksCount > 0 ? pendingTasksCount : undefined, badgeColor: 'bg-amber-100 text-amber-800' },
+        ...(permissions.canManageLeads ? [{ key: 'tasks', label: 'Follow-ups', icon: CheckSquare, badge: pendingTasksCount > 0 ? pendingTasksCount : undefined, badgeColor: 'bg-amber-100 text-amber-800' } as any] : []),
         ...(canSeeApprovalInbox ? [{ key: 'approvals', label: 'Approvals & Exceptions', icon: ShieldAlert, badge: pendingApprovalCount, badgeColor: 'bg-rose-500 text-white font-bold' } as any] : []),
         { key: 'notifications', label: 'Notifications', icon: Bell },
       ]
@@ -154,7 +152,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       items: [
         { key: 'leads', label: 'Leads', icon: Flame, badge: hotLeadsCount > 0 ? `${hotLeadsCount} hot` : undefined, badgeColor: 'bg-[#F0A608]/15 text-amber-900 font-semibold' },
         { key: 'customers', label: 'Customers', icon: Users },
-        { key: 'companies', label: 'Companies', icon: Building2 },
         { key: 'conversations', label: 'Conversations', icon: MessageSquare },
       ]
     }] : []),
@@ -186,7 +183,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       title: 'OPERATIONS',
       items: [
         { key: 'operations-dashboard', label: 'Control Room', icon: Compass } as any,
-        { key: 'vouchers', label: 'Vouchers', icon: FileText } as any,
       ]
     }] : []),
     ...(['Founder', 'Admin', 'Accounts'].includes(currentUser.role) ? [{

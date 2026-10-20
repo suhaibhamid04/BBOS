@@ -201,8 +201,9 @@ describe('Stage B demo and navigation behavior', () => {
 describe('Stage B targeted Firestore rate policy', () => {
   const rules = readFileSync('firestore.rules', 'utf8');
 
-  it('keeps migrated inventory collections server-only and legacy rate collections scoped away from Operations', () => {
-    expect(rules).toContain("getUserRole() == 'Reservations'");
+  it('keeps migrated and legacy rate collections server-only', () => {
+    expect(rules).not.toContain('getUserRole()');
+    expect(rules).not.toContain('request.auth.uid');
 
     for (const collection of ['rate_periods', 'transport_rate_periods', 'activity_rate_periods']) {
       const marker = `match /${collection}/`;
@@ -223,8 +224,7 @@ describe('Stage B targeted Firestore rate policy', () => {
       const start = rules.indexOf(marker);
       const block = rules.slice(start, rules.indexOf('\n    }', start));
       expect(start).toBeGreaterThan(-1);
-      expect(block).toContain('isReservations()');
-      expect(block).not.toContain('isOperations()');
+      expect(block).toContain('allow read, create, update, delete: if false');
     }
   });
 });

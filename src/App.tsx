@@ -9,7 +9,6 @@ import { CommandCenterDashboard } from './components/dashboard/CommandCenterDash
 import { AiCommandCenterView } from './components/command/AiCommandCenterView';
 import { LeadsView } from './components/crm/LeadsView';
 import { CustomersView } from './components/crm/CustomersView';
-import { CompaniesView } from './components/crm/CompaniesView';
 import { ConversationsView } from './components/crm/ConversationsView';
 import { SalesPipelineView } from './components/sales/SalesPipelineView';
 import { MyWorkspaceView } from './components/sales/MyWorkspace';
@@ -31,7 +30,6 @@ import { AuditLogsView } from './components/governance/AuditLogsView';
 import { TasksView } from './components/operations/TasksView';
 import { NotificationsView } from './components/operations/NotificationsView';
 import { OperationsDashboard } from './components/operations/OperationsDashboard';
-import { VouchersView } from './components/operations/VouchersView';
 import { IntegrationsView } from './components/operations/IntegrationsView';
 import { SettingsView } from './components/operations/SettingsView';
 import { AccommodationInventoryView } from './components/inventory/AccommodationInventoryView';
@@ -99,8 +97,6 @@ export function AppContent() {
         return <LeadsView onNavigate={handleNavigate} />;
       case 'customers':
         return <CustomersView />;
-      case 'companies':
-        return <CompaniesView />;
       case 'conversations':
         return <ConversationsView />;
       case 'sales-pipeline':
@@ -145,8 +141,6 @@ export function AppContent() {
         return <TasksView />;
       case 'operations-dashboard':
         return <OperationsDashboard />;
-      case 'vouchers':
-        return <VouchersView />;
       case 'notifications':
         return <NotificationsView />;
       case 'integrations':

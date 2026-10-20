@@ -519,6 +519,23 @@ bookingsRouter.patch(
 );
 
 /**
+ * GET /api/bookings/:bookingId/vouchers
+ * Lists an explicit Voucher DTO after the stored Booking assignment is checked.
+ */
+bookingsRouter.get(
+  '/:bookingId/vouchers',
+  requireRole(['Founder', 'Admin', 'Operations']),
+  async (req: Request, res: Response) => {
+    try {
+      const data = await voucherService.listVouchers(req.params.bookingId, getActorFromRequest(req));
+      return res.status(200).json({ success: true, data });
+    } catch (error: any) {
+      return handleLifecycleError(error, res, 'GET /bookings/:bookingId/vouchers');
+    }
+  },
+);
+
+/**
  * POST /api/bookings/:bookingId/vouchers/generate
  * Generates one Voucher record per service for a fully-confirmed booking.
  * Preconditions: booking.status === 'IN_OPERATIONS' AND confirmationProgress.allConfirmed === true

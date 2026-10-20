@@ -38,6 +38,20 @@ export interface GenerateVouchersResult {
   message: string;
 }
 
+export type VoucherListItem = Pick<Voucher, 'id' | 'bookingId' | 'tripId' | 'type' | 'status' | 'generatedAt' | 'fileUrl'>;
+
+function projectVoucher(voucher: Voucher): VoucherListItem {
+  return {
+    id: voucher.id,
+    bookingId: voucher.bookingId,
+    tripId: voucher.tripId,
+    type: voucher.type,
+    status: voucher.status,
+    ...(voucher.generatedAt ? { generatedAt: voucher.generatedAt } : {}),
+    ...(voucher.fileUrl ? { fileUrl: voucher.fileUrl } : {}),
+  };
+}
+
 // ── Error ──────────────────────────────────────────────────────────────────────
 
 export class VoucherError extends Error {
@@ -265,6 +279,21 @@ export class VoucherService {
 
   constructor(storageProvider?: VoucherStorageProvider) {
     this.storageProvider = storageProvider || new FirestoreVoucherStorageProvider();
+  }
+
+  /** Returns only vouchers for a Booking the Operations actor is assigned to. */
+  async listVouchers(bookingId: string, actor: VoucherActor): Promise<VoucherListItem[]> {
+    if (!VOUCHER_ROLES.includes(actor.role) || actor.active !== true || !actor.employeeId?.trim()) {
+      throw new VoucherError(403, 'FORBIDDEN', `Role "${actor.role}" is not authorized to read vouchers.`);
+    }
+    return this.storageProvider.runTransaction(async transaction => {
+      const booking = await transaction.getBooking(bookingId);
+      if (!booking) throw new VoucherError(404, 'BOOKING_NOT_FOUND', `Booking "${bookingId}" not found.`);
+      if (!canAccessOperationalBooking(actor, booking, 'GENERATE_VOUCHERS')) {
+        throw new VoucherError(403, 'FORBIDDEN', 'The employee is not assigned to this booking.');
+      }
+      return (await transaction.getVouchersForBooking(bookingId)).map(projectVoucher);
+    });
   }
 
   /**

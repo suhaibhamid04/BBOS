@@ -27,12 +27,13 @@ describe.skipIf(!host)('executable Firestore rule security regressions', () => {
     });
   });
   afterAll(async () => { await environment?.cleanup(); });
-  it('denies absent, inactive and mismatched employee identities on legacy collections', async () => {
+  it('denies all browser identities on migrated legacy collections', async () => {
     for (const uid of ['unmapped', 'inactive', 'mismatched']) {
       await assertFails(getDoc(doc(environment.authenticatedContext(uid).firestore(), 'conversations', 'conversation')));
     }
     await assertFails(getDoc(doc(environment.unauthenticatedContext().firestore(), 'conversations', 'conversation')));
-    await assertSucceeds(getDoc(doc(environment.authenticatedContext('ops').firestore(), 'conversations', 'conversation')));
+    await assertFails(getDoc(doc(environment.authenticatedContext('ops').firestore(), 'conversations', 'conversation')));
+    await assertFails(getDoc(doc(environment.authenticatedContext('admin').firestore(), 'conversations', 'conversation')));
   });
   it('denies direct modern financial reads and supplier-confirmation writes for all client roles', async () => {
     for (const uid of ['ops', 'admin']) {
@@ -44,17 +45,32 @@ describe.skipIf(!host)('executable Firestore rule security regressions', () => {
       await assertFails(setDoc(doc(db, 'vouchers', `forged-${uid}`), { bookingId: 'another-booking' }));
     }
   });
-  it('does not allow the conversation write grant to override admin-only deletion', async () => {
+  it('denies direct conversation deletion for every browser role', async () => {
     await assertFails(deleteDoc(doc(environment.authenticatedContext('ops').firestore(), 'conversations', 'conversation')));
-    await assertSucceeds(deleteDoc(doc(environment.authenticatedContext('admin').firestore(), 'conversations', 'conversation')));
+    await assertFails(deleteDoc(doc(environment.authenticatedContext('admin').firestore(), 'conversations', 'conversation')));
   });
-  it('binds legacy audit actor identity and reserves authoritative workflow events for the server', async () => {
+  it('reserves every audit event for authenticated server workflows', async () => {
     const db = environment.authenticatedContext('ops').firestore();
     const record = { entityType: 'TASK', actorId: 'emp-ops', action: 'TASK_UPDATED' };
-    await assertSucceeds(setDoc(doc(db, 'audit_logs', 'valid'), record));
+    await assertFails(setDoc(doc(db, 'audit_logs', 'valid'), record));
     await assertFails(setDoc(doc(db, 'audit_logs', 'spoof'), { ...record, actorId: 'emp-admin' }));
     for (const action of ['BOOKING_CANCELLED', 'BOOKING_DISPATCHED_TO_OPERATIONS', 'VOUCHERS_GENERATED']) {
       await assertFails(setDoc(doc(db, 'audit_logs', action), { ...record, action }));
+    }
+  });
+  it('denies reads and writes to the full retired collection set', async () => {
+    const retired = [
+      'customers', 'companies', 'conversations', 'messages', 'tasks', 'vouchers',
+      'hotels', 'hotel_rooms', 'hotel_bookings', 'transports', 'drivers', 'activities',
+      'activity_bookings', 'packages', 'audit_logs', 'property_photos', 'negotiated_rates',
+      'rate_history', 'destinations', 'transport_routes', 'ai_recommendations', 'ai_actions',
+    ];
+    for (const uid of ['ops', 'admin']) {
+      const db = environment.authenticatedContext(uid).firestore();
+      for (const collection of retired) {
+        await assertFails(getDoc(doc(db, collection, 'record')));
+        await assertFails(setDoc(doc(db, collection, `write-${uid}`), { actorId: `emp-${uid}` }));
+      }
     }
   });
 });

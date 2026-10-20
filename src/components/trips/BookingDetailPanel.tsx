@@ -11,6 +11,7 @@ import {
   listReservationsAssignees,
   type ReservationsAssignee,
 } from '../../services/booking/reservationsAssignmentApi';
+import type { Voucher } from '../../types';
 
 interface BookingDetailPanelProps {
   bookingId: string;
@@ -50,6 +51,7 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
   const [cancelReason, setCancelReason] = useState('');
   const [reservationsAssignees, setReservationsAssignees] = useState<ReservationsAssignee[]>([]);
   const [selectedReservationsEmployeeId, setSelectedReservationsEmployeeId] = useState('');
+  const [vouchers, setVouchers] = useState<Pick<Voucher, 'id' | 'bookingId' | 'tripId' | 'type' | 'status' | 'generatedAt' | 'fileUrl'>[]>([]);
 
   // Per-service form state (keyed by service id)
   const [serviceForms, setServiceForms] = useState<Record<string, Record<string, string>>>({});
@@ -64,12 +66,20 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || 'Failed to load booking');
       setData(json.data);
+      if (['Founder', 'Admin', 'Operations'].includes(currentUser.role)) {
+        const voucherResponse = await fetch(`/api/bookings/${bookingId}/vouchers`, {
+          headers: await bookingReadHeaders(currentUser.employeeId),
+        });
+        const voucherBody = await voucherResponse.json().catch(() => ({}));
+        if (!voucherResponse.ok) throw new Error(voucherBody.error || 'Failed to load vouchers');
+        setVouchers(Array.isArray(voucherBody.data) ? voucherBody.data : []);
+      } else setVouchers([]);
     } catch (err: any) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  }, [bookingId, currentUser.employeeId]);
+  }, [bookingId, currentUser.employeeId, currentUser.role]);
 
   useEffect(() => {
     if (bookingId) fetchDetail();
@@ -89,7 +99,7 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
   const apiPost = async (path: string, body?: any) => {
     const res = await fetch(`/api/bookings/${bookingId}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Demo-User-Id': currentUser.id },
+      headers: await bookingMutationHeaders(currentUser.employeeId),
       body: body ? JSON.stringify(body) : undefined,
     });
     const json = await res.json();
@@ -332,6 +342,13 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
             {allConfirmed && <span className="flex items-center gap-1 text-emerald-600 font-bold"><CheckCircle className="w-3 h-3" /> All Confirmed</span>}
           </div>
         </div>
+      )}
+
+      {['Founder', 'Admin', 'Operations'].includes(currentUser.role) && (
+        <section data-testid="booking-vouchers" className="mx-5 mt-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
+          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Vouchers</div>
+          {vouchers.length ? <div className="mt-2 flex flex-wrap gap-2">{vouchers.map(voucher => <span key={voucher.id} className="rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-800">{voucher.type} · {voucher.status} · {voucher.id}</span>)}</div> : <p className="mt-1 text-xs text-slate-500">No vouchers generated for this Booking.</p>}
+        </section>
       )}
 
       <div className={`mx-5 mt-3 px-4 py-3 border rounded-xl ${

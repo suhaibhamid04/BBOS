@@ -1,16 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { APP_CONFIG } from '../config';
 import { readApiPages } from '../services/auth/readApiPages';
-import {
-  CustomerRepo, CompanyRepo, ConversationRepo, MessageRepo,
-  TaskRepo, PackageRepo, AuditLogRepo, AiRecommendationRepo,
-  AiActionRepo, ItineraryDayRepo, HotelRepo, HotelRoomRepo,
-  HotelBookingRepo, TransportRepo, DriverRepo, ActivityRepo, ActivityBookingRepo,
-  VoucherRepo,
-  NegotiatedRateRepo,
-  PropertyPhotoRepo, RateHistoryRepo,
-  DestinationRepo, TransportRouteRepo
-} from '../services/db/repositories';
 import { inventoryApi } from '../services/inventory/inventoryApi';
 import { authenticatedMutationHeaders, authenticatedReadHeaders } from '../services/auth/authenticatedApi';
 import { calculateMixedAllocatedStayTotal, distributeGuestsAcrossRooms } from '../services/accommodationEngine';
@@ -171,7 +161,7 @@ import {
   DEMO_ACTIVITY_RATE_PERIODS
 } from '../services/activityDemoData';
 import { useAuth } from './AuthContext';
-import { db, auth } from '../lib/firebase';
+import { db } from '../lib/firebase';
 import { doc, setDoc, deleteDoc } from 'firebase/firestore';
 
 type QuoteDraftInput = Partial<Quote> & Pick<Quote, 'leadId' | 'customerId' | 'customerName' | 'destination' | 'validUntil'> & {
@@ -739,7 +729,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return DEMO_ACTIVITY_RATE_PERIODS;
   });
 
-  // Fetch from Firestore if not in DEMO mode
+  // Load production state through authenticated domain APIs.
   useEffect(() => {
     if (APP_CONFIG.DEMO_MODE) return;
     let disposed = false;
@@ -773,7 +763,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
         };
 
-        const canReadInventory = true; // All roles need inventory for TripBuilder
+        const canReadCustomers = ['Founder', 'Admin', 'Sales Manager', 'Sales Executive']
+          .includes(currentUser?.role as any);
         const canReadQuotes = ['Founder', 'Admin', 'Accounts', 'Sales Manager', 'Sales Executive']
           .includes(currentUser?.role as any);
         // UX/data-loading optimization only. Firestore/API rules remain the
@@ -781,75 +772,87 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const canReadRates = ['Founder', 'Admin', 'Accounts', 'Reservations'].includes(currentUser?.role as any);
 
         const [
-          fetchedLeads, fetchedCustomers, fetchedCompanies, fetchedTasks,
-          fetchedConversations, fetchedMessages, fetchedQuotes, fetchedBookings,
-          fetchedRecs, fetchedActions, fetchedApprovals, fetchedLogs, fetchedPackages,
-          fetchedTrips, fetchedHotels, fetchedTransports, fetchedDrivers, fetchedActivities, fetchedSuppliers, fetchedVouchers,
-          fetchedAccommProps, fetchedRoomCats, fetchedRatePeriods, fetchedNegRates,
-          fetchedVehicles, fetchedDestinations, fetchedRoutes, fetchedTransRates, fetchedTransSupps,
-          fetchedActMasters, fetchedActRates
+          fetchedLeads, fetchedCustomers, fetchedQuotes, fetchedBookings, fetchedTrips,
+          fetchedSuppliers, fetchedAccommProps, fetchedRoomCats, fetchedRatePeriods,
+          fetchedVehicles, fetchedTransRates, fetchedActMasters, fetchedActRates
         ] = await Promise.all([
-          safely(fetchApi('/api/leads'), 'leads'), safely(CustomerRepo.getAll()), safely(CompanyRepo.getAll()), safely(TaskRepo.getAll()),
-          safely(ConversationRepo.getAll()), safely(MessageRepo.getAll()), safely(canReadQuotes ? fetchApi('/api/quotes') : Promise.resolve([])), safely(fetchApi('/api/bookings')),
-          safely(AiRecommendationRepo.getAll()), safely(AiActionRepo.getAll()), Promise.resolve([]), safely(AuditLogRepo.getAll()),
-          safely(PackageRepo.getAll()),
+          safely(fetchApi('/api/leads'), 'leads'),
+          safely(canReadCustomers ? fetchApi('/api/customers') : Promise.resolve([])),
+          safely(canReadQuotes ? fetchApi('/api/quotes') : Promise.resolve([])),
+          safely(fetchApi('/api/bookings')),
           safely(fetchApi('/api/trips')),
-          safely(canReadInventory ? HotelRepo.getAll() : Promise.resolve([])),
-          safely(canReadInventory ? TransportRepo.getAll() : Promise.resolve([])),
-          safely(DriverRepo.getAll()),
-          safely(canReadInventory ? ActivityRepo.getAll() : Promise.resolve([])),
           safely(canReadRates ? Promise.all([
             fetchApi('/api/accommodation/suppliers'),
             fetchApi('/api/transport/suppliers'),
             fetchApi('/api/activities/providers')
-          ]).then((groups) => groups.flat()) : Promise.resolve([])), safely(VoucherRepo.getAll()),
+          ]).then((groups) => groups.flat()) : Promise.resolve([])),
           safely(fetchApi('/api/accommodation/properties'), 'accommodation'), safely(fetchApi('/api/accommodation/rooms'), 'accommodation'),
           safely(canReadRates ? fetchApi('/api/accommodation/rates') : Promise.resolve([])),
-          safely(canReadRates ? NegotiatedRateRepo.getAll() : Promise.resolve([])),
-          safely(fetchApi('/api/transport/vehicle-categories'), 'transport'), safely(DestinationRepo.getAll()), safely(TransportRouteRepo.getAll()),
+          safely(fetchApi('/api/transport/vehicle-categories'), 'transport'),
           safely(canReadRates ? fetchApi('/api/transport/rates') : Promise.resolve([])),
-          Promise.resolve([]),
           safely(fetchApi('/api/activities/masters'), 'activities'),
           safely(canReadRates ? fetchApi('/api/activities/rates') : Promise.resolve([]))
         ]);
         
         if (disposed) return;
-        setLeads(fetchedLeads as any);
-        setCustomers(fetchedCustomers as any);
-        setCompanies(fetchedCompanies as any);
-        setTasks(fetchedTasks as any);
-        setConversations(fetchedConversations as any);
-        setMessages(fetchedMessages as any);
+        const scopedLeads = fetchedLeads as Lead[];
+        const customerMap = new Map((fetchedCustomers as Customer[]).map(customer => [customer.id, customer]));
+        setLeads(scopedLeads);
+        setCustomers([...customerMap.values()]);
+        setCompanies([]);
+        setTasks(scopedLeads.filter(lead => Boolean(lead.nextFollowUpAt)).map(lead => ({
+          id: `follow-up:${lead.id}`,
+          title: `Follow up with ${lead.customerName}`,
+          description: `${lead.destination} · ${lead.status.replaceAll('_', ' ')}`,
+          assignedToId: lead.assignedEmployeeId,
+          assignedToName: lead.assignedEmployeeName || 'Unassigned',
+          relatedLeadId: lead.id,
+          relatedCustomerId: lead.customerId,
+          priority: lead.priority === 'HOT' ? 'URGENT' : lead.priority === 'WARM' ? 'HIGH' : 'MEDIUM',
+          status: 'PENDING', dueAt: lead.nextFollowUpAt!, source: 'SYSTEM', createdAt: lead.createdAt,
+        })));
+        setConversations(scopedLeads.map(lead => ({
+          id: lead.id, customerId: lead.customerId, customerName: lead.customerName,
+          customerPhone: lead.customerPhone, leadId: lead.id, channel: 'WhatsApp',
+          assignedEmployeeId: lead.assignedEmployeeId || '', assignedEmployeeName: lead.assignedEmployeeName || 'Unassigned',
+          status: 'ACTIVE', unreadCount: 0, lastMessage: lead.lastContactOutcome?.replaceAll('_', ' ') || 'Open Lead conversation',
+          lastMessageTimestamp: lead.lastContactAt || lead.updatedAt, createdAt: lead.createdAt, updatedAt: lead.updatedAt,
+        })));
+        setMessages([]);
         setQuotes(fetchedQuotes as any);
         setBookings(fetchedBookings as any);
-        setRecommendations(fetchedRecs as any);
-        setAiActions(fetchedActions as any);
-        setApprovals(fetchedApprovals as any);
-        setAuditLogs(fetchedLogs as any);
-        setPackages(fetchedPackages as any);
+        setRecommendations([]);
+        setAiActions([]);
+        setApprovals([]);
+        setAuditLogs([]);
         setTrips(fetchedTrips as any);
-        setHotels(fetchedHotels as any);
-        setTransports(fetchedTransports as any);
-        setDrivers(fetchedDrivers as any);
-        setActivities(fetchedActivities as any);
+        setHotels((fetchedAccommProps as AccommodationProperty[]).map(property => ({
+          id: property.id, name: property.name, destination: property.location || property.city,
+          category: property.starCategory || property.propertyType, address: property.address || '', contact: '',
+          supplierId: '', description: property.description || '', amenities: property.amenities || [],
+          active: property.status === 'ACTIVE',
+        })));
+        setTransports([]);
+        setDrivers([]);
+        setActivities([]);
         setSuppliers(fetchedSuppliers as any);
-        setVouchers(fetchedVouchers as any);
+        setVouchers([]);
         setAccommodationProperties(fetchedAccommProps as any);
         setRoomCategories(fetchedRoomCats as any);
         setRatePeriods(fetchedRatePeriods as any);
-        setNegotiatedRates(fetchedNegRates as any);
+        setNegotiatedRates([]);
 
         setVehicleCategories(fetchedVehicles as any);
-        setDestinations(fetchedDestinations as any);
-        setTransportRoutes(fetchedRoutes as any);
+        setDestinations([]);
+        setTransportRoutes([]);
         setTransportRatePeriods(fetchedTransRates as any);
-        setTransportSupplements(fetchedTransSupps as any);
+        setTransportSupplements([]);
         
         setActivityMasters(fetchedActMasters as any);
         setActivityRatePeriods(fetchedActRates as any);
         setDataLoadErrors(loadErrors);
       } catch (err) {
-        console.error("Failed to load data from Firestore:", err);
+        console.error('Failed to load production data:', err);
       } finally {
         if (!disposed) setIsLoading(false);
       }
@@ -959,6 +962,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Helper to log audit events with verified actor details
   const logAuditEvent = (action: string, entityType: string, entityId: string, before?: any, after?: any, reason?: string) => {
+    // Production mutations are audited by their authenticated server workflow.
+    // This local helper exists only to keep demo-mode UX history responsive.
+    if (!APP_CONFIG.DEMO_MODE) return;
     const newLog: AuditLog = {
       id: `audit-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       timestamp: new Date().toISOString(),
@@ -974,15 +980,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
     setAuditLogs(prev => [newLog, ...prev]);
 
-    // Async push to Firestore if available
-    if (db) {
-      try {
-        const logDoc = doc(db, 'audit_logs', newLog.id);
-        setDoc(logDoc, newLog).catch(e => console.warn('Firestore log write notice:', e));
-      } catch (e) {
-        // quiet fallback
-      }
-    }
   };
 
   // Lead CRUD
@@ -1304,6 +1301,28 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Customer CRUD
   const createCustomer = async (custData: Omit<Customer, 'id' | 'createdAt' | 'updatedAt' | 'totalBookings' | 'lifetimeValue'>): Promise<Customer> => {
+    if (!APP_CONFIG.DEMO_MODE) {
+      const legacyInput = custData as any;
+      const response = await fetch('/api/customers', {
+        method: 'POST',
+        headers: await authenticatedMutationHeaders(currentUser.employeeId),
+        body: JSON.stringify({
+          name: custData.name,
+          phone: custData.phone,
+          whatsApp: custData.whatsApp || custData.phone,
+          email: custData.email || '',
+          city: custData.city || '',
+          customerType: custData.customerType || (legacyInput.segment === 'B2B' ? 'B2B' : 'B2C'),
+          preferences: custData.preferences || legacyInput.tags || [],
+          notes: custData.notes || '',
+          ...(custData.companyId ? { companyId: custData.companyId } : {}),
+        }),
+      });
+      const result = await readApiResponse(response);
+      const created = result.data as Customer;
+      setCustomers(previous => [created, ...previous.filter(customer => customer.id !== created.id)]);
+      return created;
+    }
     const newCustomer: Customer = {
       ...custData,
       id: `cust-${Date.now()}`,
@@ -1316,17 +1335,24 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setCustomers(prev => [newCustomer, ...prev]);
     logAuditEvent('CUSTOMER_CREATED', 'CUSTOMER', newCustomer.id, null, newCustomer);
 
-    if (db) {
-      try {
-        await setDoc(doc(db, 'customers', newCustomer.id), newCustomer);
-      } catch (err) {
-        console.warn('Firestore customer create notice:', err);
-      }
-    }
     return newCustomer;
   };
 
   const updateCustomer = async (id: string, updates: Partial<Customer>) => {
+    if (!APP_CONFIG.DEMO_MODE) {
+      const allowed = Object.fromEntries(Object.entries(updates).filter(([field]) => [
+        'name', 'phone', 'whatsApp', 'email', 'city', 'customerType', 'preferences', 'notes', 'companyId',
+      ].includes(field)));
+      const response = await fetch(`/api/customers/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: await authenticatedMutationHeaders(currentUser.employeeId),
+        body: JSON.stringify(allowed),
+      });
+      const result = await readApiResponse(response);
+      const updated = result.data as Customer;
+      setCustomers(previous => previous.map(customer => customer.id === id ? updated : customer));
+      return;
+    }
     const prevCust = customers.find(c => c.id === id);
     const updated = prevCust ? { ...prevCust, ...updates, updatedAt: new Date().toISOString() } : null;
     setCustomers(prev =>
@@ -1334,17 +1360,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     );
     logAuditEvent('CUSTOMER_UPDATED', 'CUSTOMER', id, prevCust, updates, `Updated customer ${prevCust?.name || id}`);
 
-    if (db && updated) {
-      try {
-        await setDoc(doc(db, 'customers', id), updated);
-      } catch (err) {
-        console.warn('Firestore customer update notice:', err);
-      }
-    }
   };
 
   // Task CRUD
   const createTask = async (taskData: Omit<Task, 'id' | 'createdAt'>): Promise<Task> => {
+    if (!APP_CONFIG.DEMO_MODE) {
+      throw new Error('Standalone tasks are retired. Schedule the next follow-up on the Lead.');
+    }
     const newTask: Task = {
       ...taskData,
       id: `task-${Date.now()}`,
@@ -1356,6 +1378,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const toggleTaskStatus = async (id: string) => {
+    if (!APP_CONFIG.DEMO_MODE) {
+      throw new Error('Follow-up completion must be recorded as a Lead interaction.');
+    }
     setTasks(prev =>
       prev.map(t => {
         if (t.id === id) {
@@ -1385,6 +1410,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Messaging
   const sendMessage = async (conversationId: string, content: string, senderType: 'EMPLOYEE' | 'CUSTOMER' | 'AI' | 'SYSTEM' = 'EMPLOYEE') => {
+    if (!APP_CONFIG.DEMO_MODE) {
+      throw new Error('Use the Lead conversation timeline or WhatsApp workflow to send a message.');
+    }
     const newMsg: Message = {
       id: `msg-${Date.now()}`,
       conversationId,

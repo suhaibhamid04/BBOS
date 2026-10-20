@@ -38,6 +38,7 @@ import {
   normalizeWhatsAppRecipient,
 } from '../services/whatsappMessagingService.js';
 import { productionWhatsAppMessaging } from '../services/whatsappRuntime.js';
+import { canAccessCustomerRecord } from './customers.js';
 
 export const leadsRouter = Router();
 
@@ -234,6 +235,24 @@ function canReadLead(req: Request, lead: Lead): boolean {
   return actor.role === 'Sales Manager' && !!actor.salesTeamId && lead.salesTeamId === actor.salesTeamId;
 }
 
+async function canReadCustomer(req: Request, customer: UnknownRecord): Promise<boolean> {
+  const customerId = cleanString(customer.id);
+  if (!customerId) return false;
+  if (isDemoRequest(req)) {
+    const linked = [...demoLeads.values()].filter(lead => lead.customerId === customerId);
+    return canAccessCustomerRecord(req.user!, customer, linked);
+  }
+  if (req.user!.role === 'Sales Manager' && !req.user!.salesTeamId) {
+    throw new LeadRequestError(403, 'MISSING_TEAM_METADATA', 'Sales team metadata is required.');
+  }
+  const linked = await getAdminDb().collection('leads').where('customerId', '==', customerId).get();
+  return canAccessCustomerRecord(
+    req.user!,
+    customer,
+    linked.docs.map((document: any) => ({ id: document.id, ...document.data() })),
+  );
+}
+
 function audit(action: string, actor: Request['user'], leadId: string, before: unknown, after: unknown, summary: string) {
   const id = `audit-${randomUUID()}`;
   const actorName = cleanString(actor!.name) || actor!.employeeId;
@@ -353,10 +372,12 @@ leadsRouter.get('/customer-matches', requireRole(crmRoles), async (req, res) => 
       customerType: value.customerType === 'B2B' ? 'B2B' : 'B2C',
     });
     if (isDemoRequest(req)) {
-      const matches = [...demoCustomers.values()].filter(customer =>
+      const candidates = [...demoCustomers.values()].filter(customer =>
         (normalizedPhone && normalizeLeadPhone(customer.phone) === normalizedPhone) ||
         (normalizedEmail && normalizeLeadEmail(customer.email) === normalizedEmail)
-      ).slice(0, 5).map(projectCustomer);
+      ).slice(0, 5);
+      const matches = [];
+      for (const customer of candidates) if (await canReadCustomer(req, customer as UnknownRecord)) matches.push(projectCustomer(customer));
       return res.json({ success: true, data: matches, mode: 'DEMO' });
     }
 
@@ -369,7 +390,11 @@ leadsRouter.get('/customer-matches', requireRole(crmRoles), async (req, res) => 
     for (const snapshot of snapshots) for (const document of snapshot.docs) {
       matches.set(document.id, { id: document.id, ...document.data() });
     }
-    return res.json({ success: true, data: [...matches.values()].slice(0, 5).map(projectCustomer) });
+    const scopedMatches = [];
+    for (const customer of [...matches.values()].slice(0, 5)) {
+      if (await canReadCustomer(req, customer)) scopedMatches.push(projectCustomer(customer));
+    }
+    return res.json({ success: true, data: scopedMatches });
   } catch (error) { return sendError(res, error, 'Customer matches could not be loaded.'); }
 });
 
@@ -406,6 +431,9 @@ leadsRouter.post('/', requireRole(crmRoles), async (req, res) => {
         if (snapshot.exists) existingCustomer = { id: snapshot.id, ...snapshot.data() };
       }
       if (!existingCustomer) throw new LeadRequestError(422, 'CUSTOMER_NOT_FOUND', 'The selected Customer no longer exists.');
+      if (!await canReadCustomer(req, existingCustomer)) {
+        throw new LeadRequestError(422, 'CUSTOMER_NOT_FOUND', 'The selected Customer no longer exists.');
+      }
       const authoritativeName = requiredString(existingCustomer.name, 'Customer name');
       const authoritativePhone = cleanString(existingCustomer.phone) || cleanString(existingCustomer.whatsApp) || cleanString(enquiry.customerPhone) || '';
       const authoritativeEmail = cleanString(existingCustomer.email) || cleanString(enquiry.customerEmail);

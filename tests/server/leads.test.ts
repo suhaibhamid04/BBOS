@@ -157,7 +157,7 @@ describe('POST /api/leads', () => {
     jsonMock = mock((data: any) => data);
     statusMock = mock((code: number) => ({ json: jsonMock }));
     req = {
-      user: { id: 'emp-1', employeeId: 'emp-1', role: 'Sales Executive', name: 'John', salesTeamId: 'sales-team-1' } as any,
+      user: { id: 'emp-1', employeeId: 'emp-1', role: 'Sales Executive', name: 'John', salesTeamId: 'sales-team-1', active: true } as any,
       body: {}
     };
     res = { json: jsonMock, status: statusMock };
@@ -442,7 +442,7 @@ describe('GET /api/leads/customer-matches', () => {
     const json = mock((value: any) => value);
     const status = mock((_code: number) => ({ json }));
     const postRoute = (leadsRouter as any).stack.find((entry: any) => entry.route?.path === '/' && entry.route.methods.post);
-    const actor = { employeeId: 'emp-1', role: 'Sales Executive', name: 'John', salesTeamId: 'sales-team-1' };
+    const actor = { employeeId: 'emp-1', role: 'Sales Executive', name: 'John', salesTeamId: 'sales-team-1', active: true };
     await postRoute.route.stack[1].handle({
       user: actor,
       body: { customerName: 'Normalized Match', customerPhone: '+91 98765-43333', destination: 'General', sourceId: 'DIRECT_CALL', creationRequestId: 'customer-match-001' },

@@ -2,58 +2,6 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Helper functions for Authentication & Role Checking
-    function isAuthenticated() {
-      // Remaining legacy client paths must not admit arbitrary Firebase users
-      // or employees deactivated through the authoritative employee API.
-      return request.auth != null
-        && exists(/databases/$(database)/documents/employees/$(request.auth.uid))
-        && getUserData().active == true
-        && (!('firebaseUid' in getUserData()) || getUserData().firebaseUid == request.auth.uid);
-    }
-
-    function getUserData() {
-      return get(/databases/$(database)/documents/employees/$(request.auth.uid)).data;
-    }
-
-    function getUserRole() {
-      return isAuthenticated() && exists(/databases/$(database)/documents/employees/$(request.auth.uid))
-        ? getUserData().role
-        : '';
-    }
-
-    function isFounder() {
-      return isAuthenticated() && (getUserRole() == 'Founder' || getUserRole() == 'FOUNDER');
-    }
-
-    function isAdmin() {
-      return isAuthenticated() && (getUserRole() == 'Admin' || getUserRole() == 'ADMIN' || isFounder());
-    }
-
-    function isSalesManager() {
-      return isAuthenticated() && (getUserRole() == 'Sales Manager' || getUserRole() == 'SALES_MANAGER' || isAdmin());
-    }
-
-    function isSalesExecutive() {
-      return isAuthenticated() && (getUserRole() == 'Sales Executive' || getUserRole() == 'SALES_EXECUTIVE' || isSalesManager());
-    }
-
-    function isReservations() {
-      return isAuthenticated() && (getUserRole() == 'Reservations' || getUserRole() == 'RESERVATIONS' || isAdmin());
-    }
-
-    function isOperations() {
-      return isAuthenticated() && (getUserRole() == 'Operations' || getUserRole() == 'OPERATIONS' || isAdmin());
-    }
-
-    function isMarketing() {
-      return isAuthenticated() && (getUserRole() == 'Marketing' || getUserRole() == 'MARKETING' || isAdmin());
-    }
-
-    function isAccounts() {
-      return isAuthenticated() && (getUserRole() == 'Accounts' || getUserRole() == 'ACCOUNTS' || isAdmin());
-    }
-
     // 1. Employees Collection
     match /employees/{employeeId} {
       // Employee identity, directory reads, and access mutations are served by
@@ -70,9 +18,9 @@ service cloud.firestore {
 
     // 2. Customers Collection
     match /customers/{customerId} {
-      allow read: if isSalesExecutive() || isOperations() || isAccounts();
-      allow create, update: if isSalesExecutive();
-      allow delete: if isAdmin();
+      // Customer PII is projected by the scoped customer API using canonical
+      // employeeId/salesTeamId and Lead-linked ownership evidence.
+      allow read, create, update, delete: if false;
     }
 
     // 3. Leads Collection
@@ -131,27 +79,24 @@ service cloud.firestore {
 
     // 4. Companies Collection
     match /companies/{companyId} {
-      allow read: if isSalesExecutive() || isAccounts() || isAdmin();
-      allow create, update: if isSalesExecutive();
-      allow delete: if isAdmin();
+      allow read, create, update, delete: if false;
     }
 
     // 5. Conversations Collection
     match /conversations/{conversationId} {
-      allow read, create, update: if isAuthenticated();
-      allow delete: if isAdmin();
+      // Retired in favor of Lead-scoped conversation_entries (M6A/M6B).
+      allow read, create, update, delete: if false;
     }
 
     // 6. Messages Collection (Append-only)
     match /messages/{messageId} {
-      allow read, create: if isAuthenticated();
-      allow update, delete: if false;
+      allow read, create, update, delete: if false;
     }
 
     // 7. Tasks Collection
     match /tasks/{taskId} {
-      allow read, create, update: if isAuthenticated();
-      allow delete: if isAdmin();
+      // M3 Lead nextFollowUpAt/events/queue are authoritative.
+      allow read, create, update, delete: if false;
     }
 
     // 8. Quotes Collection
@@ -170,10 +115,7 @@ service cloud.firestore {
 
     // 9. Quote Conversions Collection (Immutable Server-Authoritative Conversion Markers)
     match /quote_conversions/{conversionId} {
-      // Read restricted to Founder, Admin, Accounts for audit tracing
-      allow read: if isFounder() || isAdmin() || isAccounts();
-      // DIRECT CLIENT MUTATION PROHIBITED FOR ALL ROLES (Server Admin SDK Only)
-      allow create, update, delete: if false;
+      allow read, create, update, delete: if false;
     }
 
     // 10. Bookings Collection (Commercial Root)
@@ -194,10 +136,7 @@ service cloud.firestore {
 
       // RESTRICTED FINANCIAL SNAPSHOT (SUBCOLLECTION)
       match /financial_snapshot/{snapshotId} {
-        // Read strictly restricted to Founder, Admin, Accounts
-        allow read: if isFounder() || isAdmin() || isAccounts();
-        // DIRECT CLIENT MUTATION PROHIBITED FOR ALL ROLES (Server Admin SDK Only)
-        allow create, update, delete: if false;
+        allow read, create, update, delete: if false;
       }
     }
 
@@ -231,8 +170,7 @@ service cloud.firestore {
     }
 
     match /property_photos/{photoId} {
-      allow read: if isAuthenticated();
-      allow create, update, delete: if isAdmin() || isOperations();
+      allow read, create, update, delete: if false;
     }
 
     // Rate Management — STRICLTY GATED
@@ -241,22 +179,15 @@ service cloud.firestore {
     }
 
     match /rate_supplements/{supplementId} {
-      allow read: if isReservations() || isAccounts();
-      allow create, update: if isAdmin();
-      allow delete: if isAdmin();
+      allow read, create, update, delete: if false;
     }
 
     match /negotiated_rates/{rateId} {
-      // Readable by Reservations, Accounts, and Leadership
-      allow read: if isReservations() || isAccounts();
-      allow create, update: if isAccounts();
-      allow delete: if isAdmin();
+      allow read, create, update, delete: if false;
     }
 
     match /rate_history/{historyId} {
-      allow read: if isReservations() || isAccounts();
-      allow create: if isAccounts();
-      allow update, delete: if false; // Immutable audit log
+      allow read, create, update, delete: if false;
     }
 
     // =========================================================================
@@ -268,15 +199,11 @@ service cloud.firestore {
     }
 
     match /destinations/{docId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAdmin() || isOperations();
-      allow delete: if isAdmin();
+      allow read, create, update, delete: if false;
     }
 
     match /transport_routes/{docId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAdmin() || isOperations();
-      allow delete: if isAdmin();
+      allow read, create, update, delete: if false;
     }
 
     match /transport_rate_periods/{docId} {
@@ -284,14 +211,11 @@ service cloud.firestore {
     }
 
     match /transport_supplements/{docId} {
-      allow read: if isReservations() || isAccounts();
-      allow create, update, delete: if false;
+      allow read, create, update, delete: if false;
     }
 
     match /negotiated_transport_rates/{docId} {
-      allow read: if isReservations() || isAccounts();
-      allow create, update: if isAccounts();
-      allow delete: if isAdmin();
+      allow read, create, update, delete: if false;
     }
 
     match /activity_masters/{docId} {
@@ -303,21 +227,15 @@ service cloud.firestore {
     }
 
     match /negotiated_activity_rates/{docId} {
-      allow read: if isReservations() || isAccounts();
-      allow create, update: if isAccounts();
-      allow delete: if isAdmin();
+      allow read, create, update, delete: if false;
     }
 
     match /transport_rate_history/{docId} {
-      allow read: if isReservations() || isAccounts();
-      allow create: if isAccounts();
-      allow update, delete: if false;
+      allow read, create, update, delete: if false;
     }
 
     match /activity_rate_history/{docId} {
-      allow read: if isReservations() || isAccounts();
-      allow create: if isAccounts();
-      allow update, delete: if false;
+      allow read, create, update, delete: if false;
     }
 
     // =========================================================================
@@ -375,42 +293,31 @@ service cloud.firestore {
     // 12. LEGACY COLLECTIONS (STRICT READ-ONLY HISTORICAL FREEZE)
     // =========================================================================
     match /hotels/{hotelId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isOperations();
-      allow delete: if isAdmin();
+      allow read, create, update, delete: if false;
     }
 
     match /hotel_rooms/{roomId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isOperations();
-      allow delete: if isAdmin();
+      allow read, create, update, delete: if false;
     }
 
     match /hotel_bookings/{bookingId} {
-      allow read: if isSalesExecutive() || isOperations() || isAccounts();
-      allow create, update, delete: if false; // Frozen: Read-only historical collection
+      allow read, create, update, delete: if false;
     }
 
     match /transports/{transportId} {
-      allow read: if isSalesExecutive() || isOperations() || isAccounts();
-      allow create, update, delete: if false; // Frozen: Read-only historical collection
+      allow read, create, update, delete: if false;
     }
 
     match /drivers/{driverId} {
-      allow read: if isSalesExecutive() || isOperations();
-      allow create, update: if isOperations();
-      allow delete: if isAdmin();
+      allow read, create, update, delete: if false;
     }
 
     match /activities/{activityId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isOperations();
-      allow delete: if isAdmin();
+      allow read, create, update, delete: if false;
     }
 
     match /activity_bookings/{bookingId} {
-      allow read: if isSalesExecutive() || isOperations() || isAccounts();
-      allow create, update, delete: if false; // Frozen: Read-only historical collection
+      allow read, create, update, delete: if false;
     }
 
     // 12. Suppliers & Vouchers
@@ -420,89 +327,28 @@ service cloud.firestore {
     }
 
     match /vouchers/{voucherId} {
-      allow read: if isSalesExecutive() || isOperations();
-      allow create, update, delete: if false;
+      allow read, create, update, delete: if false;
     }
 
     // 13. Packages
     match /packages/{packageId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAdmin();
-      allow delete: if isAdmin();
+      allow read, create, update, delete: if false;
     }
 
     // 14. Audit Logs (Append-only, strictly immutable)
     match /audit_logs/{logId} {
-      allow read: if isAdmin() || isAccounts();
-      // D1 Quote events are emitted only by server transactions. Keep legacy
-      // client audit behavior for unmigrated domains until their Stage D slice.
-      allow create: if isAuthenticated() &&
-                    request.resource.data.actorId != null &&
-                    request.resource.data.actorId == getUserData().get('employeeId', getUserData().get('id', request.auth.uid)) &&
-                    request.resource.data.entityType != 'PAYMENT' &&
-                    request.resource.data.entityType != 'SUPPLIER_PAYMENT' &&
-                    request.resource.data.entityType != 'EMPLOYEE' &&
-                    request.resource.data.entityType != 'CUSTOMER_SHARE' &&
-                    request.resource.data.entityType != 'CONVERSATION_ENTRY' &&
-                    !(request.resource.data.action in [
-                      'QUOTE_CREATED',
-                      'QUOTE_UPDATED',
-                      'QUOTE_CONVERTED_TO_BOOKING',
-                      'LEAD_INTERACTION_RECORDED',
-                      'LEAD_DROPPED',
-                      'INTERNAL_NOTE_ADDED',
-                      'CUSTOMER_CONTACT_LOGGED',
-                      'INTERNAL_NOTE_EDITED',
-                      'WHATSAPP_MESSAGE_SEND_REQUESTED',
-                      'WHATSAPP_MESSAGE_RETRY_REQUESTED',
-                      'UNMATCHED_WHATSAPP_LINKED',
-                      'PAYMENT_RECORDED',
-                      'PAYMENT_VERIFIED',
-                      'PAYMENT_REJECTED',
-                      'PAYMENT_VOIDED',
-                      'BOOKING_CONFIRMED_FROM_PAYMENT',
-                      'BOOKING_DISPATCHED_TO_OPERATIONS',
-                      'BOOKING_CANCELLED',
-                      'VOUCHERS_GENERATED',
-                      'SUPPLIER_PAYMENT_RECORDED',
-                      'SUPPLIER_PAYMENT_VERIFIED',
-                      'SUPPLIER_PAYMENT_REJECTED',
-                      'SUPPLIER_PAYMENT_VOIDED',
-                      'SUPPLIER_SETTLED',
-                      'EMPLOYEE_CREATED',
-                      'EMPLOYEE_ROLE_CHANGED',
-                      'EMPLOYEE_TEAM_CHANGED',
-                      'EMPLOYEE_MANAGER_CHANGED',
-                      'EMPLOYEE_ACTIVATED',
-                      'EMPLOYEE_DEACTIVATED',
-                      'EMPLOYEE_PROFILE_UPDATED',
-                      'OPERATIONS_ASSIGNED',
-                      'OPERATIONS_REASSIGNED',
-                      'OPERATIONS_ISSUE_CREATED',
-                      'OPERATIONS_ISSUE_UPDATED',
-                      'OPERATIONS_ISSUE_RESOLVED',
-                      'OPERATIONAL_SERVICE_UPDATED',
-                      'OPERATIONAL_CHANGE_ESCALATED',
-                      'EMERGENCY_SPEND_REQUESTED',
-                      'EMERGENCY_SPEND_APPROVED',
-                      'EMERGENCY_SPEND_REJECTED'
-                    ]);
-      allow update, delete: if false;
+      // Audit events are immutable server-side records. Read projection is not
+      // exposed until a dedicated metadata-safe API exists.
+      allow read, create, update, delete: if false;
     }
 
     // 15. AI Recommendations, Actions, and Approvals
     match /ai_recommendations/{recId} {
-      allow read: if isAuthenticated();
-      allow create: if isAdmin();
-      allow update: if isAuthenticated();
-      allow delete: if false;
+      allow read, create, update, delete: if false;
     }
 
     match /ai_actions/{actionId} {
-      allow read: if isAuthenticated();
-      allow create: if isAdmin();
-      allow update: if isSalesManager() || isAccounts();
-      allow delete: if false;
+      allow read, create, update, delete: if false;
     }
 
     match /approvals/{approvalId} {
