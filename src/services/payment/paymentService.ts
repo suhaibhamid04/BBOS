@@ -19,6 +19,7 @@ import {
 import { authorizeResource } from '../../../server/authorization/policyEngine';
 import { bookingResourceContext } from '../../../server/authorization/resourceContext';
 import type { AuthorizationAction, AuthorizationPrincipal } from '../../../server/authorization/policyTypes';
+import type { CommissionLedgerEntry } from '../../types/financialExceptions';
 
 export interface PaymentActor extends AuthorizationPrincipal {
   /** Legacy compatibility alias; never use for ownership authorization. */
@@ -499,6 +500,40 @@ export class PaymentService {
       const now = new Date().toISOString();
       const allPayments = await tx.getPaymentsForBooking(bookingId);
 
+      const confirmsBooking = txBooking.status === 'PENDING_PAYMENT';
+      let commissionEntry: CommissionLedgerEntry | null = null;
+      if (confirmsBooking) {
+        const commissionOwner = txBooking.assignedSalesEmployeeId;
+        if (!commissionOwner) {
+          throw new PaymentError(409, 'COMMISSION_OWNER_MISSING', 'Booking confirmation requires the original Sales owner.');
+        }
+        const commissionId = `commission-earned-${bookingId}`;
+        const [existingCommission, employee] = await Promise.all([
+          tx.getCommissionEntry(commissionId),
+          tx.getEmployee(commissionOwner),
+        ]);
+        if (!existingCommission) {
+          const configured = employee?.commissionPerConfirmedBooking;
+          const commissionAmount = typeof configured === 'number' && Number.isFinite(configured) && configured >= 0
+            ? configured
+            : 500;
+          commissionEntry = {
+            id: commissionId,
+            bookingId,
+            employeeId: commissionOwner,
+            type: 'EARNED',
+            amount: commissionAmount,
+            currency: txBooking.currency || 'INR',
+            bookingStatus: 'CONFIRMED',
+            reason: 'Commission earned when the Booking reached authoritative CONFIRMED state.',
+            actorEmployeeId: actor.employeeId,
+            createdAt: now,
+            idempotencyKey: commissionId,
+            policyCode: configured === undefined ? 'STANDARD_CONFIRMED_BOOKING_COMMISSION' : 'EMPLOYEE_CUSTOM_CONFIRMED_BOOKING_COMMISSION',
+          };
+        }
+      }
+
       // Recalculate verified sum
       let verifiedMinorUnits = 0;
       for (const p of allPayments) {
@@ -558,8 +593,8 @@ export class PaymentService {
       };
 
       // Commercial status transition: PENDING_PAYMENT -> CONFIRMED
-      const confirmsBooking = txBooking.status === 'PENDING_PAYMENT' && amountReceived > 0;
-      if (confirmsBooking) {
+      const actuallyConfirmsBooking = confirmsBooking && amountReceived > 0;
+      if (actuallyConfirmsBooking) {
         bookingUpdates.status = 'CONFIRMED';
       }
 
@@ -593,7 +628,7 @@ export class PaymentService {
       };
       tx.setAuditLog(auditLog.id, auditLog);
 
-      if (confirmsBooking) {
+      if (actuallyConfirmsBooking) {
         const confirmationAudit: AuditLog = {
           id: `${auditLog.id}-CONFIRM`,
           timestamp: now,
@@ -618,6 +653,30 @@ export class PaymentService {
           reason: `Booking ${txBooking.bookingReference} confirmed from verified customer payment ${paymentId}`,
         };
         tx.setAuditLog(confirmationAudit.id, confirmationAudit);
+
+        if (commissionEntry) {
+          tx.setCommissionEntry(commissionEntry.id, commissionEntry);
+          const commissionAudit: AuditLog = {
+            id: `${auditLog.id}-COMMISSION`,
+            timestamp: now,
+            actorType: 'SYSTEM',
+            actorId: actor.employeeId,
+            actorName: `${actor.name} (${actor.role})`,
+            action: 'COMMISSION_EARNED',
+            entityType: 'COMMISSION_LEDGER',
+            entityId: commissionEntry.id,
+            before: null,
+            after: {
+              bookingId,
+              employeeId: commissionEntry.employeeId,
+              amount: commissionEntry.amount,
+              currency: commissionEntry.currency,
+              policyCode: commissionEntry.policyCode,
+            },
+            reason: commissionEntry.reason,
+          };
+          tx.setAuditLog(commissionAudit.id, commissionAudit);
+        }
       }
 
       const updatedPayment: PaymentRecord = { ...payment, ...paymentUpdates };

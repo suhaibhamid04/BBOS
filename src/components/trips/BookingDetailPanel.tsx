@@ -12,6 +12,7 @@ import {
   type ReservationsAssignee,
 } from '../../services/booking/reservationsAssignmentApi';
 import type { Voucher } from '../../types';
+import { FinancialExceptionsPanel } from './FinancialExceptionsPanel';
 
 interface BookingDetailPanelProps {
   bookingId: string;
@@ -407,6 +408,13 @@ export const BookingDetailPanel: React.FC<BookingDetailPanelProps> = ({ bookingI
       </div>
 
       <div className="flex-1 overflow-y-auto p-5 space-y-6">
+        {['Founder', 'Admin', 'Accounts', 'Sales Manager', 'Sales Executive', 'Reservations'].includes(currentUser.role) && (
+          <FinancialExceptionsPanel
+            bookingId={booking.id}
+            bookingStatus={booking.status}
+            salesOwnerEmployeeId={booking.assignedSalesEmployeeId}
+          />
+        )}
         {/* Customer & Trip */}
         <div className="grid grid-cols-2 gap-4">
           <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">

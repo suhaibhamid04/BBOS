@@ -1,6 +1,7 @@
 import { Booking } from '../../types/booking';
 import { PaymentRecord } from '../../types/payment';
 import { AuditLog } from '../../types';
+import type { CommissionLedgerEntry } from '../../types/financialExceptions';
 import { getAdminDb } from '../../../server/firebaseAdmin';
 import { firestoreData } from '../../../server/storage/firestoreData.js';
 
@@ -8,10 +9,13 @@ export interface PaymentTransaction {
   getBooking(bookingId: string): Promise<Booking | null>;
   getPayment(paymentId: string): Promise<PaymentRecord | null>;
   getPaymentsForBooking(bookingId: string): Promise<PaymentRecord[]>;
+  getCommissionEntry(entryId: string): Promise<CommissionLedgerEntry | null>;
+  getEmployee(employeeId: string): Promise<Record<string, unknown> | null>;
   setPayment(paymentId: string, data: PaymentRecord): void;
   updateBooking(bookingId: string, data: Partial<Booking>): void;
   updatePayment(paymentId: string, data: Partial<PaymentRecord>): void;
   setAuditLog(auditLogId: string, auditLog: AuditLog): void;
+  setCommissionEntry(entryId: string, entry: CommissionLedgerEntry): void;
 }
 
 export interface PaymentStorageProvider {
@@ -32,12 +36,16 @@ export class InMemoryPaymentStorageProvider implements PaymentStorageProvider {
   private bookings: Map<string, Booking> = new Map();
   private payments: Map<string, PaymentRecord> = new Map();
   private auditLogs: Map<string, AuditLog> = new Map();
+  private commissionEntries: Map<string, CommissionLedgerEntry> = new Map();
+  private employees: Map<string, Record<string, unknown>> = new Map();
   private txLock: Promise<void> = Promise.resolve();
 
   constructor(initialData?: {
     bookings?: Booking[];
     payments?: PaymentRecord[];
     auditLogs?: AuditLog[];
+    commissionEntries?: CommissionLedgerEntry[];
+    employees?: Array<Record<string, unknown> & { employeeId: string }>;
   }) {
     if (initialData?.bookings) {
       for (const b of initialData.bookings) {
@@ -54,6 +62,8 @@ export class InMemoryPaymentStorageProvider implements PaymentStorageProvider {
         this.auditLogs.set(a.id, JSON.parse(JSON.stringify(a)));
       }
     }
+    for (const entry of initialData?.commissionEntries || []) this.commissionEntries.set(entry.id, JSON.parse(JSON.stringify(entry)));
+    for (const employee of initialData?.employees || []) this.employees.set(employee.employeeId, JSON.parse(JSON.stringify(employee)));
   }
 
   async getBooking(bookingId: string): Promise<Booking | null> {
@@ -74,6 +84,10 @@ export class InMemoryPaymentStorageProvider implements PaymentStorageProvider {
       }
     }
     return list;
+  }
+
+  getCommissionEntries(): CommissionLedgerEntry[] {
+    return Array.from(this.commissionEntries.values()).map(value => JSON.parse(JSON.stringify(value)));
   }
 
   async savePayment(payment: PaymentRecord): Promise<void> {
@@ -119,6 +133,7 @@ export class InMemoryPaymentStorageProvider implements PaymentStorageProvider {
       const stagedPaymentSets = new Map<string, PaymentRecord>();
       const stagedPaymentUpdates = new Map<string, Partial<PaymentRecord>>();
       const stagedAuditLogs = new Map<string, AuditLog>();
+      const stagedCommissionEntries = new Map<string, CommissionLedgerEntry>();
 
       const tx: PaymentTransaction = {
         getBooking: async (bId: string) => {
@@ -158,6 +173,14 @@ export class InMemoryPaymentStorageProvider implements PaymentStorageProvider {
           }
           return list;
         },
+        getCommissionEntry: async (entryId: string) => {
+          const value = stagedCommissionEntries.get(entryId) || this.commissionEntries.get(entryId);
+          return value ? JSON.parse(JSON.stringify(value)) : null;
+        },
+        getEmployee: async (employeeId: string) => {
+          const value = this.employees.get(employeeId);
+          return value ? JSON.parse(JSON.stringify(value)) : null;
+        },
         setPayment: (pId: string, data: PaymentRecord) => {
           stagedPaymentSets.set(pId, JSON.parse(JSON.stringify(data)));
         },
@@ -171,6 +194,9 @@ export class InMemoryPaymentStorageProvider implements PaymentStorageProvider {
         },
         setAuditLog: (aId: string, aLog: AuditLog) => {
           stagedAuditLogs.set(aId, JSON.parse(JSON.stringify(aLog)));
+        },
+        setCommissionEntry: (entryId: string, entry: CommissionLedgerEntry) => {
+          stagedCommissionEntries.set(entryId, JSON.parse(JSON.stringify(entry)));
         },
       };
 
@@ -195,6 +221,7 @@ export class InMemoryPaymentStorageProvider implements PaymentStorageProvider {
       for (const [aId, aLog] of stagedAuditLogs.entries()) {
         this.auditLogs.set(aId, aLog);
       }
+      for (const [entryId, entry] of stagedCommissionEntries.entries()) this.commissionEntries.set(entryId, entry);
       return result;
     } finally {
       releaseLock!();
@@ -255,6 +282,14 @@ export class FirestorePaymentStorageProvider implements PaymentStorageProvider {
           const snap = await firestoreTx.get(db.collection('payments').where('bookingId', '==', bId));
           return snap.docs.map((d) => d.data() as PaymentRecord);
         },
+        getCommissionEntry: async (entryId: string) => {
+          const snap = await firestoreTx.get(db.collection('commission_ledger').doc(entryId));
+          return snap.exists ? snap.data() as CommissionLedgerEntry : null;
+        },
+        getEmployee: async (employeeId: string) => {
+          const snap = await firestoreTx.get(db.collection('employees').doc(employeeId));
+          return snap.exists ? snap.data() as Record<string, unknown> : null;
+        },
         setPayment: (pId: string, data: PaymentRecord) => {
           firestoreTx.set(db.collection('payments').doc(pId), firestoreData(data));
         },
@@ -266,6 +301,9 @@ export class FirestorePaymentStorageProvider implements PaymentStorageProvider {
         },
         setAuditLog: (aId: string, aLog: AuditLog) => {
           firestoreTx.set(db.collection('audit_logs').doc(aId), aLog);
+        },
+        setCommissionEntry: (entryId: string, entry: CommissionLedgerEntry) => {
+          firestoreTx.set(db.collection('commission_ledger').doc(entryId), firestoreData(entry));
         },
       };
       return updateFunction(txWrapper);

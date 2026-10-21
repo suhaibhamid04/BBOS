@@ -69,6 +69,17 @@ Finding: B05 closed in source. `PRODUCTION_DATABASE_SELECTION_REQUIRES_APPROVAL`
 
 Finding: **S08 closed**. The audit still exits 1 and no zero-vulnerability claim is made; see [the dependency security review](BBOS_DEPENDENCY_SECURITY_REVIEW.md).
 
+## C7 — Production Readiness Sprint 4: A01 financial exception workflows
+
+- Added server-authoritative versioned amendments with immutable before/proposed/approved snapshots, TEAM/ALL approval, separate idempotent application, and rejection without Booking mutation.
+- Added assigned Reservations supplier substitution with exact-category/exact-cost automatic policy, ALL-scope approval for material changes, preserved frozen economics, and supplier discrepancy evidence.
+- Added cancellation refund calculation, request, dual approval, explicit Accounts payment, and a deterministic immutable refund ledger without rewriting customer payments.
+- Added original-Sales-owner commission earning at confirmation, full cancellation reversal, authorized adjustments and explicit settlements with immutable ledger history and employee-specific commission configuration.
+- Added authenticated API routes, a compact role-filtered Booking detail UI, explicit Firestore client-deny blocks for all A01 collections, and complete audit events.
+- Passed 700 unit/service/HTTP tests, 56 Chromium tests, 5 Firestore rule tests and 1 Firebase-backed E2E; TypeScript, build and diff checks pass.
+
+Finding: **A01 closed in source**. Production cancellation deductions, a broader supplier substitution range, and any partial-refund commission reversal formula remain explicit business-policy/configuration decisions. See [the A01 workflow review](A01_FINANCIAL_EXCEPTION_WORKFLOWS.md).
+
 ## Verification and review
 
 Original audit verification recorded 673 unit/service/HTTP passes, 56 Chromium passes and one Auth-emulator pass. Sprint 3 records 687 unit/service/HTTP passes, 56 Chromium passes, 5 Firestore rule passes and 1 full Firebase browser pass; TypeScript/build/diff checks pass. The dependency audit remains nonclean with six explicitly dispositioned residual advisories. Details and initial failed attempts are retained in [test results](BBOS_TEST_RESULTS.md).

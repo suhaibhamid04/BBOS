@@ -71,6 +71,8 @@ describe.skipIf(!host)('executable Firestore rule security regressions', () => {
       'hotels', 'hotel_rooms', 'hotel_bookings', 'transports', 'drivers', 'activities',
       'activity_bookings', 'packages', 'audit_logs', 'property_photos', 'negotiated_rates',
       'rate_history', 'destinations', 'transport_routes', 'ai_recommendations', 'ai_actions',
+      'booking_amendments', 'supplier_substitutions', 'refund_requests', 'refund_ledger',
+      'commission_ledger', 'financial_policies',
     ];
     for (const uid of ['ops', 'admin']) {
       const db = environment.authenticatedContext(uid).firestore();

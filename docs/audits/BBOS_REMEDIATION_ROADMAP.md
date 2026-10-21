@@ -18,7 +18,7 @@ Reviewed 2026-10-17; Sprints 1–3 updated 2026-10-20. The current branch contai
 
 3. **Triage and patch dependencies (S08) — CLOSED.** Nine advisories were safely remediated; six were proven non-reachable or isolated to trusted development tooling with owners and controls. All practical and Firebase tests pass, and the before/after audit is recorded in [the dependency security review](BBOS_DEPENDENCY_SECURITY_REVIEW.md). **Effort:** M.
 
-4. **Define and implement financial exception workflows (A01).** Agree supplier acknowledgment semantics, material substitutions, date/guest/vehicle amendments, rejection, cancellation/refunds and commission attribution/settlement. **Acceptance:** approved state diagram and monetary examples; immutable before/after snapshots; correct authority and separation of duties; idempotent concurrent execution; no silent change to original sales credit. **Effort:** L. **Hard stop:** unresolved business rules, migrations and potentially irreversible financial effects.
+4. **Define and implement financial exception workflows (A01) — CLOSED IN SOURCE.** Versioned amendments, conservative supplier substitutions, calculated/dual-authority refunds with an immutable paid ledger, and original-owner commission earning/reversal/settlement are transactional and audited. Focused and full regressions pass. Production policy owners still need to configure cancellation deductions and approve any broader substitution range or partial-refund commission formula; current behavior fails closed. See [the A01 workflow review](A01_FINANCIAL_EXCEPTION_WORKFLOWS.md). **Effort:** L.
 
 ## Next
 

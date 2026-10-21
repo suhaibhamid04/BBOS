@@ -284,25 +284,36 @@ export const demoPaymentStorageProvider: PaymentStorageProvider = {
       getBooking: async id => transaction.get('bookings', id),
       getPayment: async id => transaction.get('payments', id),
       getPaymentsForBooking: async id => transaction.findByField('payments', 'bookingId', id, 500),
+      getCommissionEntry: async id => transaction.get('commission_ledger', id),
+      getEmployee: async id => transaction.get('employees', id),
       setPayment: (id, data) => transaction.set('payments', id, data),
       updateBooking: (id, data) => transaction.update('bookings', id, data),
       updatePayment: (id, data) => transaction.update('payments', id, data),
       setAuditLog: (id, data) => transaction.set('audit_logs', id, data),
+      setCommissionEntry: (id, data) => transaction.set('commission_ledger', id, data),
     }));
   },
 };
+
+export const demoFinancialExceptionStorage = store;
 
 export const demoLifecycleStorageProvider: LifecycleStorageProvider = {
   async runTransaction(operation) {
     return store.runTransaction(tx => operation({
       getBooking: id => tx.get('bookings', id),
+      getCommissionEntry: id => tx.get('commission_ledger', id),
+      getEmployee: id => tx.get('employees', id),
       updateBooking: async (id, data) => { tx.update('bookings', id, data); },
       logAuditEvent: async audit => { tx.set('audit_logs', audit.id, audit); },
+      setCommissionEntry: async (id, entry) => { tx.set('commission_ledger', id, entry); },
     }));
   },
   async getBooking(bookingId) { return store.rawGet('bookings', bookingId) as Booking | null; },
   async updateBooking(bookingId, updates) { store.rawUpdate('bookings', bookingId, updates); },
   async logAuditEvent(audit) { store.rawSet('audit_logs', audit.id, audit); },
+  async getCommissionEntry(id) { return store.rawGet('commission_ledger', id); },
+  async getEmployee(id) { return store.rawGet('employees', id); },
+  async setCommissionEntry(id, entry) { store.rawSet('commission_ledger', id, entry); },
 };
 
 export const demoVoucherStorageProvider: VoucherStorageProvider = {

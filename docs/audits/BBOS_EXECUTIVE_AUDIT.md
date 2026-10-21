@@ -1,25 +1,25 @@
 # Booking Bridge OS — executive engineering audit
 
-Audit completed locally on 2026-10-17; Production Readiness Sprints 1–3 closed S07/B06, B05 and S08 in source on 2026-10-20. Branch: **`audit/bbos-comprehensive-remediation`**, baseline **`4997f47`**. Application code and dependency resolution **were changed**. Commit batches are listed in [the changelog](BBOS_CHANGELOG.md).
+Audit completed locally on 2026-10-17; Production Readiness Sprints 1–4 closed S07/B06, B05, S08 and A01 in source through 2026-10-21. Branch: **`audit/bbos-comprehensive-remediation`**, baseline **`4997f47`**. Application code and dependency resolution **were changed**. Commit batches are listed in [the changelog](BBOS_CHANGELOG.md).
 
-BBOS has substantial server-authoritative commercial workflows and meaningful automated coverage, but **is not established as production-ready**. The sprints removed the production browser Firestore authorization surface, canonicalized customer/voucher flows, unified source topology and dispositioned every dependency advisory. Production topology validation/deployment and incomplete financial exception workflows still prevent a clean readiness conclusion.
+BBOS has substantial server-authoritative commercial workflows and meaningful automated coverage, but **is not established as production-ready**. The sprints removed the production browser Firestore authorization surface, canonicalized customer/voucher flows, unified source topology, dispositioned dependency advisories, and implemented financial exception workflows. Production topology validation/deployment and the remaining P2 architecture work still prevent a clean readiness conclusion.
 
 ## Outcome and scope
 
-- **285 baseline tracked files inventoried; 193 baseline non-test source/config files statically scanned; 144 current API registrations mapped.** Critical domain paths and associated tests were manually traced. This is not a claim that all files received exhaustive manual review.
+- **285 baseline tracked files inventoried; 193 baseline non-test source/config files statically scanned; 157 current API registrations mapped.** Critical domain paths and associated tests were manually traced. This is not a claim that all files received exhaustive manual review.
 - **25 finding records: P0 0, P1 17, P2 8, P3 0.** No application-level P0 was confirmed. The vendor-critical dependency advisory was not reachable under BBOS proxy configuration and is patched.
-- **22 confirmed defects/gaps/structural risks; 2 require deployment or business verification** (B05/A01). “Confirmed” includes an observed architecture/testing gap, not necessarily an exploitable vulnerability.
-- **18 records repaired or dispositioned in source**; **7 remain open**, including **1 P1** (A01). B05 still requires an approved production database decision and validation. Firestore source repairs passed emulator verification but still require deployment; “fixed” does not claim production protection.
-- **Sprint 3 final tests:** 687 unit/service/HTTP tests, 56 Chromium cases, 5 Firestore rule cases and 1 Firebase-backed browser case passed. TypeScript and build passed. See [test results](BBOS_TEST_RESULTS.md).
+- **22 confirmed defects/gaps/structural risks; 1 requires deployment verification** (B05). “Confirmed” includes an observed architecture/testing gap, not necessarily an exploitable vulnerability.
+- **19 records repaired or dispositioned in source**; **6 remain open**, with no remaining P1 source implementation finding. B05 still requires an approved production database decision and validation. Firestore source repairs passed emulator verification but still require deployment; “fixed” does not claim production protection.
+- **Sprint 4 final tests:** 700 unit/service/HTTP tests, 56 Chromium cases, 5 Firestore rule cases and 1 Firebase-backed browser case passed. TypeScript and build passed. See [test results](BBOS_TEST_RESULTS.md).
 - No production credentials/data/configuration, migration, external message or irreversible data operation was used. Dependency changes were limited to compatible transitive patches and one tested same-major `qs` override. Three obsolete browser files were removed only after reference, route, script, test and dynamic-import searches proved the paths retired.
 
 ## What works and what remains unreliable
 
 **Authentication/RBAC:** Production data access now verifies Firebase tokens, resolves one active canonical employee, and applies OWN/TEAM/ALL/ASSIGNED policy before explicit DTO projection. Customer and voucher negative matrices pass. Firestore client rules no longer use UID-keyed employee documents or grant production browser access.
 
-**Financial integrity:** Authoritative inventory costing, occupancy/child/bed handling, package pricing intent, low-margin approvals, quote freshness/versioning, transactional conversion, payment separation of duties and supplier ledger calculations have tests. Repaired persistence adapters now handle optional fields as actual Firestore expects; settlement details no longer depend on truncated global lists. This does not certify tax policy, all monetary edge cases, refunds, commissions or amendments.
+**Financial integrity:** Authoritative inventory costing, package pricing, quote conversion, customer/supplier payments, versioned amendments, substitutions, refund calculations and immutable refund/commission ledgers have tests. Approval/application and approval/payment remain separate; original Sales ownership is preserved. This does not certify tax policy, production cancellation deductions, a broader substitution-range threshold, or a partial-refund commission formula.
 
-**Booking/Reservations/Operations:** The browser suite passes the cross-role lifecycle. Dispatch/cancellation and voucher creation now commit their audit/state/links atomically and authorize before idempotent returns. Reservations records discrepancy evidence without silently altering frozen money. Material substitutions, approved commercial amendments and downstream refund/commission execution remain incomplete or require a business decision.
+**Booking/Reservations/Operations:** The browser suite passes the cross-role lifecycle. Dispatch/cancellation and voucher creation commit audit/state/links atomically. Reservations records discrepancy evidence without changing frozen money; material substitutions require ALL-scope approval. Approved commercial amendments, refunds and commission transitions now execute explicitly and idempotently through authenticated server APIs.
 
 **Firestore:** All enumerated production collections, conversion markers and Booking financial snapshots are server-only in rule source. Two demo-only itinerary mirror calls remain behind explicit demo mode and are not production workflows. Browser and Admin now consume one explicit normalized database ID and production fails on missing/mismatched topology. All five executable rule cases and the Firebase-backed browser workflow pass locally; the authoritative production database still requires a deliberate approved decision.
 
@@ -42,7 +42,7 @@ The most dangerous confirmed class was bypassing modern resource policy through 
 1. Inspect and approve the authoritative production Firestore database, then execute the documented validation/rollback plan.
 2. Validate the selected production database, indexes, IAM and deployment target before deploying the emulator-verified tightened rules.
 3. Pin the passing Bun/Java/browser/Firebase gates in CI and monitor supported upstream fixes for the six dispositioned advisories.
-4. Specify and implement amendment/substitution/refund/commission workflows with explicit authority and accounting acceptance cases.
+4. Approve the remaining A01 policy hooks: production cancellation deductions, any nonzero substitution range, and the partial-refund commission formula.
 5. Add CI and stronger schemas/static checks before release.
 
 Production configuration/migrations, materially risky dependency upgrades, API-breaking tool-contract changes and ambiguous business rules were intentionally deferred under the user's hard stops. No further routine engineering permission was assumed necessary.
@@ -70,7 +70,7 @@ Production configuration/migrations, materially risky dependency upgrades, API-b
 | B08 | P2 | Stale asynchronous identity/data could overwrite a newer session; sign-in lacked submission guard and labels | Fixed | Confirmed |
 | B09 | P1 | Production could choose ephemeral demo stores while requiring real authentication | Fixed | Confirmed |
 | B10 | P2 | Tool gateway reports successful execution without executing a tool | Open | Confirmed |
-| A01 | P1 | Refund, amendment, substitution and commission journeys are incomplete | Open | Needs business verification |
+| A01 | P1 | Refund, amendment, substitution and commission journeys were incomplete | Closed in source | Conservative policy hooks documented; production configuration remains |
 | A02 | P2 | Capped registries, eager loading and large bundle constrain growth | Open | Confirmed |
 | A03 | P2 | Verification pipeline lacks CI, true linting and pinned Firebase regression gates | Open | Confirmed |
 | A04 | P2 | Large mixed-responsibility modules and permissive typing raise change risk | Open | Confirmed |
@@ -82,7 +82,7 @@ Production configuration/migrations, materially risky dependency upgrades, API-b
 - [Security register](BBOS_SECURITY_REGISTER.md): attack paths, roles, evidence, remediation and verification.
 - [Bug register](BBOS_BUG_REGISTER.md): root causes, reproductions, fixes, tests and commit batches.
 - [Architecture review](BBOS_ARCHITECTURE_REVIEW.md): system map, business journeys, debt, performance and coverage limits.
-- [API inventory](BBOS_API_INVENTORY.md): all 144 route registrations and their boundary/contract profiles.
+- [API inventory](BBOS_API_INVENTORY.md): all 157 route registrations and their boundary/contract profiles.
 - [Test results](BBOS_TEST_RESULTS.md): commands, exact outcomes, warnings, failures and unavailable verification.
 - [Remediation roadmap](BBOS_REMEDIATION_ROADMAP.md): immediate/next/later actions with acceptance criteria.
 - [Changelog](BBOS_CHANGELOG.md): reviewed changes, commit map and release considerations.

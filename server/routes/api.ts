@@ -20,6 +20,7 @@ import { approvalsRouter } from './approvals.js';
 import { customerSharesPublicRouter } from './customerSharesPublic.js';
 import { metaWhatsAppWebhookRouter } from './metaWhatsAppWebhook.js';
 import { customersRouter } from './customers.js';
+import { financialExceptionsRouter } from './financialExceptions.js';
 
 export const apiRouter = Router();
 
@@ -55,6 +56,7 @@ apiRouter.use('/employees', employeesRouter);
 apiRouter.use('/supplier-payables', supplierPayablesRouter);
 apiRouter.use('/operations', operationsRouter);
 apiRouter.use('/approvals', approvalsRouter);
+apiRouter.use('/financial-exceptions', financialExceptionsRouter);
 
 // Health check endpoint
 apiRouter.get('/health', (req: Request, res: Response) => {

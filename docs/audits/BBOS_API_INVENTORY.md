@@ -1,6 +1,6 @@
 # BBOS API inventory
 
-Inventory from the TypeScript syntax tree of all route files, reviewed against router mounting in [api.ts](../../server/routes/api.ts). **144 method/path registrations**, updated 2026-10-20. This is a code inventory and contract review, not a generated OpenAPI specification.
+Inventory from the TypeScript syntax tree of all route files, reviewed against router mounting in [api.ts](../../server/routes/api.ts). **157 method/path registrations**, updated 2026-10-21. This is a code inventory and contract review, not a generated OpenAPI specification.
 
 Every route in the index below inherits the authentication, scope, request/response, financial, collection, audit and error profile in the matching section. Subroute exceptions are explicit. The index supplies actual method/path, route roles, directly observed request fields, service calls and source location; a field passed inside `req.body` to a service is defined by that service's linked input validator, not inferred to be optional or unrestricted.
 
@@ -73,6 +73,14 @@ GET usually has no audit mutation, except public share opening (view tracking) a
 Exact service confirmation schemas in [serviceConfirmationService.ts](../../server/services/serviceConfirmationService.ts): accommodation confirmation code/status, allocated rooms, supplier notes, confirmed room/meal/date/guest/count/rate and discrepancy reason; transport driver/vehicle/pickup/operational fields plus expectedUpdatedAt; activity tickets/guide/operational fields plus expectedUpdatedAt. Unlisted protected fields must not become commercial authority.
 
 Booking errors additionally include invalid state transition, incomplete confirmation, incomplete historical vouchers, mismatched service/Booking linkage, missing assignment and payment state/idempotency conflicts. Cancellation/refund are separate business operations.
+
+## Financial exception profile: /financial-exceptions
+
+- **Identity/scope:** Every route uses canonical authenticated employee identity. Amendments apply OWN/TEAM/ALL Sales scope; substitutions apply ASSIGNED Reservations or ALL scope; refunds and commission settlement use financial/ALL scope. Requester/approver/processor separation is enforced where required.
+- **Schema/authority:** Proposal bodies accept reasons and narrowly allowlisted evidence. Supplier cost, profit, margin, commission owner/amount, refund suggestion, approval actor, workflow status and audit actor are derived by the server. Unknown or authoritative fields are rejected.
+- **Response:** Role-filtered workflow overview plus typed amendment, substitution, refund and commission transition results. Operations and Marketing have no route access. Reservations cannot see amendment/refund/commission financial data.
+- **Collections/audit:** booking_amendments, supplier_substitutions, refund_requests, refund_ledger, commission_ledger, financial_policies, bookings/services/payments/supplier_payments and audit_logs. All A01 browser Firestore access is denied.
+- **State/errors:** Explicit approval and application/payment states; 403 for role/scope/self-approval violations, 409 for missing frozen data or invalid transition, 422 for business preconditions such as non-cancelled refund requests or an amount above the calculated suggestion. Critical transitions are transactional and retry-safe.
 
 ## Supplier-payable profile: /supplier-payables
 
@@ -166,6 +174,19 @@ Abbreviations: F Founder; D Admin; A Accounts; SM Sales Manager; SE Sales Execut
 | PATCH `/api/bookings/:bookingId/services/activities/:serviceId` | F, D, O | params.bookingId, params.serviceId | `serviceConfirmationService.confirmActivity` | [bookings.ts:507](../../server/routes/bookings.ts#L507) |
 | GET `/api/bookings/:bookingId/vouchers` | F, D, O | params.bookingId | `voucherService.listVouchers` | [bookings.ts:526](../../server/routes/bookings.ts#L526) |
 | POST `/api/bookings/:bookingId/vouchers/generate` | F, D, O | params.bookingId | `voucherService.generateVouchers` | [bookings.ts:547](../../server/routes/bookings.ts#L547) |
+| GET `/api/financial-exceptions/bookings/:bookingId` | F, D, A, SM, SE, R | params.bookingId | `financialExceptionService.getBookingOverview` | [financialExceptions.ts](../../server/routes/financialExceptions.ts) |
+| POST `/api/financial-exceptions/bookings/:bookingId/amendments` | F, D, SM, SE | params.bookingId + amendment proposal | `financialExceptionService.proposeAmendment` | [financialExceptions.ts](../../server/routes/financialExceptions.ts) |
+| POST `/api/financial-exceptions/amendments/:amendmentId/decision` | F, D, SM | params.amendmentId + decision/note | `financialExceptionService.decideAmendment` | [financialExceptions.ts](../../server/routes/financialExceptions.ts) |
+| POST `/api/financial-exceptions/amendments/:amendmentId/apply` | F, D, SM | params.amendmentId | `financialExceptionService.applyAmendment` | [financialExceptions.ts](../../server/routes/financialExceptions.ts) |
+| POST `/api/financial-exceptions/bookings/:bookingId/substitutions` | F, D, R | params.bookingId + inventory rate evidence | `financialExceptionService.proposeSubstitution` | [financialExceptions.ts](../../server/routes/financialExceptions.ts) |
+| POST `/api/financial-exceptions/substitutions/:substitutionId/decision` | F, D | params.substitutionId + decision/note | `financialExceptionService.decideSubstitution` | [financialExceptions.ts](../../server/routes/financialExceptions.ts) |
+| POST `/api/financial-exceptions/substitutions/:substitutionId/apply` | F, D, R | params.substitutionId | `financialExceptionService.applySubstitution` | [financialExceptions.ts](../../server/routes/financialExceptions.ts) |
+| POST `/api/financial-exceptions/bookings/:bookingId/refunds/calculate` | F, D, A | params.bookingId + deduction/recovery evidence | `financialExceptionService.calculateRefund` | [financialExceptions.ts](../../server/routes/financialExceptions.ts) |
+| POST `/api/financial-exceptions/refunds/:refundId/submit` | F, D, A | params.refundId | `financialExceptionService.submitRefund` | [financialExceptions.ts](../../server/routes/financialExceptions.ts) |
+| POST `/api/financial-exceptions/refunds/:refundId/decision` | F, D | params.refundId + decision/amount/note | `financialExceptionService.decideRefund` | [financialExceptions.ts](../../server/routes/financialExceptions.ts) |
+| POST `/api/financial-exceptions/refunds/:refundId/pay` | A | params.refundId + method/reference | `financialExceptionService.markRefundPaid` | [financialExceptions.ts](../../server/routes/financialExceptions.ts) |
+| POST `/api/financial-exceptions/bookings/:bookingId/commissions/adjust` | F, D | params.bookingId + amount/reason/idempotencyKey | `financialExceptionService.adjustCommission` | [financialExceptions.ts](../../server/routes/financialExceptions.ts) |
+| POST `/api/financial-exceptions/commissions/:employeeId/settlements` | F, D, A | params.employeeId + reference/reason/idempotencyKey | `financialExceptionService.settleCommission` | [financialExceptions.ts](../../server/routes/financialExceptions.ts) |
 | GET `/api/customers` | F, D, SM, SE | query.cursor, query.limit | Local scoped handler | [customers.ts:240](../../server/routes/customers.ts#L240) |
 | GET `/api/customers/:id` | F, D, SM, SE | params.id | Local scoped handler | [customers.ts:284](../../server/routes/customers.ts#L284) |
 | POST `/api/customers` | F, D, SM, SE | Explicit customer write allowlist | Local scoped handler | [customers.ts:304](../../server/routes/customers.ts#L304) |

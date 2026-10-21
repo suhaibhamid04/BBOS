@@ -289,6 +289,34 @@ service cloud.firestore {
       allow read, create, update, delete: if false;
     }
 
+    // A01 financial and commercial exception workflows are server-authoritative.
+    // Browser clients use authenticated Express APIs so actor identity, scope,
+    // separation of duties, state transitions, and ledger immutability can be
+    // enforced transactionally.
+    match /booking_amendments/{amendmentId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /supplier_substitutions/{substitutionId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /refund_requests/{refundId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /refund_ledger/{entryId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /commission_ledger/{entryId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /financial_policies/{policyId} {
+      allow read, create, update, delete: if false;
+    }
+
     // =========================================================================
     // 12. LEGACY COLLECTIONS (STRICT READ-ONLY HISTORICAL FREEZE)
     // =========================================================================
