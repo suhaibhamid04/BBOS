@@ -1,143 +1,46 @@
 import React from 'react';
+import { BarChart2, PieChart } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
 import { useData } from '../../context/DataContext';
-import { TrendingUp, Users, DollarSign, Target, BarChart2, PieChart, MapPin, ArrowUpRight } from 'lucide-react';
+import { calculateDashboardMetrics, formatMetric } from '../../services/dashboardMetrics';
 
 export const AnalyticsOverviewView: React.FC = () => {
-  const { leads, bookings, campaigns, quotes } = useData();
+  const { currentUser } = useAuth();
+  const { leads, bookings, quotes, dataLoadErrors } = useData();
+  const metrics = calculateDashboardMetrics({ leads, bookings, quotes, role: currentUser.role, errors: dataLoadErrors });
+  const financialAvailable = metrics.verifiedCustomerPayments.status === 'available';
+  const totalBookingValue = bookings.reduce((sum, booking) => sum + (Number(booking.totalAmount) || 0), 0);
+  const averageBookingValue = bookings.length === 0 ? 0 : totalBookingValue / bookings.length;
+  const activePipelineValue = quotes.filter(quote => ['DRAFT', 'PENDING_APPROVAL', 'SENT', 'VIEWED'].includes(quote.status)).reduce((sum, quote) => sum + (Number(quote.finalAmount) || 0), 0);
+  const byMonth = bookings.reduce<Record<string, { payment: number; bookings: number }>>((result, booking) => {
+    const date = new Date(booking.createdAt);
+    if (Number.isNaN(date.getTime())) return result;
+    const key = date.toLocaleDateString('en-IN', { year: 'numeric', month: 'short' });
+    result[key] ||= { payment: 0, bookings: 0 };
+    result[key].payment += Number(booking.amountReceived) || 0;
+    result[key].bookings += 1;
+    return result;
+  }, {});
+  const byDestination = bookings.reduce<Record<string, number>>((result, booking) => {
+    const destination = booking.destination?.trim() || 'Unspecified';
+    result[destination] = (result[destination] || 0) + (Number(booking.totalAmount) || 0);
+    return result;
+  }, {});
+  const monthlyEntries = Object.entries(byMonth) as Array<[string, { payment: number; bookings: number }]>;
+  const destinationEntries = Object.entries(byDestination) as Array<[string, number]>;
+  const maxMonthly = Math.max(0, ...monthlyEntries.map(([, value]) => value.payment));
 
-  const totalRevenue = bookings.reduce((sum, b) => sum + (b.totalAmount || 0), 0);
-  const totalInquiries = leads.length;
-  const bookedLeads = leads.filter((l) => l.status === 'CONVERTED').length;
-  const conversionRate = totalInquiries > 0 ? Math.round((bookedLeads / totalInquiries) * 100) : 38;
-
-  // Monthly breakdown mock
-  const monthlyRevenue = [
-    { month: 'Jun', revenue: 380000, bookings: 4 },
-    { month: 'Jul', revenue: 490000, bookings: 6 },
-    { month: 'Aug', revenue: 540000, bookings: 7 },
-    { month: 'Sep', revenue: 680000, bookings: 9 },
-    { month: 'Oct (Proj)', revenue: 820000, bookings: 12 },
-  ];
-
-  return (
-    <div id="analytics-overview-view" className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center space-x-2">
-            <h2 className="text-xl font-bold text-slate-900 tracking-tight">Business & Travel Analytics</h2>
-            <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">
-              FY 2026-27
-            </span>
-          </div>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Operational KPIs, destination performance, revenue velocity, and conversion funnel
-          </p>
-        </div>
-      </div>
-
-      {/* KPI Tiles */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-1">
-          <span className="text-slate-500 text-xs font-semibold">Total Realized Revenue</span>
-          <h3 className="text-2xl font-black text-slate-900">
-            ₹{totalRevenue > 0 ? (totalRevenue / 100000).toFixed(2) + ' L' : '6.25 L'}
-          </h3>
-          <p className="text-[11px] text-emerald-600 font-medium flex items-center">
-            <ArrowUpRight className="w-3 h-3 mr-0.5" /> +24% YoY growth
-          </p>
-        </div>
-
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-1">
-          <span className="text-slate-500 text-xs font-semibold">Average Booking Value</span>
-          <h3 className="text-2xl font-black text-slate-900">₹72,400</h3>
-          <p className="text-[11px] text-slate-500">Premium packages + Houseboat add-ons</p>
-        </div>
-
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-1">
-          <span className="text-slate-500 text-xs font-semibold">Lead Conversion Rate</span>
-          <h3 className="text-2xl font-black text-[#7056EE]">{conversionRate}%</h3>
-          <p className="text-[11px] text-slate-500">AI-scored hot leads convert at 64%</p>
-        </div>
-
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-1">
-          <span className="text-slate-500 text-xs font-semibold">Active Pipeline Value</span>
-          <h3 className="text-2xl font-black text-[#F0A608]">₹3.85 L</h3>
-          <p className="text-[11px] text-slate-500">{quotes.length} Proposals in review</p>
-        </div>
-      </div>
-
-      {/* Revenue Trend & Destination Mix */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Monthly Trend */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs sm:text-sm font-bold text-slate-900 flex items-center space-x-2">
-              <BarChart2 className="w-4 h-4 text-[#7056EE]" />
-              <span>Monthly Revenue Growth (INR)</span>
-            </h3>
-            <span className="text-[11px] text-emerald-600 font-semibold">+18.5% MoM</span>
-          </div>
-
-          <div className="space-y-3 pt-2">
-            {monthlyRevenue.map((item) => {
-              const maxRev = 850000;
-              const percent = Math.round((item.revenue / maxRev) * 100);
-              return (
-                <div key={item.month} className="space-y-1">
-                  <div className="flex justify-between text-xs font-semibold">
-                    <span className="text-slate-800">{item.month}</span>
-                    <span className="text-slate-600">₹{(item.revenue / 1000).toFixed(0)}k ({item.bookings} trips)</span>
-                  </div>
-                  <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
-                    <div
-                      className="bg-[#7056EE] h-full rounded-full transition-all"
-                      style={{ width: `${percent}%` }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Destination Market Share */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs sm:text-sm font-bold text-slate-900 flex items-center space-x-2">
-              <PieChart className="w-4 h-4 text-[#F0A608]" />
-              <span>Destination Revenue Contribution</span>
-            </h3>
-            <span className="text-[11px] text-slate-500 font-medium">By Booking Value</span>
-          </div>
-
-          <div className="space-y-3 pt-2">
-            {[
-              { dest: 'Kashmir Luxury Packages', share: 58, value: '₹3.62 L', color: 'bg-[#F0A608]' },
-              { dest: 'Ladakh High Altitude Circuits', share: 26, value: '₹1.62 L', color: 'bg-[#7056EE]' },
-              { dest: 'Jammu & Katra Pilgrimage', share: 10, value: '₹62.5k', color: 'bg-emerald-500' },
-              { dest: 'Himachal & Custom Domestic', share: 6, value: '₹37.5k', color: 'bg-blue-400' },
-            ].map((item) => (
-              <div key={item.dest} className="space-y-1">
-                <div className="flex justify-between text-xs font-semibold">
-                  <span className="text-slate-800">{item.dest}</span>
-                  <span className="text-slate-600">{item.share}% ({item.value})</span>
-                </div>
-                <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                  <div
-                    className={`${item.color} h-full rounded-full`}
-                    style={{ width: `${item.share}%` }}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="p-3 bg-slate-50 rounded-xl text-[11px] text-slate-600 mt-2">
-            💡 <strong>Strategic Growth Note:</strong> Kashmir Autumn Shikara & Wazwan promotions are yielding the highest customer lifetime value (LTV: ₹1.45 Lakhs per returning group).
-          </div>
-        </div>
-      </div>
+  return <div id="analytics-overview-view" className="space-y-6">
+    <div><h2 className="text-xl font-bold text-slate-900">Business & Travel Analytics</h2><p className="text-xs text-slate-500 mt-1">Authorized totals derived from current leads, quotes, bookings, and verified payment aggregates</p></div>
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="bg-white p-5 rounded-2xl border border-slate-200"><p className="text-xs text-slate-500">Verified Customer Payments</p><h3 className="text-2xl font-black mt-2">{formatMetric(metrics.verifiedCustomerPayments, value => `₹${value.toLocaleString('en-IN')}`)}</h3><p className="text-[11px] text-slate-500 mt-1">Verified payments reflected by authorized bookings</p></div>
+      <div className="bg-white p-5 rounded-2xl border border-slate-200"><p className="text-xs text-slate-500">Average Booking Value</p><h3 className="text-2xl font-black mt-2">{dataLoadErrors.bookings ? 'Unavailable' : `₹${Math.round(averageBookingValue).toLocaleString('en-IN')}`}</h3><p className="text-[11px] text-slate-500 mt-1">Selling value divided by authorized bookings</p></div>
+      <div className="bg-white p-5 rounded-2xl border border-slate-200"><p className="text-xs text-slate-500">Lead Conversion Rate</p><h3 className="text-2xl font-black mt-2 text-violet-700">{formatMetric(metrics.conversionRate, value => `${value.toFixed(1)}%`)}</h3><p className="text-[11px] text-slate-500 mt-1">Converted leads divided by all authorized leads</p></div>
+      <div className="bg-white p-5 rounded-2xl border border-slate-200"><p className="text-xs text-slate-500">Active Quote Value</p><h3 className="text-2xl font-black mt-2 text-amber-700">{dataLoadErrors.quotes || !financialAvailable ? 'Unavailable' : `₹${activePipelineValue.toLocaleString('en-IN')}`}</h3><p className="text-[11px] text-slate-500 mt-1">Current selling value; not realized revenue</p></div>
     </div>
-  );
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="bg-white p-5 rounded-2xl border border-slate-200 space-y-4"><h3 className="text-sm font-bold flex items-center gap-2"><BarChart2 className="w-4 h-4 text-violet-600" />Verified Payments by Booking Month</h3>{dataLoadErrors.bookings || !financialAvailable ? <p className="text-sm text-slate-500">Financial trend unavailable.</p> : monthlyEntries.length === 0 ? <p className="text-sm text-slate-500">No booking payment data.</p> : <div className="space-y-3">{monthlyEntries.map(([month, value]) => <div key={month}><div className="flex justify-between text-xs"><span>{month}</span><span>₹{value.payment.toLocaleString('en-IN')} ({value.bookings})</span></div><div className="h-2 bg-slate-100 rounded mt-1"><div className="h-2 bg-violet-500 rounded" style={{ width: `${maxMonthly === 0 ? 0 : Math.round(value.payment / maxMonthly * 100)}%` }} /></div></div>)}</div>}</div>
+      <div className="bg-white p-5 rounded-2xl border border-slate-200 space-y-4"><h3 className="text-sm font-bold flex items-center gap-2"><PieChart className="w-4 h-4 text-amber-600" />Destination Booking Value</h3>{dataLoadErrors.bookings || !financialAvailable ? <p className="text-sm text-slate-500">Destination value unavailable.</p> : destinationEntries.length === 0 ? <p className="text-sm text-slate-500">No destination booking data.</p> : <div className="space-y-3">{destinationEntries.sort((a,b) => b[1]-a[1]).map(([destination, value]) => { const share = totalBookingValue === 0 ? 0 : Math.round(value / totalBookingValue * 100); return <div key={destination}><div className="flex justify-between text-xs"><span>{destination}</span><span>{share}% (₹{value.toLocaleString('en-IN')})</span></div><div className="h-2 bg-slate-100 rounded mt-1"><div className="h-2 bg-amber-500 rounded" style={{ width: `${share}%` }} /></div></div>; })}</div>}</div>
+    </div>
+  </div>;
 };

@@ -19,5 +19,8 @@ service-account*.json
 *serviceaccount*.json
 *credentials*.json
 firebase-admin*.json
+firebase.prod.json
+firebase-applet-config.dev-backup.json
+firebase-applet-config.*.local.json
 
 codex.vsix

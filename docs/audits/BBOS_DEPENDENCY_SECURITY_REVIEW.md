@@ -76,13 +76,13 @@ No direct framework, Firebase, build-system or other major-version upgrade was m
 
 **S08 CLOSED.** All 15 original advisories are either remediated, proven not reachable, or isolated to development tooling with explicit controls. No confirmed reachable vulnerability remains. Six advisory records remain installed and accepted under the narrow conditions above; the audit is intentionally not described as clean or as reporting zero vulnerabilities.
 
-## Post-closure advisory-feed check — 2026-10-21
+## Post-closure advisory-feed check — 2026-10-22
 
-Sprint 4 changed no dependency declaration or lockfile. A fresh registry-backed `bun audit --json` reports 13 records: 0 critical, 6 high, 6 moderate, and 1 low. The original six dispositions remain unchanged. Seven records appeared after the Sprint 3 snapshot:
+The production-readiness sprint changed no dependency declaration or lockfile. A fresh registry-backed `bun audit --json` reports 15 records: 0 critical, 6 high, 7 moderate, and 2 low. The original residual dispositions remain unchanged. The current feed retains four MCP SDK records and reports five Vite/launch-editor records:
 
 | Package/path | New records | Reachability disposition |
 |---|---:|---|
 | `firebase-tools -> @modelcontextprotocol/sdk@1.31.0` and optional peer under `@google/genai` | 4 | `firebase-tools` is development/emulator tooling. Production AI code calls only `ai.models.generateContent`; it does not construct MCP servers, task handlers, HTTP transports, OAuth requests, or bearer-auth verifiers. The vulnerable operations are not invoked. |
-| direct build dependency `vite@6.4.3` (`launch-editor` development-server behavior) | 3 | Vite is used to build or run a trusted local development server and is not imported by the deployed Express runtime. BBOS does not expose the editor-launch endpoint as an application route or accept attacker-controlled editor commands/configuration. `DEV_TOOLING_ONLY`. |
+| direct build dependency `vite@6.4.3` and its `launch-editor` development-server behavior | 5 | Vite is used to build or run a trusted local development server and is not imported by the deployed Express runtime. BBOS does not expose Vite custom middleware or editor-launch endpoints as deployed application routes and does not accept attacker-controlled editor commands/configuration. `DEV_TOOLING_ONLY`. |
 
-This advisory-feed drift does not create a reachable production path and does not reopen the original S08 finding under its closure standard. It does mean the live audit is no longer the six-record snapshot. Engineering should accept supported Firebase CLI, Google GenAI, and Vite updates when compatible fixed releases are available and rerun the full matrix; no unplanned major or build-system upgrade was introduced during A01.
+This advisory-feed drift does not create a reachable production path and does not reopen the original S08 finding under its closure standard. The CI audit gate records the 15 reviewed advisory IDs and fails on every new or critical record. Engineering should accept supported Firebase CLI, Google GenAI, and Vite updates when compatible fixed releases are available and rerun the full matrix; no unplanned major or build-system upgrade was introduced.

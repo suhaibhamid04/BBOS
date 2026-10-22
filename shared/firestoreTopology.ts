@@ -1,4 +1,5 @@
 export const DEFAULT_FIRESTORE_DATABASE_ID = '(default)';
+export const PRODUCTION_FIREBASE_PROJECT_ID = 'booking-bridge-bbos-prod';
 
 export type FirestoreRuntimeMode = 'production' | 'development' | 'test';
 
@@ -8,6 +9,7 @@ export interface FirestoreTopology {
   runtimeMode: FirestoreRuntimeMode;
   emulator: boolean;
   isDefaultDatabase: boolean;
+  readOnlyDiagnostic: boolean;
 }
 
 export class FirestoreTopologyError extends Error {
@@ -22,9 +24,9 @@ export interface ResolveFirestoreTopologyInput {
   databaseId?: string;
   runtimeMode?: string;
   emulator?: boolean;
-  fallbackProjectId?: string;
-  fallbackDatabaseId?: string;
   expectedProjectId?: string;
+  allowLocalProductionDiagnostic?: boolean;
+  readOnlyDiagnostic?: boolean;
 }
 
 function nonEmpty(value: string | undefined): string | undefined {
@@ -82,17 +84,28 @@ function runtimeMode(value: string | undefined): FirestoreRuntimeMode {
 export function resolveFirestoreTopology(input: ResolveFirestoreTopologyInput): FirestoreTopology {
   const mode = runtimeMode(input.runtimeMode);
   const production = mode === 'production';
-  const projectId = normalizeFirebaseProjectId(
-    input.projectId || (production ? undefined : input.fallbackProjectId),
-  );
-  const databaseId = normalizeFirestoreDatabaseId(
-    input.databaseId || (production ? undefined : input.fallbackDatabaseId),
-  );
+  const projectId = normalizeFirebaseProjectId(input.projectId);
+  const databaseId = normalizeFirestoreDatabaseId(input.databaseId);
   const expectedProjectId = nonEmpty(input.expectedProjectId);
   if (expectedProjectId && projectId !== expectedProjectId) {
     throw new FirestoreTopologyError(
       `Firebase project configuration missing or inconsistent. Configured project ${projectId} does not match the client app project ${expectedProjectId}.`,
     );
+  }
+  if (production && projectId !== PRODUCTION_FIREBASE_PROJECT_ID) {
+    throw new FirestoreTopologyError(
+      `Production profile must target ${PRODUCTION_FIREBASE_PROJECT_ID}; received ${projectId}.`,
+    );
+  }
+  const targetsProductionFromLocal = !production && projectId === PRODUCTION_FIREBASE_PROJECT_ID;
+  const diagnosticAllowed = input.allowLocalProductionDiagnostic === true && input.readOnlyDiagnostic === true;
+  if (targetsProductionFromLocal && !diagnosticAllowed) {
+    throw new FirestoreTopologyError(
+      'Local development cannot target the production Firebase project. For an approved read-only diagnostic, set both BBOS_LOCAL_PRODUCTION_DIAGNOSTIC=true and BBOS_READ_ONLY_DIAGNOSTIC=true.',
+    );
+  }
+  if (mode === 'test' && !input.emulator) {
+    throw new FirestoreTopologyError('Test profile requires Firebase emulators and refuses live Firebase access.');
   }
   return {
     projectId,
@@ -100,6 +113,7 @@ export function resolveFirestoreTopology(input: ResolveFirestoreTopologyInput): 
     runtimeMode: mode,
     emulator: input.emulator === true,
     isDefaultDatabase: databaseId === DEFAULT_FIRESTORE_DATABASE_ID,
+    readOnlyDiagnostic: targetsProductionFromLocal && diagnosticAllowed,
   };
 }
 

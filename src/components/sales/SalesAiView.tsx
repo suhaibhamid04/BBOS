@@ -7,16 +7,17 @@ import {
 } from 'lucide-react';
 
 export const SalesAiView: React.FC = () => {
-  const { leads, quotes } = useData();
+  const { leads, quotes, aiActions, recommendations, approvals, dataLoadErrors } = useData();
   const { currentUser, permissions } = useAuth();
   
   const [timeframe, setTimeframe] = useState<'WEEK' | 'MONTH' | 'QUARTER'>('MONTH');
 
-  // Simulated AI metrics for the dashboard
   const activeLeads = leads.filter(l => !['DROPPED', 'CANCELLED', 'CONVERTED'].includes(l.status));
   const hotLeads = activeLeads.filter(l => l.priority === 'HOT' || (l.leadScore || 0) > 80);
   const totalPipeline = activeLeads.reduce((sum, l) => sum + (l.budget || 0), 0);
-  const weightedPipeline = activeLeads.reduce((sum, l) => sum + ((l.budget || 0) * ((l.bookingProbability || 50) / 100)), 0);
+  const scoredLeads = activeLeads.filter(l => typeof l.bookingProbability === 'number');
+  const weightedPipeline = scoredLeads.reduce((sum, l) => sum + ((l.budget || 0) * ((l.bookingProbability || 0) / 100)), 0);
+  const conversionRate = leads.length === 0 ? 0 : (leads.filter(l => l.status === 'CONVERTED').length / leads.length) * 100;
   
   const lowMarginQuotes = quotes.filter(q => q.status === 'SENT' && (q.discountAmount / q.totalAmount) > 0.1);
   const overdueFollowUps = activeLeads.filter(l => l.nextFollowUpAt && new Date(l.nextFollowUpAt) < new Date());
@@ -29,16 +30,16 @@ export const SalesAiView: React.FC = () => {
             <span className="text-xs font-bold text-slate-500 uppercase">Team Conversion</span>
             <TrendingUp className="w-4 h-4 text-emerald-500" />
           </div>
-          <div className="text-2xl font-black text-slate-900">24.5%</div>
-          <p className="text-[10px] text-emerald-600 font-bold mt-1">↑ 2.1% from last month</p>
+          <div className="text-2xl font-black text-slate-900">{dataLoadErrors.leads ? 'Unavailable' : `${conversionRate.toFixed(1)}%`}</div>
+          <p className="text-[10px] text-slate-500 font-bold mt-1">Converted divided by authorized leads</p>
         </div>
         <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
           <div className="flex justify-between items-start mb-2">
             <span className="text-xs font-bold text-slate-500 uppercase">Avg Response Time</span>
             <Clock className="w-4 h-4 text-[#F0A608]" />
           </div>
-          <div className="text-2xl font-black text-slate-900">14m</div>
-          <p className="text-[10px] text-emerald-600 font-bold mt-1">Within target (15m)</p>
+          <div className="text-2xl font-black text-slate-900">Unavailable</div>
+          <p className="text-[10px] text-slate-500 font-bold mt-1">No authoritative response-time source</p>
         </div>
         <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
           <div className="flex justify-between items-start mb-2">
@@ -53,8 +54,8 @@ export const SalesAiView: React.FC = () => {
             <span className="text-xs font-bold text-slate-500 uppercase">AI Actions Taken</span>
             <Bot className="w-4 h-4 text-[#7056EE]" />
           </div>
-          <div className="text-2xl font-black text-slate-900">142</div>
-          <p className="text-[10px] text-slate-500 font-bold mt-1">This {timeframe.toLowerCase()}</p>
+          <div className="text-2xl font-black text-slate-900">{aiActions.length}</div>
+          <p className="text-[10px] text-slate-500 font-bold mt-1">Loaded authoritative actions</p>
         </div>
       </div>
 
@@ -69,7 +70,7 @@ export const SalesAiView: React.FC = () => {
               <div key={lead.id} className="p-4 hover:bg-slate-50 transition-colors">
                 <div className="flex justify-between mb-1">
                   <span className="font-bold text-sm text-slate-900">{lead.customerName}</span>
-                  <span className="text-xs text-rose-600 font-bold">Overdue by 2 hrs</span>
+                  <span className="text-xs text-rose-600 font-bold">Due {new Date(lead.nextFollowUpAt!).toLocaleString()}</span>
                 </div>
                 <div className="flex justify-between text-xs text-slate-500">
                   <span>Rep: {lead.assignedEmployeeName}</span>
@@ -90,7 +91,7 @@ export const SalesAiView: React.FC = () => {
               <div key={quote.id} className="p-4 hover:bg-slate-50 transition-colors">
                 <div className="flex justify-between mb-1">
                   <span className="font-bold text-sm text-slate-900">{quote.customerName}</span>
-                  <span className="text-xs text-amber-600 font-bold">Margin &lt; 12%</span>
+                  <span className="text-xs text-amber-600 font-bold">Discount exceeds 10%</span>
                 </div>
                 <div className="flex justify-between text-xs text-slate-500">
                   <span>Quote: ₹{quote.finalAmount.toLocaleString()}</span>
@@ -127,7 +128,7 @@ export const SalesAiView: React.FC = () => {
             <TrendingUp className="w-5 h-5 text-purple-300" />
           </div>
           <div className="text-3xl font-black">₹{(weightedPipeline / 100000).toFixed(1)}L</div>
-          <p className="text-xs text-purple-200 mt-2">Based on AI win probability</p>
+          <p className="text-xs text-purple-200 mt-2">Based on {scoredLeads.length} leads with an explicit probability</p>
         </div>
 
         <div className="bg-gradient-to-br from-emerald-600 to-emerald-800 rounded-xl p-6 shadow-md text-white">
@@ -146,20 +147,8 @@ export const SalesAiView: React.FC = () => {
             <Brain className="w-5 h-5 text-[#7056EE]" /> AI Sales Recommendations
           </h3>
           <div className="space-y-3">
-            <div className="p-3 bg-slate-50 rounded-lg border border-slate-100 flex gap-3">
-              <div className="mt-0.5"><Sparkles className="w-4 h-4 text-emerald-500" /></div>
-              <div>
-                <p className="text-sm font-bold text-slate-900">Margin Optimization Opportunity</p>
-                <p className="text-xs text-slate-600 mt-1">AI detected that 45% of honeymoon packages are sold with standard transport. Offering premium transport at booking could increase margin by 2.4%.</p>
-              </div>
-            </div>
-            <div className="p-3 bg-slate-50 rounded-lg border border-slate-100 flex gap-3">
-              <div className="mt-0.5"><Sparkles className="w-4 h-4 text-amber-500" /></div>
-              <div>
-                <p className="text-sm font-bold text-slate-900">Lead Response Risk</p>
-                <p className="text-xs text-slate-600 mt-1">Weekend response time dropped to 45m average, leading to a 15% lower AI Booking Probability score for weekend leads.</p>
-              </div>
-            </div>
+            {recommendations.filter(item => item.status === 'PENDING').map(item => <div key={item.id} className="p-3 bg-slate-50 rounded-lg border border-slate-100 flex gap-3"><Sparkles className="w-4 h-4 text-emerald-500 mt-0.5" /><div><p className="text-sm font-bold text-slate-900">{item.title}</p><p className="text-xs text-slate-600 mt-1">{item.description}</p></div></div>)}
+            {recommendations.filter(item => item.status === 'PENDING').length === 0 && <p className="text-sm text-slate-500">No authoritative AI recommendations are available.</p>}
           </div>
         </div>
 
@@ -167,10 +156,7 @@ export const SalesAiView: React.FC = () => {
           <h3 className="font-bold text-slate-900 mb-4 flex items-center gap-2">
             <CheckCircle2 className="w-5 h-5 text-slate-400" /> Pending Approvals
           </h3>
-          <div className="flex flex-col items-center justify-center h-32 text-slate-500 text-sm">
-            <p>All AI-generated quotes and discounts have been approved.</p>
-            <button className="mt-2 text-[#7056EE] font-bold text-xs hover:underline">View Approval Log</button>
-          </div>
+          <div className="flex flex-col items-center justify-center h-32 text-slate-500 text-sm"><p>{approvals.filter(item => item.status === 'PENDING').length === 0 ? 'No pending approvals.' : `${approvals.filter(item => item.status === 'PENDING').length} pending approvals.`}</p></div>
         </div>
       </div>
     </div>

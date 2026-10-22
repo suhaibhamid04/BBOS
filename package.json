@@ -14,6 +14,8 @@
     "test:e2e:firebase": "firebase emulators:exec --config firebase.qa3.json --project bbos-qa3-local --only auth,firestore \"playwright test --config playwright.firebase.config.ts\"",
     "test:auth-emulator": "firebase emulators:exec --config firebase.qa3.json --project bbos-qa3-local --only auth \"bun test tests/server/firebase-auth-emulator.integration.test.ts\"",
     "test:rules": "firebase emulators:exec --config firebase.qa3.json --project demo-bbos-audit-rules --only firestore \"bun test tests/security/firestore-rules-emulator.integration.test.ts\"",
+    "verify:repository": "bun scripts/verifyRepositorySafety.ts",
+    "verify:audit": "bun scripts/verifyDependencyAudit.ts",
     "firestore:deploy-config": "bun scripts/createFirestoreDeployConfig.ts",
     "migrate:leads:team": "bun scripts/backfillLeadSalesTeam.ts"
   },

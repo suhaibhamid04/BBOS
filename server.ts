@@ -28,6 +28,16 @@ async function startServer() {
     },
   }));
 
+  if (firestoreTopology.readOnlyDiagnostic) {
+    app.use('/api', (req, res, next) => {
+      if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+      return res.status(403).json({
+        error: 'This approved local production diagnostic session is read-only.',
+        code: 'LOCAL_PRODUCTION_DIAGNOSTIC_READ_ONLY',
+      });
+    });
+  }
+
   // Mount API routes FIRST
   app.use('/api', apiRouter);
   app.use('/api', (_req, res) => res.status(404).json({ error: 'API route not found.' }));

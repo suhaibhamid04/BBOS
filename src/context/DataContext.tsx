@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { APP_CONFIG } from '../config';
+import { assertDemoControlsAllowed } from '../services/demoModeGuard';
 import { readApiPages } from '../services/auth/readApiPages';
 import { inventoryApi } from '../services/inventory/inventoryApi';
 import { authenticatedMutationHeaders, authenticatedReadHeaders } from '../services/auth/authenticatedApi';
@@ -523,7 +524,7 @@ interface DataContextType {
   seedDemoData: () => void;
   clearDemoData: () => void;
   isLoading: boolean;
-  dataLoadErrors: Partial<Record<'leads' | 'accommodation' | 'transport' | 'activities', string>>;
+  dataLoadErrors: Partial<Record<'leads' | 'quotes' | 'bookings' | 'accommodation' | 'transport' | 'activities', string>>;
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
@@ -614,9 +615,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const saved = localStorage.getItem('bb_content_calendar');
     return saved ? JSON.parse(saved) : DEMO_CONTENT_CALENDAR;
   });
-  const [marketingPillars] = useState<MarketingPillar[]>(DEMO_PILLARS);
-  const [campaigns] = useState<AdCampaign[]>(DEMO_CAMPAIGNS);
-  const [aiAgents] = useState<AiAgentConfig[]>(DEMO_AI_AGENTS);
+  const [marketingPillars] = useState<MarketingPillar[]>(() => APP_CONFIG.DEMO_MODE ? DEMO_PILLARS : []);
+  const [campaigns] = useState<AdCampaign[]>(() => APP_CONFIG.DEMO_MODE ? DEMO_CAMPAIGNS : []);
+  const [aiAgents] = useState<AiAgentConfig[]>(() => APP_CONFIG.DEMO_MODE ? DEMO_AI_AGENTS : []);
 
   const [trips, setTrips] = useState<Trip[]>(() => {
     if (!APP_CONFIG.DEMO_MODE) return [];
@@ -780,8 +781,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         ] = await Promise.all([
           safely(fetchApi('/api/leads'), 'leads'),
           safely(canReadCustomers ? fetchApi('/api/customers') : Promise.resolve([])),
-          safely(canReadQuotes ? fetchApi('/api/quotes') : Promise.resolve([])),
-          safely(fetchApi('/api/bookings')),
+          safely(canReadQuotes ? fetchApi('/api/quotes') : Promise.resolve([]), 'quotes'),
+          safely(fetchApi('/api/bookings'), 'bookings'),
           safely(fetchApi('/api/trips')),
           safely(canReadRates ? Promise.all([
             fetchApi('/api/accommodation/suppliers'),
@@ -910,12 +911,15 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.setItem('bb_negotiated_rates', JSON.stringify(negotiatedRates));
   }, [negotiatedRates]);
   useEffect(() => {
+    if (!APP_CONFIG.DEMO_MODE) return;
     localStorage.setItem('bb_tasks', JSON.stringify(tasks));
   }, [tasks]);
   useEffect(() => {
+    if (!APP_CONFIG.DEMO_MODE) return;
     localStorage.setItem('bb_conversations', JSON.stringify(conversations));
   }, [conversations]);
   useEffect(() => {
+    if (!APP_CONFIG.DEMO_MODE) return;
     localStorage.setItem('bb_messages', JSON.stringify(messages));
   }, [messages]);
   useEffect(() => {
@@ -923,42 +927,55 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.setItem('bb_quotes', JSON.stringify(quotes));
   }, [quotes]);
   useEffect(() => {
+    if (!APP_CONFIG.DEMO_MODE) return;
     localStorage.setItem('bb_bookings', JSON.stringify(bookings));
   }, [bookings]);
   useEffect(() => {
+    if (!APP_CONFIG.DEMO_MODE) return;
     localStorage.setItem('bb_recommendations', JSON.stringify(recommendations));
   }, [recommendations]);
   useEffect(() => {
+    if (!APP_CONFIG.DEMO_MODE) return;
     localStorage.setItem('bb_actions', JSON.stringify(aiActions));
   }, [aiActions]);
   useEffect(() => {
+    if (!APP_CONFIG.DEMO_MODE) return;
     localStorage.setItem('bb_approvals', JSON.stringify(approvals));
   }, [approvals]);
   useEffect(() => {
+    if (!APP_CONFIG.DEMO_MODE) return;
     localStorage.setItem('bb_audit_logs', JSON.stringify(auditLogs));
   }, [auditLogs]);
   useEffect(() => {
+    if (!APP_CONFIG.DEMO_MODE) return;
     localStorage.setItem('bb_content_calendar', JSON.stringify(contentCalendar));
   }, [contentCalendar]);
   useEffect(() => {
+    if (!APP_CONFIG.DEMO_MODE) return;
     localStorage.setItem('bb_trips', JSON.stringify(trips));
   }, [trips]);
   useEffect(() => {
+    if (!APP_CONFIG.DEMO_MODE) return;
     localStorage.setItem('bb_hotels', JSON.stringify(hotels));
   }, [hotels]);
   useEffect(() => {
+    if (!APP_CONFIG.DEMO_MODE) return;
     localStorage.setItem('bb_transports', JSON.stringify(transports));
   }, [transports]);
   useEffect(() => {
+    if (!APP_CONFIG.DEMO_MODE) return;
     localStorage.setItem('bb_drivers', JSON.stringify(drivers));
   }, [drivers]);
   useEffect(() => {
+    if (!APP_CONFIG.DEMO_MODE) return;
     localStorage.setItem('bb_activities', JSON.stringify(activities));
   }, [activities]);
   useEffect(() => {
+    if (!APP_CONFIG.DEMO_MODE) return;
     localStorage.setItem('bb_suppliers', JSON.stringify(suppliers));
   }, [suppliers]);
   useEffect(() => {
+    if (!APP_CONFIG.DEMO_MODE) return;
     localStorage.setItem('bb_vouchers', JSON.stringify(vouchers));
   }, [vouchers]);
 
@@ -3398,6 +3415,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Demo Controls
   const seedDemoData = () => {
+    assertDemoControlsAllowed(APP_CONFIG.DEMO_MODE);
     writeDemoCustomerShares([]);
     setLeads(DEMO_LEADS);
     setCustomers(DEMO_CUSTOMERS);
@@ -3416,6 +3434,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const clearDemoData = () => {
+    assertDemoControlsAllowed(APP_CONFIG.DEMO_MODE);
     writeDemoCustomerShares([]);
     setLeads(prev => prev.filter(l => !l.isDemo));
     setCustomers(prev => prev.filter(c => !c.isDemo));

@@ -10,6 +10,9 @@ export default defineConfig(({ mode }) => {
     define: {
       'import.meta.env.FIREBASE_PROJECT_ID': JSON.stringify(environment.FIREBASE_PROJECT_ID || ''),
       'import.meta.env.BBOS_FIRESTORE_DATABASE_ID': JSON.stringify(environment.BBOS_FIRESTORE_DATABASE_ID || ''),
+      'import.meta.env.VITE_BBOS_FIRESTORE_DATABASE_ID': JSON.stringify(environment.VITE_BBOS_FIRESTORE_DATABASE_ID || environment.BBOS_FIRESTORE_DATABASE_ID || ''),
+      'import.meta.env.VITE_FIREBASE_PROJECT_ID': JSON.stringify(environment.VITE_FIREBASE_PROJECT_ID || environment.FIREBASE_PROJECT_ID || ''),
+      'import.meta.env.VITE_BBOS_ENVIRONMENT': JSON.stringify(environment.VITE_BBOS_ENVIRONMENT || environment.BBOS_ENVIRONMENT || (mode === 'production' ? 'production' : 'development')),
     },
     resolve: {
       alias: {

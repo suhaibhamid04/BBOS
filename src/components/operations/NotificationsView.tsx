@@ -1,9 +1,11 @@
 import React from 'react';
 import { useData } from '../../context/DataContext';
-import { Bell, CheckCircle2, Clock, Flame, Sparkles, Shield } from 'lucide-react';
+import { Sparkles, Shield } from 'lucide-react';
 
 export const NotificationsView: React.FC = () => {
-  const { recommendations, tasks, approvals } = useData();
+  const { recommendations, approvals } = useData();
+  const pendingApprovals = approvals.filter(approval => approval.status === 'PENDING');
+  const activeRecommendations = recommendations.filter(recommendation => recommendation.status === 'PENDING');
 
   return (
     <div id="notifications-view" className="space-y-6">
@@ -13,7 +15,7 @@ export const NotificationsView: React.FC = () => {
           <div className="flex items-center space-x-2">
             <h2 className="text-xl font-bold text-slate-900 tracking-tight">System Alerts & Notifications</h2>
             <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
-              Live Feed
+              Authorized Feed
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-0.5">Real-time alerts, lead status changes, and critical task warnings</p>
@@ -21,7 +23,7 @@ export const NotificationsView: React.FC = () => {
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs divide-y divide-slate-100 overflow-hidden">
-        {approvals.filter(a => a.status === 'PENDING').map(app => (
+        {pendingApprovals.map(app => (
           <div key={app.id} className="p-4 flex items-start space-x-3 bg-amber-50/50">
             <Shield className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
             <div className="space-y-0.5 text-xs">
@@ -32,7 +34,7 @@ export const NotificationsView: React.FC = () => {
           </div>
         ))}
 
-        {recommendations.map(rec => (
+        {activeRecommendations.map(rec => (
           <div key={rec.id} className="p-4 flex items-start space-x-3">
             <Sparkles className="w-5 h-5 text-[#7056EE] shrink-0 mt-0.5" />
             <div className="space-y-0.5 text-xs">
@@ -42,6 +44,7 @@ export const NotificationsView: React.FC = () => {
             </div>
           </div>
         ))}
+        {pendingApprovals.length === 0 && activeRecommendations.length === 0 && <div className="p-8 text-center text-sm text-slate-500">No authoritative notifications are available.</div>}
       </div>
     </div>
   );

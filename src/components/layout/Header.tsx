@@ -14,6 +14,7 @@ import {
   Layers
 } from 'lucide-react';
 import { NavSectionKey } from './Sidebar';
+import { APP_CONFIG } from '../../config';
 
 interface HeaderProps {
   onToggleSidebar: () => void;
@@ -32,7 +33,7 @@ export const Header: React.FC<HeaderProps> = ({
   onNavigate,
   activeNavTitle,
 }) => {
-  const { currentUser, isFirebaseAuthenticated } = useAuth();
+  const { currentUser } = useAuth();
   const { seedDemoData, clearDemoData, approvals, tasks } = useData();
   const [showDemoMenu, setShowDemoMenu] = useState(false);
 
@@ -89,8 +90,8 @@ export const Header: React.FC<HeaderProps> = ({
           <span>Ask AI Bridge</span>
         </button>
 
-        {/* Demo Data Management Dropdown */}
-        <div className="relative">
+        {/* Demo fixture controls exist only in explicit local demo mode. */}
+        {APP_CONFIG.DEMO_MODE && <div className="relative">
           <button
             id="demo-data-menu-trigger"
             onClick={() => setShowDemoMenu(!showDemoMenu)}
@@ -134,10 +135,12 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
             </div>
           )}
-        </div>
+        </div>}
+
+        {!APP_CONFIG.DEMO_MODE && <span data-testid="environment-indicator" className="hidden xl:inline-flex px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-[10px] font-bold uppercase text-slate-600">{APP_CONFIG.ENVIRONMENT_LABEL}</span>}
 
         {/* Notifications Icon with pending count */}
-        <button
+        {APP_CONFIG.DEMO_MODE ? <button
           id="header-notifications-button"
           onClick={() => onNavigate('notifications')}
           className="relative p-2 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-900 transition-colors"
@@ -147,7 +150,10 @@ export const Header: React.FC<HeaderProps> = ({
           {(pendingApprovalsCount > 0 || pendingTasksCount > 0) && (
             <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-500 ring-2 ring-white"></span>
           )}
-        </button>
+        </button> : <div data-testid="authenticated-profile" className="flex items-center space-x-2 pl-1.5 pr-2.5 py-1 bg-slate-50 border border-slate-200 rounded-xl">
+          <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#7056EE] to-[#F0A608] text-white flex items-center justify-center font-bold text-xs shadow-2xs">{currentUser.name.charAt(0)}</div>
+          <div className="hidden md:block text-left"><span className="text-xs font-bold text-slate-900 leading-tight block">{currentUser.name}</span><p className="text-[10px] font-semibold text-[#7056EE] leading-tight">{currentUser.role}</p></div>
+        </div>}
 
         {/* Persona Switcher / Active Profile Pill */}
         <button

@@ -14,9 +14,14 @@ const isProduction = (typeof process !== 'undefined' && process.env.NODE_ENV ===
 const serverLowMarginThreshold = typeof process !== 'undefined' ? process.env.BBOS_LOW_MARGIN_THRESHOLD_PERCENT : undefined;
 const clientLowMarginThreshold = import.meta.env.VITE_BBOS_LOW_MARGIN_THRESHOLD_PERCENT;
 const configuredLowMarginThreshold = serverLowMarginThreshold ?? clientLowMarginThreshold;
+const configuredEnvironment = (typeof process !== 'undefined' ? process.env.BBOS_ENVIRONMENT : undefined)
+  ?? import.meta.env.VITE_BBOS_ENVIRONMENT
+  ?? (isProduction ? 'production' : 'development');
 
 export const APP_CONFIG = {
   DEMO_MODE: !isProduction && (serverDemoMode ?? clientDemoMode) === 'true',
+  ENVIRONMENT: configuredEnvironment,
+  ENVIRONMENT_LABEL: configuredEnvironment === 'production' ? 'Production' : configuredEnvironment === 'test' ? 'Testing' : 'Development',
   LOW_MARGIN_THRESHOLD_PERCENT: configuredLowMarginThreshold === undefined || configuredLowMarginThreshold === ''
     ? undefined
     : Number(configuredLowMarginThreshold),
