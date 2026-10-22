@@ -114,9 +114,11 @@ test('Sales creates three isolated options, recommends one, compares details and
   await expect(detail).toContainText('Shikara Ride');
   await expect(detail).toContainText('Gondola Ride');
   await expect(detail).toContainText('72,000');
-  await expect(detail).toContainText('Inventory-linked itinerary services');
+  await expect(detail).toContainText('Accommodation, transport, activities, meals, and services expressly listed in the confirmed itinerary');
   await expect(detail).toContainText('Personal expenses');
-  await expect(detail).toContainText('Services remain subject to availability until booking confirmation.');
+  await expect(detail).toContainText('50% at booking');
+  await expect(detail).toContainText('Cancellation: more than 30 days before departure');
+  await expect(detail).toContainText('Policy BBOS-POLICY-2026-10-21-V1');
   await expect(detail).not.toContainText('Supplier cost');
 
   await Promise.all([page.waitForEvent('download'), page.getByTestId('share-customer-package').click()]);

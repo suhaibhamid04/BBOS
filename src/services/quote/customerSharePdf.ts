@@ -193,6 +193,10 @@ function addOptionDetail(layout: PdfLayout, option: CustomerSharePublicOption): 
   addList(layout, optional.map(item => `${item.activityName} - available at additional cost`), 'No optional experiences listed.');
   layout.text('Exclusions', { size: 11, font: 'bold', before: 8, after: 4 });
   addList(layout, pkg.exclusions, 'No exclusions listed.');
+  if (pkg.paymentSchedule?.length) {
+    layout.text('Payment schedule', { size: 11, font: 'bold', before: 8, after: 4 });
+    addList(layout, pkg.paymentSchedule.map(item => `${item.percentage}% - ${item.label}${item.dueDate ? ` - ${item.dueDate}` : ''}`), '');
+  }
   layout.text('Terms and cancellation', { size: 11, font: 'bold', before: 8, after: 4 });
   layout.text(pkg.termsAndConditions || 'Services remain subject to availability. Cancellation terms will be confirmed at booking.', { after: 12 });
   layout.rule();

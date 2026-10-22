@@ -34,7 +34,7 @@ function booking(status: Booking['status'] = 'CONFIRMED'): Booking {
 function accommodation(): BookingAccommodation {
   return {
     id: 'stay-1', bookingId: 'booking-a01', tripId: 'trip-a01', customerId: 'customer-a01', sourceQuoteServiceId: 'quote-stay-1',
-    propertyId: 'hotel-old', propertyName: 'Old Hotel', roomCategoryId: 'deluxe', roomCategoryName: 'Deluxe', mealPlan: 'MAP',
+    propertyId: 'hotel-old', propertyName: 'Old Hotel', roomCategoryId: 'deluxe-old', roomCategoryName: 'Deluxe', mealPlan: 'MAP',
     checkInDate: '2026-12-01', checkOutDate: '2026-12-05', nightsCount: 4, roomsCount: 1,
     adultsCount: 2, childrenCount: 0, supplierId: 'supplier-old', confirmationStatus: 'CONFIRMED', voucherStatus: 'PENDING',
     schemaVersion: '2B-5', createdAt: AT, updatedAt: AT,
@@ -49,7 +49,7 @@ function snapshot(): FinancialSnapshot {
     grossProfit: 40_000, grossMargin: 40,
     lineItems: [{
       serviceId: 'quote-stay-1', serviceType: 'ACCOMMODATION', supplierId: 'supplier-old', supplierName: 'Old Supplier',
-      inventoryMasterId: 'hotel-old', rateContractType: 'STANDARD', frozenSupplierUnitRate: 5_000, units: 2,
+      inventoryMasterId: 'hotel-old', ratePeriodId: 'rate-old', rateContractType: 'STANDARD', frozenSupplierUnitRate: 5_000, units: 2,
       frozenSupplementsCost: 0, frozenTotalSupplierCost: 10_000, taxTreatment: 'INCLUSIVE', taxAmount: 0, rateVerifiedAt: AT,
     }],
     rateValidationFingerprint: 'frozen-a01', createdAt: AT, createdBy: 'sales-1',
@@ -60,12 +60,33 @@ function exceptionStore(status: Booking['status'] = 'CONFIRMED') {
   const store = new InMemoryConversionStorageProvider({ bookings: [booking(status)] });
   store.rawSet('booking_accommodations', 'stay-1', accommodation());
   store.rawSet('bookings/booking-a01/financial_snapshot', 'snapshot-a01', snapshot());
+  store.rawSet('room_categories', 'deluxe-old', { id: 'deluxe-old', propertyId: 'hotel-old', name: 'Deluxe', maxAdults: 3, maxChildren: 2, maxTotalOccupancy: 4, amenities: ['WiFi', 'Breakfast'], active: true });
+  store.rawSet('rate_periods', 'rate-old', { id: 'rate-old', propertyId: 'hotel-old', roomCategoryId: 'deluxe-old', mealPlan: 'MAP', baseRate: 5_000, status: 'ACTIVE' });
   store.rawSet('accommodation_properties', 'hotel-same', { id: 'hotel-same', name: 'Same Range Hotel', supplierId: 'supplier-new', status: 'ACTIVE' });
-  store.rawSet('room_categories', 'deluxe', { id: 'deluxe', propertyId: 'hotel-same', name: 'Deluxe', active: true });
-  store.rawSet('rate_periods', 'rate-same', { id: 'rate-same', propertyId: 'hotel-same', roomCategoryId: 'deluxe', baseRate: 5_000, status: 'ACTIVE' });
+  store.rawSet('room_categories', 'deluxe-new', { id: 'deluxe-new', propertyId: 'hotel-same', name: 'Deluxe', maxAdults: 3, maxChildren: 2, maxTotalOccupancy: 4, amenities: ['WiFi', 'Breakfast', 'Heating'], active: true });
+  store.rawSet('rate_periods', 'rate-same', { id: 'rate-same', propertyId: 'hotel-same', roomCategoryId: 'deluxe-new', mealPlan: 'AP', baseRate: 5_250, status: 'ACTIVE' });
+  store.rawSet('rate_periods', 'rate-cheaper', { id: 'rate-cheaper', propertyId: 'hotel-same', roomCategoryId: 'deluxe-new', mealPlan: 'MAP', baseRate: 4_500, status: 'ACTIVE' });
+  store.rawSet('rate_periods', 'rate-over-five', { id: 'rate-over-five', propertyId: 'hotel-same', roomCategoryId: 'deluxe-new', mealPlan: 'MAP', baseRate: 5_300, status: 'ACTIVE' });
   store.rawSet('accommodation_properties', 'hotel-material', { id: 'hotel-material', name: 'Material Hotel', supplierId: 'supplier-material', status: 'ACTIVE' });
-  store.rawSet('room_categories', 'suite', { id: 'suite', propertyId: 'hotel-material', name: 'Suite', active: true });
-  store.rawSet('rate_periods', 'rate-material', { id: 'rate-material', propertyId: 'hotel-material', roomCategoryId: 'suite', baseRate: 7_000, status: 'ACTIVE' });
+  store.rawSet('room_categories', 'suite', { id: 'suite', propertyId: 'hotel-material', name: 'Suite', maxAdults: 3, maxChildren: 2, maxTotalOccupancy: 4, amenities: ['WiFi', 'Breakfast'], active: true });
+  store.rawSet('rate_periods', 'rate-material', { id: 'rate-material', propertyId: 'hotel-material', roomCategoryId: 'suite', mealPlan: 'MAP', baseRate: 7_000, status: 'ACTIVE' });
+  store.rawSet('room_categories', 'standard', { id: 'standard', propertyId: 'hotel-material', name: 'Standard', maxAdults: 3, maxChildren: 2, maxTotalOccupancy: 4, amenities: ['WiFi'], active: true });
+  store.rawSet('rate_periods', 'rate-reduced', { id: 'rate-reduced', propertyId: 'hotel-material', roomCategoryId: 'standard', mealPlan: 'CP', baseRate: 4_000, status: 'ACTIVE' });
+  return store;
+}
+
+function departureAfter(days: number): string {
+  const value = new Date(AT);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+function cancellationStore(daysBeforeDeparture: number, verifiedCustomerPayments = 100_000) {
+  const store = exceptionStore('CANCELLED');
+  store.rawUpdate('bookings', 'booking-a01', { travelStartDate: departureAfter(daysBeforeDeparture) });
+  store.rawSet('payments', 'payment-policy', {
+    id: 'payment-policy', bookingId: 'booking-a01', amount: verifiedCustomerPayments, status: 'VERIFIED',
+  });
   return store;
 }
 
@@ -137,7 +158,7 @@ describe('A01 financial and commercial exception workflows', () => {
     expect(store.rawGet('bookings', 'booking-a01').totalSellingPrice).toBe(110_000);
   });
 
-  it('allows assigned Reservations to apply an exact-category/exact-cost substitution and requires Admin for material changes', async () => {
+  it('allows assigned Reservations to apply an equivalent substitution at the 5% boundary and requires Admin for material changes', async () => {
     const store = exceptionStore();
     const service = new FinancialExceptionService(store, () => new Date(AT));
     await expect(service.proposeSubstitution('booking-a01', {
@@ -147,7 +168,7 @@ describe('A01 financial and commercial exception workflows', () => {
     const safe = await service.proposeSubstitution('booking-a01', {
       serviceType: 'ACCOMMODATION', serviceId: 'stay-1', ratePeriodId: 'rate-same', reason: 'Original supplier unavailable',
     }, reservations);
-    expect(safe).toMatchObject({ sameCategory: true, sameCommercialRange: true, requiresAdminApproval: false, status: 'APPROVED' });
+    expect(safe).toMatchObject({ sameCategory: true, sameCommercialRange: true, costIncreasePercent: 5, mealPlanSameOrBetter: true, occupancyEquivalent: true, inclusionsPreserved: true, requiresAdminApproval: false, status: 'APPROVED' });
     const applied = await service.applySubstitution(safe.id, reservations);
     expect(applied.substitution.status).toBe('APPLIED');
     expect(store.rawGet('booking_accommodations', 'stay-1')).toMatchObject({ propertyId: 'hotel-same', supplierId: 'supplier-new' });
@@ -235,6 +256,103 @@ describe('A01 financial and commercial exception workflows', () => {
     expect(store.rawList('refund_ledger')).toHaveLength(1);
   });
 
+  it('applies every canonical cancellation day boundary and the no-show rule to the frozen selling price', async () => {
+    const cases = [
+      { days: 31, expected: 10 },
+      { days: 30, expected: 50 },
+      { days: 17, expected: 50 },
+      { days: 16, expected: 100 },
+      { days: 7, expected: 100 },
+      { days: 6, expected: 100 },
+    ];
+    for (const testCase of cases) {
+      const service = new FinancialExceptionService(cancellationStore(testCase.days), () => new Date(AT));
+      const refund = await service.calculateRefund('booking-a01', { reason: `Boundary calculation for ${testCase.days} days` }, accounts1);
+      expect(refund.calculation).toMatchObject({
+        daysBeforeDeparture: testCase.days,
+        cancellationPercentage: testCase.expected,
+        standardCancellationCharge: testCase.expected === 10 ? 10_000 : testCase.expected === 50 ? 50_000 : 100_000,
+        confirmedPackageSellingPrice: 100_000,
+      });
+    }
+    const noShowService = new FinancialExceptionService(cancellationStore(60), () => new Date(AT));
+    const noShow = await noShowService.calculateRefund('booking-a01', { reason: 'Customer did not arrive for confirmed services', cancellationType: 'NO_SHOW' }, accounts1);
+    expect(noShow.calculation).toMatchObject({ cancellationType: 'NO_SHOW', cancellationPercentage: 100, standardCancellationCharge: 100_000, suggestedRefundAmount: 0 });
+  });
+
+  it('uses the higher of standard charge and net supplier exposure without adding them', async () => {
+    const lowerService = new FinancialExceptionService(cancellationStore(31), () => new Date(AT));
+    const lower = await lowerService.calculateRefund('booking-a01', {
+      reason: 'Supplier exposure below standard charge',
+      supplierCancellationCharges: [{ amount: 5_000, sourceReference: 'SUP-LOW', reason: 'Verified supplier charge' }],
+    }, accounts1);
+    expect(lower.calculation).toMatchObject({ standardCancellationCharge: 10_000, netSupplierExposure: 5_000, applicableCancellationCharge: 10_000, suggestedRefundAmount: 90_000 });
+
+    const higherService = new FinancialExceptionService(cancellationStore(31), () => new Date(AT));
+    const higher = await higherService.calculateRefund('booking-a01', {
+      reason: 'Supplier exposure above standard charge',
+      supplierCancellationCharges: [{ amount: 30_000, sourceReference: 'SUP-HIGH', reason: 'Verified supplier charge' }],
+      recoverableSupplierAmounts: [{ amount: 5_000, sourceReference: 'SUP-RECOVERY', reason: 'Verified supplier recovery' }],
+    }, accounts1);
+    expect(higher.calculation).toMatchObject({ standardCancellationCharge: 10_000, netSupplierExposure: 25_000, applicableCancellationCharge: 25_000, suggestedRefundAmount: 75_000 });
+  });
+
+  it('caps cancellation charge, floors refunds at zero, and accounts for previous paid refunds once', async () => {
+    const cappedStore = cancellationStore(31, 20_000);
+    const capped = await new FinancialExceptionService(cappedStore, () => new Date(AT)).calculateRefund('booking-a01', {
+      reason: 'Supplier exposure exceeds confirmed package value',
+      supplierCancellationCharges: [{ amount: 120_000, sourceReference: 'SUP-CAP', reason: 'Verified supplier charge' }],
+    }, accounts1);
+    expect(capped.calculation).toMatchObject({ applicableCancellationCharge: 100_000, suggestedRefundAmount: 0 });
+
+    const priorStore = cancellationStore(31);
+    priorStore.rawSet('refund_ledger', 'refund-prior', { id: 'refund-prior', bookingId: 'booking-a01', actualRefundedAmount: 5_000 });
+    const prior = await new FinancialExceptionService(priorStore, () => new Date(AT)).calculateRefund('booking-a01', { reason: 'Recalculate after one prior paid refund' }, accounts1);
+    expect(prior.calculation).toMatchObject({ applicableCancellationCharge: 10_000, alreadyRefundedAmount: 5_000, suggestedRefundAmount: 85_000 });
+  });
+
+  it('restricts exceptional deductions to Founder/Admin and records immutable authorization audit', async () => {
+    const deniedService = new FinancialExceptionService(cancellationStore(31), () => new Date(AT));
+    await expect(deniedService.calculateRefund('booking-a01', {
+      reason: 'Exceptional deduction proposed by Accounts', manualAdditionalDeduction: 2_000, manualDeductionReason: 'Approved service recovery exception',
+    }, accounts1)).rejects.toMatchObject({ code: 'MANUAL_REFUND_DEDUCTION_DENIED' });
+
+    const store = cancellationStore(31);
+    const approved = await new FinancialExceptionService(store, () => new Date(AT)).calculateRefund('booking-a01', {
+      reason: 'Exceptional deduction approved by Admin', manualAdditionalDeduction: 2_000, manualDeductionReason: 'Documented customer-specific exception',
+    }, admin);
+    expect(approved.calculation).toMatchObject({ applicableCancellationCharge: 10_000, manualAdditionalDeduction: 2_000, suggestedRefundAmount: 88_000 });
+    expect(store.rawList('audit_logs')).toContainEqual(expect.objectContaining({ action: 'REFUND_MANUAL_DEDUCTION_AUTHORIZED', actorId: admin.employeeId }));
+  });
+
+  it('allows cheaper equivalent substitutions and routes over-tolerance or reduced service to Admin', async () => {
+    await expect(new FinancialExceptionService(exceptionStore(), () => new Date(AT)).proposeSubstitution('booking-a01', {
+      serviceType: 'ACCOMMODATION', serviceId: 'stay-1', ratePeriodId: 'rate-cheaper', reason: 'Attempt to change customer economics', customerSellingPrice: 90_000,
+    } as never, reservations)).rejects.toMatchObject({ code: 'AUTHORITATIVE_FIELD_REJECTED' });
+
+    const cheaperService = new FinancialExceptionService(exceptionStore(), () => new Date(AT));
+    const cheaper = await cheaperService.proposeSubstitution('booking-a01', {
+      serviceType: 'ACCOMMODATION', serviceId: 'stay-1', ratePeriodId: 'rate-cheaper', reason: 'Equivalent lower-cost supplier available',
+    }, reservations);
+    expect(cheaper).toMatchObject({ costIncreasePercent: -10, sameCommercialRange: true, requiresAdminApproval: false, customerEconomicsChanged: false });
+
+    const overService = new FinancialExceptionService(exceptionStore(), () => new Date(AT));
+    const over = await overService.proposeSubstitution('booking-a01', {
+      serviceType: 'ACCOMMODATION', serviceId: 'stay-1', ratePeriodId: 'rate-over-five', reason: 'Equivalent room exceeds tolerance',
+    }, reservations);
+    expect(over).toMatchObject({ costIncreasePercent: 6, requiresAdminApproval: true, status: 'PENDING_APPROVAL' });
+    expect(over.materialReasons).toContain('SUPPLIER_COST_INCREASE_EXCEEDS_5_PERCENT');
+
+    const reducedStore = exceptionStore();
+    const reducedService = new FinancialExceptionService(reducedStore, () => new Date(AT));
+    const reduced = await reducedService.proposeSubstitution('booking-a01', {
+      serviceType: 'ACCOMMODATION', serviceId: 'stay-1', ratePeriodId: 'rate-reduced', reason: 'Lower category proposed at lower cost',
+    }, reservations);
+    expect(reduced).toMatchObject({ sameCommercialRange: true, equivalentCategory: false, mealPlanSameOrBetter: false, inclusionsPreserved: false, requiresAdminApproval: true });
+    expect(reduced.materialReasons).toEqual(expect.arrayContaining(['CATEGORY_NOT_EQUIVALENT', 'MEAL_PLAN_REDUCED', 'CUSTOMER_INCLUSIONS_REDUCED']));
+    expect(reducedStore.rawGet('bookings', 'booking-a01').totalSellingPrice).toBe(100_000);
+  });
+
   it('earns one configurable commission for the original Sales owner at confirmation', async () => {
     const root = booking('PENDING_PAYMENT');
     root.amountReceived = 0;
@@ -271,6 +389,52 @@ describe('A01 financial and commercial exception workflows', () => {
     expect(entries).toContainEqual(earned);
     expect(store.getAllBookings()[0].assignedSalesEmployeeId).toBe('sales-1');
     expect(store.getAllAuditLogs()).toContainEqual(expect.objectContaining({ action: 'COMMISSION_REVERSED' }));
+  });
+
+  it('does not auto-reverse commission for an active-booking partial refund and permits an audited Admin adjustment', async () => {
+    const store = exceptionStore('CONFIRMED');
+    store.rawSet('commission_ledger', 'earned-partial', {
+      id: 'earned-partial', bookingId: 'booking-a01', employeeId: 'sales-1', type: 'EARNED', amount: 500,
+      currency: 'INR', bookingStatus: 'CONFIRMED', reason: 'Earned', actorEmployeeId: 'accounts-1', createdAt: AT, idempotencyKey: 'earned-partial',
+    });
+    store.rawSet('refund_requests', 'partial-refund', {
+      id: 'partial-refund', bookingId: 'booking-a01', customerId: 'customer-a01', currency: 'INR', status: 'APPROVED',
+      reason: 'Approved partial service refund while booking remains active', requestedAmount: 10_000, approvedRefundAmount: 10_000, actualRefundedAmount: 0,
+      requestedByEmployeeId: accounts1.employeeId, requestedAt: AT, approvedByEmployeeId: admin.employeeId, approvedAt: AT, createdAt: AT, updatedAt: AT,
+      deductions: [], calculation: {
+        confirmedPackageSellingPrice: 100_000, cancellationDate: '2026-10-21', daysBeforeDeparture: 41, cancellationType: 'STANDARD', cancellationPercentage: 10,
+        standardCancellationCharge: 10_000, verifiedPaymentsReceived: 100_000, grossRefundableBasis: 100_000,
+        supplierCancellationCharges: 0, nonRefundableSupplierPayments: 0, recoverableSupplierAmounts: 0,
+        supplierDeductions: 0, netSupplierExposure: 0, applicableCancellationCharge: 0, bookingBridgeDeductions: 0,
+        manualAdditionalDeduction: 0, alreadyRefundedAmount: 0, suggestedRefundAmount: 10_000, policyCode: 'PARTIAL_SERVICE_REFUND',
+      },
+    });
+    const service = new FinancialExceptionService(store, () => new Date(AT));
+    await service.markRefundPaid('partial-refund', { refundMethod: 'BANK_TRANSFER', refundReference: 'PARTIAL-1' }, accounts2);
+    expect(store.rawList('commission_ledger').filter(item => item.type === 'REVERSAL')).toHaveLength(0);
+    await service.adjustCommission('booking-a01', { amount: -100, reason: 'Founder-approved partial refund commission correction', idempotencyKey: 'partial-adjustment' }, admin);
+    expect(store.rawList('commission_ledger')).toContainEqual(expect.objectContaining({ type: 'ADJUSTMENT', amount: -100, actorEmployeeId: admin.employeeId }));
+    expect(store.rawList('audit_logs')).toContainEqual(expect.objectContaining({ action: 'COMMISSION_ADJUSTED' }));
+  });
+
+  it('creates a reversal obligation after settlement without mutating earned or settled history', async () => {
+    const root = booking('CONFIRMED');
+    const earned: CommissionLedgerEntry = {
+      id: `commission-earned-${root.id}`, bookingId: root.id, employeeId: 'sales-1', type: 'EARNED', amount: 500,
+      currency: 'INR', bookingStatus: 'CONFIRMED', reason: 'Earned', actorEmployeeId: 'accounts-1', createdAt: AT, idempotencyKey: 'earned-settled',
+    };
+    const settled: CommissionLedgerEntry = {
+      id: 'commission-settled-prior', bookingId: 'MULTIPLE', employeeId: 'sales-1', type: 'SETTLED', amount: 500,
+      currency: 'INR', bookingStatus: 'SETTLEMENT', reason: 'Paid in prior payroll', actorEmployeeId: 'accounts-1', createdAt: AT,
+      settlementReference: 'PAYROLL-PRIOR', idempotencyKey: 'settled-prior',
+    };
+    const store = new InMemoryLifecycleStorageProvider({ bookings: [root], commissionEntries: [earned, settled] });
+    await new BookingLifecycleService(store).cancelBooking(root.id, { cancellationReason: 'Full cancellation after commission settlement' }, { id: 'admin-1', ...admin });
+    expect(store.getAllCommissionEntries()).toEqual(expect.arrayContaining([
+      earned,
+      settled,
+      expect.objectContaining({ type: 'REVERSAL', amount: 500, originalEntryId: earned.id }),
+    ]));
   });
 
   it('backfills an auditable earned entry before reversing a legacy confirmed Booking', async () => {

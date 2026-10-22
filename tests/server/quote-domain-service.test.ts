@@ -7,6 +7,7 @@ import { authorizeResource } from '../../server/authorization/policyEngine';
 import { quoteResourceContext } from '../../server/authorization/resourceContext';
 import { buildQuoteConversionDto, buildQuoteDto } from '../../server/authorization/quoteDto';
 import { LowMarginQuoteApprovalService } from '../../server/services/approvalInboxService';
+import { BOOKING_BRIDGE_POLICY_VERSION, STANDARD_CUSTOMER_POLICY_PRESET } from '../../src/policies/bookingBridgePolicy';
 
 describe('Stage D1 server-authoritative Quote mutations', () => {
   let storage: InMemoryConversionStorageProvider;
@@ -513,6 +514,36 @@ describe('Stage D1 server-authoritative Quote mutations', () => {
     expect(storage.getAllAuditLogs().at(-1)).toMatchObject({ action: 'QUOTE_SHARED', actorId: executive.employeeId });
   });
 
+  it('applies the versioned standard customer policy while supporting a frozen booking-specific payment schedule', async () => {
+    const standard = await service.createQuote({ ...createInput(), optionLabel: 'Standard Policy' }, executive);
+    expect(standard).toMatchObject({
+      policyVersion: BOOKING_BRIDGE_POLICY_VERSION,
+      termsAndConditions: STANDARD_CUSTOMER_POLICY_PRESET.termsAndConditions,
+      inclusions: [...STANDARD_CUSTOMER_POLICY_PRESET.inclusions],
+      exclusions: [...STANDARD_CUSTOMER_POLICY_PRESET.exclusions],
+      paymentSchedule: [{ percentage: 50, timing: 'AT_BOOKING' }, { percentage: 50, timing: 'BEFORE_DEPARTURE' }],
+    });
+    expect(standard.customerPackageSnapshot).toMatchObject({
+      policyVersion: BOOKING_BRIDGE_POLICY_VERSION,
+      paymentSchedule: [{ percentage: 50 }, { percentage: 50 }],
+    });
+
+    const custom = await service.updateOption(standard.id, {
+      paymentSchedule: [
+        { percentage: 30, timing: 'AT_BOOKING', label: '30% at booking' },
+        { percentage: 70, timing: 'CUSTOM', label: '70% fourteen days before departure' },
+      ],
+    }, executive);
+    expect(custom.customerPackageSnapshot?.paymentSchedule).toEqual([
+      { percentage: 30, timing: 'AT_BOOKING', label: '30% at booking' },
+      { percentage: 70, timing: 'CUSTOM', label: '70% fourteen days before departure' },
+    ]);
+    expect(custom.versionHistory.at(-1)?.paymentSchedule).toEqual(standard.paymentSchedule);
+    await expect(service.updateOption(custom.id, {
+      paymentSchedule: [{ percentage: 40, timing: 'AT_BOOKING', label: 'Invalid incomplete schedule' }],
+    }, executive)).rejects.toMatchObject({ code: 'INVALID_PAYMENT_SCHEDULE' });
+  });
+
   it('rejects stale or unauthorized package sharing without mutating Quote state', async () => {
     const quote = await service.createQuote(createInput(), executive);
     const anotherExecutive: QuoteMutationActor = {
@@ -673,6 +704,10 @@ describe('Stage D1 server-authoritative Quote mutations', () => {
     const value = await service.createQuote({ ...createInput(), optionLabel: 'Value' }, executive);
     const selected = await service.duplicateOption(value.id, { label: 'Recommended', totalAmount: 92_000 }, executive);
     const originalSnapshot = JSON.parse(JSON.stringify(selected.customerPackageSnapshot));
+    expect(originalSnapshot).toMatchObject({
+      policyVersion: BOOKING_BRIDGE_POLICY_VERSION,
+      paymentSchedule: [{ percentage: 50, timing: 'AT_BOOKING' }, { percentage: 50, timing: 'BEFORE_DEPARTURE' }],
+    });
     storage.rawUpdate('trips', 'trip-01', {
       totalSupplierCost: 70_000, totalSellingPrice: 120_000,
       costingRevision: 2, costingCalculatedRevision: 2,

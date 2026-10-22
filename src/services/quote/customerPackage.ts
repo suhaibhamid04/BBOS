@@ -124,6 +124,8 @@ export function buildCustomerPackageProjection(
     inclusions: Array.isArray(quote.inclusions) ? quote.inclusions.filter((item): item is string => typeof item === 'string') : [],
     exclusions: Array.isArray(quote.exclusions) ? quote.exclusions.filter((item): item is string => typeof item === 'string') : [],
     ...(text(quote.termsAndConditions) ? { termsAndConditions: text(quote.termsAndConditions) } : {}),
+    ...(text(quote.policyVersion) ? { policyVersion: text(quote.policyVersion) } : {}),
+    ...(Array.isArray(quote.paymentSchedule) ? { paymentSchedule: quote.paymentSchedule.map(item => ({ ...item })) } : {}),
     generatedAt,
   };
 }

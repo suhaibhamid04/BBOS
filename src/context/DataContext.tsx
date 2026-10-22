@@ -18,6 +18,7 @@ import {
   type DemoCustomerShareRecord,
 } from '../services/quote/customerShareDemo';
 import { buildCustomerDeliveryPreparation } from '../services/quote/customerShareDelivery';
+import { BOOKING_BRIDGE_POLICY_VERSION } from '../policies/bookingBridgePolicy';
 import { buildCustomerSharePdf, customerSharePdfFilename } from '../services/quote/customerSharePdf';
 import {
   composeDetailedCustomerItinerary,
@@ -298,6 +299,7 @@ const QUOTE_WRITE_FIELDS = [
   'destination', 'tripId', 'hotels', 'transports', 'activities', 'travelerCount',
   'adults', 'children', 'packageId', 'packageName', 'durationDays', 'durationNights',
   'validUntil', 'notes', 'internalNotes', 'inclusions', 'exclusions', 'termsAndConditions',
+  'paymentSchedule',
   'backupAccommodations',
   'optionLabel', 'customerTitle',
 ] as const;
@@ -486,7 +488,7 @@ interface DataContextType {
   getCustomerPackage: (quoteId: string) => Promise<CustomerPackageDocument>;
   shareQuotePackage: (quoteId: string, channel: QuoteShareChannel, expectedVersion: number) => Promise<QuoteShareResult>;
   duplicateQuoteOption: (quoteId: string, input: { label: string; customerTitle?: string; totalAmount?: number; discountAmount?: number; validUntil?: string }) => Promise<Quote>;
-  updateQuoteOption: (quoteId: string, input: { label?: string; customerTitle?: string; totalAmount?: number; discountAmount?: number; validUntil?: string; inclusions?: string[]; exclusions?: string[]; termsAndConditions?: string; backupAccommodations?: QuoteBackupAccommodation[] }) => Promise<Quote>;
+  updateQuoteOption: (quoteId: string, input: { label?: string; customerTitle?: string; totalAmount?: number; discountAmount?: number; validUntil?: string; inclusions?: string[]; exclusions?: string[]; termsAndConditions?: string; paymentSchedule?: Quote['paymentSchedule']; backupAccommodations?: QuoteBackupAccommodation[] }) => Promise<Quote>;
   recommendQuoteOption: (quoteId: string) => Promise<Quote>;
   refreshQuoteOptionFromTrip: (quoteId: string) => Promise<Quote>;
   reorderQuoteOptions: (groupId: string, optionIds: string[]) => Promise<Quote[]>;
@@ -2462,6 +2464,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       updatedByEmployeeId: currentUser.employeeId,
       version: 1,
       versionHistory: [],
+      policyVersion: BOOKING_BRIDGE_POLICY_VERSION,
       createdAt: now,
       updatedAt: now,
       isDemo: true,
@@ -2547,6 +2550,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           inclusions: prevQuote.inclusions,
           exclusions: prevQuote.exclusions,
           termsAndConditions: prevQuote.termsAndConditions,
+          policyVersion: prevQuote.policyVersion,
+          paymentSchedule: prevQuote.paymentSchedule,
           hotels: prevQuote.hotels,
           transports: prevQuote.transports,
           activities: prevQuote.activities,
@@ -2702,7 +2707,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const updateQuoteOption = async (
     quoteId: string,
-    input: { label?: string; customerTitle?: string; totalAmount?: number; discountAmount?: number; validUntil?: string; inclusions?: string[]; exclusions?: string[]; termsAndConditions?: string; backupAccommodations?: QuoteBackupAccommodation[] },
+    input: { label?: string; customerTitle?: string; totalAmount?: number; discountAmount?: number; validUntil?: string; inclusions?: string[]; exclusions?: string[]; termsAndConditions?: string; paymentSchedule?: Quote['paymentSchedule']; backupAccommodations?: QuoteBackupAccommodation[] },
   ): Promise<Quote> => {
     if (!APP_CONFIG.DEMO_MODE) {
       const requestInput = input.backupAccommodations
@@ -2728,6 +2733,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       totalAmount, discountAmount, finalAmount, validUntil: input.validUntil || source.validUntil,
       inclusions: input.inclusions ?? source.inclusions, exclusions: input.exclusions ?? source.exclusions,
       termsAndConditions: input.termsAndConditions ?? source.termsAndConditions,
+      paymentSchedule: input.paymentSchedule ?? source.paymentSchedule,
       backupAccommodations: input.backupAccommodations ?? source.backupAccommodations,
       ...(source.totalSupplierCost !== undefined ? {
         grossProfit: finalAmount - source.totalSupplierCost,
@@ -2752,6 +2758,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         inclusions: source.inclusions,
         exclusions: source.exclusions,
         termsAndConditions: source.termsAndConditions,
+        policyVersion: source.policyVersion,
+        paymentSchedule: source.paymentSchedule,
         customerPackageSnapshot: source.customerPackageSnapshot,
       }],
       updatedAt: now, updatedByEmployeeId: currentUser.employeeId,
@@ -2760,6 +2768,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         inclusions: input.inclusions ?? source.customerPackageSnapshot.inclusions,
         exclusions: input.exclusions ?? source.customerPackageSnapshot.exclusions,
         termsAndConditions: input.termsAndConditions ?? source.customerPackageSnapshot.termsAndConditions,
+        policyVersion: source.customerPackageSnapshot.policyVersion,
+        paymentSchedule: input.paymentSchedule ?? source.customerPackageSnapshot.paymentSchedule,
       },
     };
     delete updated.sharedAt; delete updated.sharedByEmployeeId; delete updated.shareChannel;

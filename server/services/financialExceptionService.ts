@@ -28,6 +28,11 @@ import {
   type ConversionStorageProvider,
   type ConversionTransaction,
 } from '../../src/services/conversion/conversionStorageProvider.js';
+import {
+  BOOKING_BRIDGE_POLICY_VERSION,
+  CANONICAL_FINANCIAL_POLICY,
+  cancellationPercentage,
+} from '../../src/policies/bookingBridgePolicy.js';
 
 const DEFAULT_COMMISSION_AMOUNT = 500;
 const ACTIVE_BOOKING_STATUSES: Booking['status'][] = ['CONFIRMED', 'IN_OPERATIONS', 'TRAVELLING'];
@@ -58,9 +63,12 @@ type AmendmentInput = {
 
 type RefundCalculationInput = {
   reason?: unknown;
+  cancellationType?: unknown;
   supplierCancellationCharges?: unknown;
   nonRefundableSupplierPaymentIds?: unknown;
   recoverableSupplierAmounts?: unknown;
+  manualAdditionalDeduction?: unknown;
+  manualDeductionReason?: unknown;
 };
 
 type MoneyEvidence = { amount: number; sourceReference: string; reason: string };
@@ -69,6 +77,44 @@ const clone = <T>(value: T): T => structuredClone(value);
 
 function nowIso(clock: () => Date): string {
   return clock().toISOString();
+}
+
+const normalized = (value: unknown): string => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ');
+
+function roundMoney(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function daysBeforeDeparture(cancellationDate: string, departureDate: string): number {
+  const cancelled = Date.parse(`${cancellationDate}T00:00:00.000Z`);
+  const departure = Date.parse(`${departureDate}T00:00:00.000Z`);
+  return Math.floor((departure - cancelled) / 86_400_000);
+}
+
+function mealPlanSameOrBetter(original: unknown, replacement: unknown): boolean {
+  const ranking: Record<string, number> = { EP: 0, CP: 1, MAP: 2, AP: 3 };
+  const from = String(original || '').toUpperCase();
+  const to = String(replacement || '').toUpperCase();
+  if (from === 'CUSTOM' || to === 'CUSTOM') return from === to;
+  return ranking[from] !== undefined && ranking[to] !== undefined && ranking[to] >= ranking[from];
+}
+
+function stringSet(value: unknown): Set<string> {
+  return new Set((Array.isArray(value) ? value : []).map(normalized).filter(Boolean));
+}
+
+function includesAll(original: unknown, replacement: unknown): boolean {
+  const before = stringSet(original);
+  const after = stringSet(replacement);
+  return [...before].every(item => after.has(item));
+}
+
+function transportInclusionsPreserved(original: unknown, replacement: unknown): boolean {
+  if (!original || typeof original !== 'object' || Array.isArray(original)) return false;
+  if (!replacement || typeof replacement !== 'object' || Array.isArray(replacement)) return false;
+  const before = original as Record<string, unknown>;
+  const after = replacement as Record<string, unknown>;
+  return Object.entries(before).every(([key, value]) => value !== 'INCLUDED' || after[key] === 'INCLUDED');
 }
 
 function requireActor(actor: FinancialExceptionActor): void {
@@ -444,37 +490,96 @@ export class FinancialExceptionService {
       const sourceLine = authoritativeFrozen.lineItems.find(line => line.serviceId === serviceId || service.sourceQuoteServiceId === line.serviceId);
       if (!sourceLine) throw new FinancialExceptionError(409, 'SUBSTITUTION_FINANCIAL_LINE_MISSING', 'The service has no frozen financial line.');
       let replacement: CommercialServiceSnapshot;
+      let sameServiceType = true;
+      let equivalentCategory = false;
+      let mealPlanPolicySatisfied = true;
+      let occupancyEquivalent = false;
+      let inclusionsPreserved = false;
+      let originalMealPlan: string | undefined;
+      let replacementMealPlan: string | undefined;
       if (serviceType === 'ACCOMMODATION') {
         const rate = await tx.get('rate_periods', ratePeriodId) as any;
         if (!rate || rate.status === 'ARCHIVED') throw new FinancialExceptionError(404, 'SUBSTITUTION_RATE_NOT_FOUND', 'Replacement accommodation rate not found.');
-        const [category, property] = await Promise.all([tx.get('room_categories', rate.roomCategoryId), tx.get('accommodation_properties', rate.propertyId)]);
+        const current = service as BookingAccommodation;
+        const [category, property, originalCategory] = await Promise.all([
+          tx.get('room_categories', rate.roomCategoryId),
+          tx.get('accommodation_properties', rate.propertyId),
+          tx.get('room_categories', current.roomCategoryId),
+        ]) as [any, any, any];
         if (!category || !property || category.active === false || property.status !== 'ACTIVE') throw new FinancialExceptionError(422, 'SUBSTITUTION_INVENTORY_INACTIVE', 'Replacement accommodation inventory is inactive.');
         replacement = { serviceType, serviceId, inventoryMasterId: rate.propertyId, supplierId: property.supplierId || sourceLine.supplierId, categoryId: rate.roomCategoryId, label: `${property.name} — ${category.name}`, supplierCost: amount(rate.baseRate, 'authoritative replacement rate') * sourceLine.units };
+        equivalentCategory = rate.roomCategoryId === current.roomCategoryId || normalized(category.name) === normalized(current.roomCategoryName);
+        originalMealPlan = current.mealPlan;
+        replacementMealPlan = rate.mealPlan;
+        mealPlanPolicySatisfied = mealPlanSameOrBetter(originalMealPlan, replacementMealPlan);
+        const rooms = Math.max(1, current.roomsCount);
+        const adultCapacity = typeof category.maxAdults === 'number' && category.maxAdults * rooms >= current.adultsCount;
+        const childCapacity = typeof category.maxChildren === 'number' && category.maxChildren * rooms >= current.childrenCount;
+        const totalCapacity = category.maxTotalOccupancy === undefined || category.maxTotalOccupancy * rooms >= current.adultsCount + current.childrenCount;
+        occupancyEquivalent = adultCapacity && childCapacity && totalCapacity;
+        inclusionsPreserved = includesAll(originalCategory?.amenities, category.amenities);
       } else if (serviceType === 'TRANSPORT') {
         const rate = await tx.get('transport_rate_periods', ratePeriodId) as any;
         if (!rate || rate.status === 'ARCHIVED') throw new FinancialExceptionError(404, 'SUBSTITUTION_RATE_NOT_FOUND', 'Replacement transport rate not found.');
-        const category = await tx.get('vehicle_categories', rate.vehicleCategoryId) as any;
+        const current = service as BookingTransport;
+        const [category, originalCategory, originalRate] = await Promise.all([
+          tx.get('vehicle_categories', rate.vehicleCategoryId),
+          tx.get('vehicle_categories', current.vehicleCategoryId),
+          sourceLine.ratePeriodId ? tx.get('transport_rate_periods', sourceLine.ratePeriodId) : Promise.resolve(null),
+        ]) as [any, any, any];
         if (!category || category.active === false) throw new FinancialExceptionError(422, 'SUBSTITUTION_INVENTORY_INACTIVE', 'Replacement vehicle category is inactive.');
         replacement = { serviceType, serviceId, inventoryMasterId: rate.vehicleCategoryId, supplierId: rate.supplierId, categoryId: rate.vehicleCategoryId, label: category.displayName || category.name, supplierCost: amount(rate.baseRate, 'authoritative replacement rate') * sourceLine.units };
+        sameServiceType = Boolean(originalRate && originalRate.serviceType === rate.serviceType && originalRate.pricingUnit === rate.pricingUnit);
+        equivalentCategory = rate.vehicleCategoryId === current.vehicleCategoryId || Boolean(originalCategory && originalCategory.category === category.category);
+        occupancyEquivalent = typeof category.passengerCapacity === 'number'
+          && category.passengerCapacity >= current.passengerCount
+          && (!originalCategory || typeof originalCategory.passengerCapacity !== 'number' || category.passengerCapacity >= originalCategory.passengerCapacity);
+        inclusionsPreserved = transportInclusionsPreserved(originalRate?.inclusions, rate.inclusions);
       } else {
         const rate = await tx.get('activity_rate_periods', ratePeriodId) as any;
         if (!rate || rate.status === 'ARCHIVED') throw new FinancialExceptionError(404, 'SUBSTITUTION_RATE_NOT_FOUND', 'Replacement activity rate not found.');
-        const activity = await tx.get('activity_masters', rate.activityId) as any;
+        const current = service as BookingActivity;
+        const [activity, originalActivity, originalRate] = await Promise.all([
+          tx.get('activity_masters', rate.activityId),
+          tx.get('activity_masters', current.activityMasterId),
+          sourceLine.ratePeriodId ? tx.get('activity_rate_periods', sourceLine.ratePeriodId) : Promise.resolve(null),
+        ]) as [any, any, any];
         const components = Object.values(rate.pricingComponents || {}).filter(value => typeof value === 'number') as number[];
         if (!activity || activity.active === false || components.length !== 1) throw new FinancialExceptionError(422, 'SUBSTITUTION_COST_POLICY_REQUIRED', 'Activity substitution requires one authoritative rate component; complex pricing needs an approved policy.');
         replacement = { serviceType, serviceId, inventoryMasterId: rate.activityId, supplierId: rate.supplierId, categoryId: activity.category, label: activity.name, supplierCost: amount(components[0], 'authoritative replacement rate') * sourceLine.units };
+        sameServiceType = Boolean(originalRate && originalRate.pricingModel === rate.pricingModel);
+        equivalentCategory = Boolean(originalActivity && originalActivity.category === activity.category);
+        occupancyEquivalent = (activity.minParticipants === undefined || activity.minParticipants <= current.participantCount)
+          && (activity.maxParticipants === undefined || activity.maxParticipants >= current.participantCount);
+        inclusionsPreserved = includesAll(originalActivity?.inclusions, activity.inclusions);
       }
-      replacement.supplierCost = Math.round(replacement.supplierCost * 100) / 100;
+      replacement.supplierCost = roundMoney(replacement.supplierCost);
       const original = sourceServiceSnapshot(sourceLine, [service]);
-      const sameCategory = Boolean(original.categoryId && replacement.categoryId && original.categoryId === replacement.categoryId);
-      const sameCommercialRange = replacement.supplierCost === original.supplierCost;
-      const requiresAdminApproval = !sameCategory || !sameCommercialRange;
+      const supplierCostDifference = roundMoney(replacement.supplierCost - original.supplierCost);
+      const costIncreasePercent = original.supplierCost > 0
+        ? Math.round((supplierCostDifference / original.supplierCost) * 10_000) / 100
+        : replacement.supplierCost <= 0 ? 0 : 100;
+      const sameCommercialRange = supplierCostDifference <= roundMoney(original.supplierCost * CANONICAL_FINANCIAL_POLICY.substitutionSupplierCostIncreasePercent / 100);
+      const materialReasons = [
+        ...(!sameServiceType ? ['SERVICE_TYPE_CHANGED'] : []),
+        ...(!equivalentCategory ? ['CATEGORY_NOT_EQUIVALENT'] : []),
+        ...(!mealPlanPolicySatisfied ? ['MEAL_PLAN_REDUCED'] : []),
+        ...(!occupancyEquivalent ? ['OCCUPANCY_NOT_EQUIVALENT'] : []),
+        ...(!inclusionsPreserved ? ['CUSTOMER_INCLUSIONS_REDUCED'] : []),
+        ...(!sameCommercialRange ? ['SUPPLIER_COST_INCREASE_EXCEEDS_5_PERCENT'] : []),
+      ];
+      const requiresAdminApproval = materialReasons.length > 0;
       const at = nowIso(this.clock);
       const substitution: SupplierSubstitution = {
         id: `substitution-${randomUUID()}`, bookingId, serviceType, serviceId, original, replacement,
-        sameCategory, sameCommercialRange, material: requiresAdminApproval, customerEconomicsChanged: false,
+        ...(originalMealPlan ? { originalMealPlan } : {}), ...(replacementMealPlan ? { replacementMealPlan } : {}),
+        sameCategory: equivalentCategory, sameCommercialRange, sameServiceType, equivalentCategory,
+        mealPlanSameOrBetter: mealPlanPolicySatisfied, occupancyEquivalent, inclusionsPreserved,
+        costIncreasePercent, commercialTolerancePercent: CANONICAL_FINANCIAL_POLICY.substitutionSupplierCostIncreasePercent,
+        materialReasons, requiresCommercialAmendment: false,
+        material: requiresAdminApproval, customerEconomicsChanged: false,
         frozenSupplierCost: original.supplierCost, replacementSupplierCost: replacement.supplierCost,
-        supplierCostDifference: Math.round((replacement.supplierCost - original.supplierCost) * 100) / 100,
+        supplierCostDifference,
         requiresAdminApproval, status: requiresAdminApproval ? 'PENDING_APPROVAL' : 'APPROVED', reason,
         proposedByEmployeeId: actor.employeeId, proposedAt: at,
         ...(!requiresAdminApproval ? { approvedByEmployeeId: 'SYSTEM_POLICY', approvedAt: at } : {}),
@@ -484,7 +589,7 @@ export class FinancialExceptionService {
       const proposedEvent = audit('SUPPLIER_SUBSTITUTION_PROPOSED', 'SUPPLIER_SUBSTITUTION', substitution.id, actor, at, null, clone(substitution) as any, reason);
       tx.set('audit_logs', proposedEvent.id, proposedEvent);
       if (!requiresAdminApproval) {
-        const approvedEvent = audit('SUPPLIER_SUBSTITUTION_APPROVED', 'SUPPLIER_SUBSTITUTION', substitution.id, actor, at, { status: 'PENDING_APPROVAL' }, { status: 'APPROVED', policy: 'EXACT_CATEGORY_AND_EXACT_COST' }, 'Automatically approved by the conservative same-category/exact-cost policy.');
+        const approvedEvent = audit('SUPPLIER_SUBSTITUTION_APPROVED', 'SUPPLIER_SUBSTITUTION', substitution.id, actor, at, { status: 'PENDING_APPROVAL' }, { status: 'APPROVED', policy: 'EQUIVALENT_SERVICE_AND_MAX_5_PERCENT_COST_INCREASE', policyVersion: BOOKING_BRIDGE_POLICY_VERSION }, 'Automatically approved by the canonical equivalent-service and five-percent supplier-cost tolerance policy.');
         tx.set('audit_logs', approvedEvent.id, approvedEvent);
       }
       return substitution;
@@ -530,6 +635,7 @@ export class FinancialExceptionService {
         patch.propertyName = item.replacement.label.split(' — ')[0];
         patch.roomCategoryId = item.replacement.categoryId;
         patch.roomCategoryName = item.replacement.label.split(' — ')[1] || item.replacement.label;
+        if (item.replacementMealPlan) patch.mealPlan = item.replacementMealPlan;
         patch.supplierConfirmation = {
           ...(service.supplierConfirmation || {}), status: 'REQUESTED', updatedAt: at, updatedByEmployeeId: actor.employeeId,
           requiresCommercialApproval: item.supplierCostDifference !== 0,
@@ -557,27 +663,39 @@ export class FinancialExceptionService {
   }
 
   async calculateRefund(bookingId: string, rawInput: RefundCalculationInput, actor: FinancialExceptionActor): Promise<RefundRequest> {
-    assertAllowedFields(rawInput, ['reason', 'supplierCancellationCharges', 'nonRefundableSupplierPaymentIds', 'recoverableSupplierAmounts']);
+    assertAllowedFields(rawInput, ['reason', 'cancellationType', 'supplierCancellationCharges', 'nonRefundableSupplierPaymentIds', 'recoverableSupplierAmounts', 'manualAdditionalDeduction', 'manualDeductionReason']);
     const reason = text(rawInput.reason, 'reason', 5, 1000);
     if (!['Accounts', 'Founder', 'Admin'].includes(actor.role)) throw new FinancialExceptionError(403, 'REFUND_CALCULATION_DENIED', 'Accounts or ALL scope is required.');
     requireActor(actor);
+    const cancellationType = rawInput.cancellationType === undefined ? 'STANDARD' : String(rawInput.cancellationType);
+    if (!['STANDARD', 'NO_SHOW'].includes(cancellationType)) throw new FinancialExceptionError(400, 'INVALID_CANCELLATION_TYPE', 'cancellationType must be STANDARD or NO_SHOW.');
+    const manualAdditionalDeduction = rawInput.manualAdditionalDeduction === undefined ? 0 : amount(rawInput.manualAdditionalDeduction, 'manualAdditionalDeduction');
+    const manualDeductionReason = manualAdditionalDeduction > 0
+      ? text(rawInput.manualDeductionReason, 'manualDeductionReason', 5, 1000)
+      : undefined;
+    if (manualAdditionalDeduction > 0 && !['Founder', 'Admin'].includes(actor.role)) {
+      throw new FinancialExceptionError(403, 'MANUAL_REFUND_DEDUCTION_DENIED', 'Founder/Admin authority is required for an exceptional additional deduction.');
+    }
     const charges = moneyEvidence(rawInput.supplierCancellationCharges, 'supplierCancellationCharges');
     const recoveries = moneyEvidence(rawInput.recoverableSupplierAmounts, 'recoverableSupplierAmounts');
     const paymentIds = rawInput.nonRefundableSupplierPaymentIds === undefined ? [] : rawInput.nonRefundableSupplierPaymentIds;
     if (!Array.isArray(paymentIds) || paymentIds.some(value => typeof value !== 'string' || !value.trim())) throw new FinancialExceptionError(400, 'INVALID_FINANCIAL_EXCEPTION_INPUT', 'nonRefundableSupplierPaymentIds must be an array of IDs.');
     if (new Set(paymentIds.map(value => String(value).trim())).size !== paymentIds.length) throw new FinancialExceptionError(400, 'DUPLICATE_SUPPLIER_PAYMENT_EVIDENCE', 'Each non-refundable supplier payment may be referenced once.');
+    const frozen = await this.storage.getFinancialSnapshot(bookingId);
+    if (!frozen) throw new FinancialExceptionError(409, 'ORIGINAL_FINANCIAL_SNAPSHOT_MISSING', 'The immutable confirmation snapshot is required for cancellation policy.');
 
     return this.storage.runTransaction(async tx => {
       const booking = await tx.get('bookings', bookingId) as Booking | null;
       if (!booking) throw new FinancialExceptionError(404, 'BOOKING_NOT_FOUND', 'Booking not found.');
       assertBookingScope(booking, actor, 'FINANCIAL');
       if (booking.status !== 'CANCELLED') throw new FinancialExceptionError(422, 'REFUND_REQUIRES_CANCELLED_BOOKING', 'Cancel the Booking before calculating a refund.');
-      const [payments, supplierPayments, ledgers, policy] = await Promise.all([
+      const [payments, supplierPayments, ledgers, authoritativeFrozen] = await Promise.all([
         tx.findByField('payments', 'bookingId', bookingId, 500),
         tx.findByField('supplier_payments', 'bookingId', bookingId, 500),
         tx.findByField('refund_ledger', 'bookingId', bookingId, 500),
-        tx.get('financial_policies', 'current'),
+        tx.get(`bookings/${bookingId}/financial_snapshot`, frozen.id),
       ]);
+      if (!authoritativeFrozen) throw new FinancialExceptionError(409, 'ORIGINAL_FINANCIAL_SNAPSHOT_MISSING', 'The immutable confirmation snapshot changed or is missing.');
       const verifiedPaymentsReceived = (payments as PaymentRecord[]).filter(item => item.status === 'VERIFIED').reduce((sum, item) => sum + amount(item.amount, `payment ${item.id}`), 0);
       const verifiedSupplier = new Map((supplierPayments as SupplierPaymentRecord[]).filter(item => item.status === 'VERIFIED').map(item => [item.id, item]));
       let nonRefundableSupplierPayments = 0;
@@ -592,19 +710,36 @@ export class FinancialExceptionService {
       }
       const supplierCancellationCharges = charges.reduce((sum, item) => sum + item.amount, 0);
       const recoverableSupplierAmounts = recoveries.reduce((sum, item) => sum + item.amount, 0);
-      const supplierDeductions = Math.max(0, Math.round((supplierCancellationCharges + nonRefundableSupplierPayments - recoverableSupplierAmounts) * 100) / 100);
-      const configuredFlat = policy && typeof policy.cancellationDeductionFlat === 'number' ? amount(policy.cancellationDeductionFlat, 'configured cancellation deduction') : 0;
-      const configuredPercent = policy && typeof policy.cancellationDeductionPercent === 'number' ? amount(policy.cancellationDeductionPercent, 'configured cancellation deduction percent') : 0;
-      const bookingBridgeDeductions = Math.round((configuredFlat + verifiedPaymentsReceived * configuredPercent / 100) * 100) / 100;
-      if (bookingBridgeDeductions > 0) deductions.push({ type: 'BOOKING_BRIDGE_POLICY', amount: bookingBridgeDeductions, sourceReference: 'financial_policies/current', reason: 'Configured Booking Bridge cancellation deduction.' });
+      const netSupplierExposure = Math.max(0, roundMoney(supplierCancellationCharges + nonRefundableSupplierPayments - recoverableSupplierAmounts));
+      const confirmedPackageSellingPrice = amount((authoritativeFrozen as FinancialSnapshot).totalSellingPrice, 'confirmed package selling price');
+      const cancellationDate = nowIso(this.clock).slice(0, 10);
+      const departureDays = daysBeforeDeparture(cancellationDate, booking.travelStartDate);
+      const percentage = cancellationPercentage(departureDays, cancellationType === 'NO_SHOW');
+      const standardCancellationCharge = roundMoney(confirmedPackageSellingPrice * percentage / 100);
+      const applicableCancellationCharge = Math.min(confirmedPackageSellingPrice, Math.max(standardCancellationCharge, netSupplierExposure));
+      const supplierDeductions = netSupplierExposure;
+      const bookingBridgeDeductions = applicableCancellationCharge;
+      deductions.push({
+        type: 'BOOKING_BRIDGE_POLICY', amount: applicableCancellationCharge,
+        sourceReference: CANONICAL_FINANCIAL_POLICY.documentPath,
+        reason: `Canonical ${percentage}% charge compared with verified net supplier exposure; the higher amount applies without addition.`,
+      });
+      if (manualAdditionalDeduction > 0) deductions.push({
+        type: 'MANUAL_ADDITIONAL_DEDUCTION', amount: manualAdditionalDeduction,
+        sourceReference: actor.employeeId, reason: manualDeductionReason!,
+      });
       const alreadyRefundedAmount = (ledgers as RefundLedgerEntry[]).reduce((sum, item) => sum + item.actualRefundedAmount, 0);
       const grossRefundableBasis = verifiedPaymentsReceived;
-      const suggestedRefundAmount = Math.max(0, Math.round((grossRefundableBasis - supplierDeductions - bookingBridgeDeductions - alreadyRefundedAmount) * 100) / 100);
+      const suggestedRefundAmount = Math.max(0, roundMoney(grossRefundableBasis - applicableCancellationCharge - manualAdditionalDeduction - alreadyRefundedAmount));
       const calculation: RefundCalculation = {
+        confirmedPackageSellingPrice, cancellationDate, daysBeforeDeparture: departureDays,
+        cancellationType: cancellationType as 'STANDARD' | 'NO_SHOW', cancellationPercentage: percentage,
+        standardCancellationCharge,
         verifiedPaymentsReceived, grossRefundableBasis, supplierCancellationCharges,
-        nonRefundableSupplierPayments, recoverableSupplierAmounts, supplierDeductions,
-        bookingBridgeDeductions, alreadyRefundedAmount, suggestedRefundAmount,
-        policyCode: policy ? 'CONFIGURED_CANCELLATION_POLICY' : 'NO_CONFIGURED_BOOKING_BRIDGE_DEDUCTION',
+        nonRefundableSupplierPayments, recoverableSupplierAmounts, supplierDeductions, netSupplierExposure,
+        applicableCancellationCharge, bookingBridgeDeductions, manualAdditionalDeduction,
+        alreadyRefundedAmount, suggestedRefundAmount,
+        policyCode: BOOKING_BRIDGE_POLICY_VERSION,
       };
       const at = nowIso(this.clock);
       const refund: RefundRequest = {
@@ -616,6 +751,11 @@ export class FinancialExceptionService {
       tx.set('refund_requests', refund.id, refund);
       const event = audit('REFUND_CALCULATED', 'REFUND_REQUEST', refund.id, actor, at, null, { bookingId, calculation, deductions }, reason);
       tx.set('audit_logs', event.id, event);
+      if (manualAdditionalDeduction > 0) {
+        const manualEvent = audit('REFUND_MANUAL_DEDUCTION_AUTHORIZED', 'REFUND_REQUEST', refund.id, actor, at, null,
+          { bookingId, amount: manualAdditionalDeduction, policyVersion: BOOKING_BRIDGE_POLICY_VERSION }, manualDeductionReason!);
+        tx.set('audit_logs', manualEvent.id, manualEvent);
+      }
       return refund;
     });
   }
@@ -684,7 +824,12 @@ export class FinancialExceptionService {
       if (refund.status !== 'APPROVED' || refund.approvedRefundAmount === undefined || !refund.approvedByEmployeeId) throw new FinancialExceptionError(409, 'REFUND_NOT_APPROVED', 'Approval does not mean paid; an approved refund is required.');
       if (refund.approvedByEmployeeId === actor.employeeId || refund.requestedByEmployeeId === actor.employeeId) throw new FinancialExceptionError(403, 'REFUND_SEPARATION_OF_DUTIES_DENIED', 'Requester/approver cannot also record payment.');
       const paidByOtherRequests = bookingLedgers.filter(item => item.refundId !== refundId).reduce((sum, item) => sum + item.actualRefundedAmount, 0);
-      const remainingAuthorizedBasis = Math.max(0, Math.round((refund.calculation.grossRefundableBasis - refund.calculation.supplierDeductions - refund.calculation.bookingBridgeDeductions - paidByOtherRequests) * 100) / 100);
+      const remainingAuthorizedBasis = Math.max(0, roundMoney(
+        refund.calculation.grossRefundableBasis
+        - refund.calculation.applicableCancellationCharge
+        - refund.calculation.manualAdditionalDeduction
+        - paidByOtherRequests,
+      ));
       if (refund.approvedRefundAmount > remainingAuthorizedBasis) {
         throw new FinancialExceptionError(409, 'REFUND_RECALCULATION_REQUIRED', 'Another refund changed the remaining refundable basis. Recalculate and approve a new request.');
       }
@@ -693,6 +838,11 @@ export class FinancialExceptionService {
         id: ledgerId, refundId, bookingId: refund.bookingId, customerId: refund.customerId, currency: refund.currency,
         verifiedPaymentsReceived: refund.calculation.verifiedPaymentsReceived,
         grossRefundableBasis: refund.calculation.grossRefundableBasis,
+        confirmedPackageSellingPrice: refund.calculation.confirmedPackageSellingPrice,
+        standardCancellationCharge: refund.calculation.standardCancellationCharge,
+        netSupplierExposure: refund.calculation.netSupplierExposure,
+        applicableCancellationCharge: refund.calculation.applicableCancellationCharge,
+        manualAdditionalDeduction: refund.calculation.manualAdditionalDeduction,
         supplierDeductions: refund.calculation.supplierDeductions,
         bookingBridgeDeductions: refund.calculation.bookingBridgeDeductions,
         approvedRefundAmount: refund.approvedRefundAmount, actualRefundedAmount: refund.approvedRefundAmount,

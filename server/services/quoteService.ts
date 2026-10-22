@@ -30,6 +30,11 @@ import { quoteResourceContext, tripResourceContext } from '../authorization/reso
 import type { AuthorizationPrincipal } from '../authorization/policyTypes.js';
 import { isTripCostingFresh } from '../../src/utils/costingFreshness.js';
 import { assessLowMarginPolicy, isLowMarginApprovalCurrent } from '../../src/utils/packageCommercials.js';
+import {
+  BOOKING_BRIDGE_POLICY_VERSION,
+  STANDARD_CUSTOMER_POLICY_PRESET,
+  type PaymentScheduleMilestone,
+} from '../../src/policies/bookingBridgePolicy.js';
 
 type UnknownRecord = Record<string, any>;
 
@@ -128,6 +133,7 @@ const CREATE_FIELDS = new Set([
   'adults', 'children', 'packageId', 'packageName', 'durationDays', 'durationNights',
   'totalAmount', 'discountAmount', 'validUntil', 'notes', 'internalNotes',
   'inclusions', 'exclusions', 'termsAndConditions', 'backupAccommodations',
+  'paymentSchedule',
   'optionLabel', 'customerTitle',
 ]);
 
@@ -142,6 +148,7 @@ const SERVER_CONTROLLED_FIELDS = new Set([
   'convertedAt', 'convertedBy', 'isDemo',
   'sharedAt', 'sharedByEmployeeId', 'shareChannel',
   'customerPackageSnapshot',
+  'policyVersion',
   'quoteGroupId', 'optionId', 'optionOrder', 'isRecommended', 'optionStatus',
   'optionSnapshotCreatedAt',
 ]);
@@ -273,6 +280,29 @@ function sanitizeStringArray(value: unknown, field: string): string[] | undefine
   return value.map(item => item.trim()).filter(Boolean);
 }
 
+function sanitizePaymentSchedule(value: unknown): PaymentScheduleMilestone[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new QuoteDomainError(400, 'INVALID_PAYMENT_SCHEDULE', 'paymentSchedule must contain at least one milestone.');
+  }
+  const schedule = value.map((raw, index) => {
+    if (!isRecord(raw)) throw new QuoteDomainError(400, 'INVALID_PAYMENT_SCHEDULE', `paymentSchedule[${index}] must be an object.`);
+    const unsupported = Object.keys(raw).find(key => !['percentage', 'timing', 'label', 'dueDate'].includes(key));
+    if (unsupported) throw new QuoteDomainError(400, 'INVALID_PAYMENT_SCHEDULE', `paymentSchedule[${index}].${unsupported} is not accepted.`);
+    const percentage = finiteNonNegative(raw.percentage, `paymentSchedule[${index}].percentage`);
+    if (percentage <= 0 || percentage > 100) throw new QuoteDomainError(400, 'INVALID_PAYMENT_SCHEDULE', `paymentSchedule[${index}].percentage must be greater than 0 and at most 100.`);
+    if (!['AT_BOOKING', 'BEFORE_DEPARTURE', 'CUSTOM'].includes(String(raw.timing))) {
+      throw new QuoteDomainError(400, 'INVALID_PAYMENT_SCHEDULE', `paymentSchedule[${index}].timing is invalid.`);
+    }
+    const label = requireNonEmptyString(raw.label, `paymentSchedule[${index}].label`);
+    const dueDate = optionalIsoDate(raw.dueDate, `paymentSchedule[${index}].dueDate`);
+    return { percentage, timing: raw.timing as PaymentScheduleMilestone['timing'], label, ...(dueDate ? { dueDate } : {}) };
+  });
+  const total = Math.round(schedule.reduce((sum, item) => sum + item.percentage, 0) * 100) / 100;
+  if (total !== 100) throw new QuoteDomainError(400, 'INVALID_PAYMENT_SCHEDULE', 'paymentSchedule percentages must total 100.');
+  return schedule;
+}
+
 function sanitizeItems(value: unknown, field: string, allowed: Set<string>): UnknownRecord[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) {
@@ -332,6 +362,8 @@ function sanitizeInput(value: unknown, mode: 'CREATE' | 'UPDATE'): UnknownRecord
   const exclusions = sanitizeStringArray(input.exclusions, 'exclusions');
   if (inclusions !== undefined) output.inclusions = inclusions;
   if (exclusions !== undefined) output.exclusions = exclusions;
+  const paymentSchedule = sanitizePaymentSchedule(input.paymentSchedule);
+  if (paymentSchedule !== undefined) output.paymentSchedule = paymentSchedule;
 
   const hotels = sanitizeItems(input.hotels, 'hotels', HOTEL_FIELDS);
   const transports = sanitizeItems(input.transports, 'transports', TRANSPORT_FIELDS);
@@ -412,6 +444,8 @@ function versionSnapshot(quote: Quote, actor: QuoteMutationActor): QuoteVersion 
     ...(quote.inclusions !== undefined ? { inclusions: quote.inclusions } : {}),
     ...(quote.exclusions !== undefined ? { exclusions: quote.exclusions } : {}),
     ...(quote.termsAndConditions !== undefined ? { termsAndConditions: quote.termsAndConditions } : {}),
+    ...(quote.policyVersion !== undefined ? { policyVersion: quote.policyVersion } : {}),
+    ...(quote.paymentSchedule !== undefined ? { paymentSchedule: quote.paymentSchedule } : {}),
   };
 }
 
@@ -1087,7 +1121,7 @@ export class QuoteService {
   async updateOption(quoteIdValue: unknown, rawInput: unknown, actor: QuoteMutationActor): Promise<Quote> {
     const quoteId = requireNonEmptyString(quoteIdValue, 'quoteId');
     const input = requireRecord(rawInput);
-    const supported = new Set(['label', 'customerTitle', 'totalAmount', 'discountAmount', 'validUntil', 'inclusions', 'exclusions', 'termsAndConditions', 'backupAccommodations']);
+    const supported = new Set(['label', 'customerTitle', 'totalAmount', 'discountAmount', 'validUntil', 'inclusions', 'exclusions', 'termsAndConditions', 'paymentSchedule', 'backupAccommodations']);
     const unknown = Object.keys(input).find(key => !supported.has(key));
     if (unknown) throw new QuoteDomainError(400, 'UNSUPPORTED_OPTION_FIELD', `Unsupported option field: ${unknown}.`);
     if (!Object.keys(input).length) throw new QuoteDomainError(400, 'EMPTY_OPTION_UPDATE', 'No option fields were supplied.');
@@ -1112,6 +1146,7 @@ export class QuoteService {
       const inclusions = input.inclusions === undefined ? stored.inclusions : sanitizeStringArray(input.inclusions, 'inclusions');
       const exclusions = input.exclusions === undefined ? stored.exclusions : sanitizeStringArray(input.exclusions, 'exclusions');
       const termsAndConditions = input.termsAndConditions === undefined ? stored.termsAndConditions : optionalString(input.termsAndConditions, 'termsAndConditions');
+      const paymentSchedule = input.paymentSchedule === undefined ? stored.paymentSchedule : sanitizePaymentSchedule(input.paymentSchedule);
       const validUntil = input.validUntil === undefined ? stored.validUntil : optionalIsoDate(input.validUntil, 'validUntil')!;
       const backupSelections = input.backupAccommodations === undefined
         ? undefined
@@ -1127,6 +1162,7 @@ export class QuoteService {
         inclusions,
         exclusions,
         termsAndConditions,
+        paymentSchedule,
         backupAccommodations: backupAccommodations as Quote['backupAccommodations'],
         validUntil,
         approval,
@@ -1141,6 +1177,8 @@ export class QuoteService {
           inclusions: inclusions || [],
           exclusions: exclusions || [],
           ...(termsAndConditions ? { termsAndConditions } : {}),
+          ...(stored.policyVersion ? { policyVersion: stored.policyVersion } : {}),
+          ...(paymentSchedule ? { paymentSchedule } : {}),
           generatedAt: now,
         },
       };
@@ -1325,6 +1363,11 @@ export class QuoteService {
 
   async createQuote(rawInput: unknown, actor: QuoteMutationActor): Promise<Quote> {
     const input = sanitizeInput(rawInput, 'CREATE');
+    input.inclusions ??= [...STANDARD_CUSTOMER_POLICY_PRESET.inclusions];
+    input.exclusions ??= [...STANDARD_CUSTOMER_POLICY_PRESET.exclusions];
+    input.termsAndConditions ??= STANDARD_CUSTOMER_POLICY_PRESET.termsAndConditions;
+    input.paymentSchedule ??= STANDARD_CUSTOMER_POLICY_PRESET.paymentSchedule.map(item => ({ ...item }));
+    input.policyVersion = BOOKING_BRIDGE_POLICY_VERSION;
     validateRequiredCreateFields(input);
     if (!input.tripId && ['hotels', 'transports', 'activities'].some(field => Array.isArray(input[field]) && input[field].length > 0)) {
       throw new QuoteDomainError(

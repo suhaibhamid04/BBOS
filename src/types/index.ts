@@ -1,5 +1,6 @@
 import { BookingComponentStatus, VoucherStatus } from './booking';
 import type { CustomerPackageDocument, QuoteShareChannel } from './customerPackage';
+import type { PaymentScheduleMilestone } from '../policies/bookingBridgePolicy';
 export * from './lead';
 export * from './leadDistribution';
 export * from './leadFollowUp';
@@ -296,6 +297,8 @@ export interface QuoteVersion {
   inclusions?: string[];
   exclusions?: string[];
   termsAndConditions?: string;
+  policyVersion?: string;
+  paymentSchedule?: PaymentScheduleMilestone[];
   hotels?: QuoteHotelItem[];
   transports?: QuoteTransportItem[];
   activities?: QuoteActivityItem[];
@@ -488,6 +491,10 @@ export interface Quote {
   inclusions?: string[];
   exclusions?: string[];
   termsAndConditions?: string;
+  /** Versioned customer policy preset captured when this Quote revision was created. */
+  policyVersion?: string;
+  /** Frozen payment milestones; booking-specific schedules may replace the standard preset. */
+  paymentSchedule?: PaymentScheduleMilestone[];
   salesEmployeeId?: string;
   salesEmployeeName?: string;
   /** Immutable sales-team snapshot used for TEAM-scoped authorization. */

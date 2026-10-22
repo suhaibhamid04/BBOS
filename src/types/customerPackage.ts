@@ -1,3 +1,5 @@
+import type { PaymentScheduleMilestone } from '../policies/bookingBridgePolicy';
+
 export type CustomerPackageServiceType = 'HOTEL' | 'TRANSPORT' | 'ACTIVITY' | 'OTHER';
 
 export interface CustomerPackageItineraryItem {
@@ -73,6 +75,8 @@ export interface CustomerPackageDocument {
   inclusions: string[];
   exclusions: string[];
   termsAndConditions?: string;
+  policyVersion?: string;
+  paymentSchedule?: PaymentScheduleMilestone[];
   generatedAt: string;
 }
 

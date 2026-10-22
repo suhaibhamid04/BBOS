@@ -1,6 +1,6 @@
 # A01 — Financial and commercial exception workflows
 
-Reviewed and implemented on 2026-10-21 on `audit/bbos-comprehensive-remediation`. This review covers source behavior only. It does not deploy rules, migrate production data, or execute financial payments.
+Reviewed and implemented on 2026-10-21 and policy-finalized on 2026-10-22 on `audit/bbos-comprehensive-remediation`. This review covers source behavior only. It does not deploy rules, migrate production data, or execute financial payments.
 
 ## Status
 
@@ -16,7 +16,7 @@ Reviewed and implemented on 2026-10-21 on `audit/bbos-comprehensive-remediation`
 | `refund_requests` | Calculation, request, approval, and processing state | State transitions only through the server service |
 | `refund_ledger` | Actual paid refund event | Immutable deterministic entry per approved refund |
 | `commission_ledger` | Earned, reversal, adjustment, and settlement entries | Append-only immutable entries |
-| `financial_policies/current` | Optional Booking Bridge cancellation deduction | Server-read configuration; browser access denied |
+| `financial_policies/current` | Canonical versioned Booking Bridge cancellation, substitution and commission policy represented by `CANONICAL_FINANCIAL_POLICY` | Source-authoritative; browser access denied; demo fixture materializes the same document |
 | `audit_logs` | Actor, action, before/after state, reason, and timestamp | Immutable server-side events |
 
 All listed collections are denied to browser Firestore clients. Authenticated Express endpoints resolve the canonical employee identity and run the transitions.
@@ -36,25 +36,28 @@ Sales Manager TEAM approval or Founder/Admin ALL approval is required. The propo
 
 ## Supplier substitutions
 
-Assigned Reservations, Founder, or Admin may propose a replacement using an active authoritative inventory rate. A replacement is automatically eligible only when its category and calculated supplier cost exactly match the frozen service line. This conservative definition avoids silently inventing a commercial-range threshold. Any category or cost difference requires Founder/Admin approval.
+Assigned Reservations, Founder, or Admin may propose a replacement using an active authoritative inventory rate. Automatic eligibility requires the same service type, an equivalent category, the same meal plan or better where applicable, equivalent occupancy, no reduction in customer inclusions, and a supplier-cost increase no greater than 5% of the frozen supplier cost. An equivalent lower-cost service is allowed. Any failed condition makes the substitution material and requires Founder/Admin approval.
 
 Application is explicit and idempotent. It updates the operational service reference while leaving the original financial snapshot, customer selling price, and package margin unchanged. Accommodation cost differences preserve the existing supplier-confirmation behavior by recording frozen cost, replacement cost, difference, reason, actor, and `requiresCommercialApproval`. A customer-facing economic change must use the amendment workflow.
 
 ## Refund calculation and release
 
-Refunds require a cancelled Booking. The server calculates:
+Refunds require a cancelled Booking. The server uses the immutable confirmation snapshot's package selling price and calculates:
 
 ```text
-verified customer payments
-- supplier cancellation charges
-- verified supplier payments explicitly evidenced as non-refundable
-+ recoverable supplier amounts
-- configured Booking Bridge cancellation deduction
-- prior paid refund-ledger amounts
-= suggested refund (floor 0)
+standard cancellation charge = confirmed package selling price × day-band percentage
+net supplier exposure = verified non-refundable supplier payments
+  + verified supplier cancellation charges
+  - verified supplier recoveries
+applicable cancellation charge = min(confirmed package selling price,
+  max(standard cancellation charge, net supplier exposure))
+suggested refund = max(0, verified customer payments
+  - applicable cancellation charge
+  - Founder/Admin-authorized exceptional deduction
+  - prior paid refunds)
 ```
 
-Supplier charges and recoveries carry an amount, source reference, and reason. A referenced supplier payment must exist on the Booking and be VERIFIED. The optional `financial_policies/current` document may provide `cancellationDeductionFlat` and/or `cancellationDeductionPercent`; absence is recorded as `NO_CONFIGURED_BOOKING_BRIDGE_DEDUCTION` and applies zero Booking Bridge deduction.
+The canonical day bands are more than 30 days = 10%, 17–30 days = 50%, 7–16 days = 100%, fewer than 7 days = 100%, and no-show = 100%. The percentage charge and supplier exposure are compared rather than added. Supplier charges and recoveries carry an amount, source reference, and reason. A referenced supplier payment must exist on the Booking and be VERIFIED. Exceptional additional deductions require Founder/Admin authority, a reason, and `REFUND_MANUAL_DEDUCTION_AUTHORIZED` audit evidence.
 
 State machine:
 
@@ -80,6 +83,12 @@ Payment verification writes one deterministic `EARNED` entry in the same transac
 
 Cancellation writes a deterministic full `REVERSAL`, linked to the original earned entry, without deleting either record. A legacy confirmed Booking without an earned entry receives the deterministic earned record before reversal. Settlement records the current positive outstanding balance with an explicit reference; earning and settlement remain separate. Founder/Admin can add an immutable adjustment with a caller-provided idempotency key. Accounts, Founder, or Admin can settle; Sales cannot.
 
+A partial refund while a Booking remains active does not automatically reverse commission. Founder/Admin may record an explicit audited adjustment. If commission was already settled before a full cancellation, the immutable settlement remains and the new reversal creates the negative ledger obligation.
+
+## Customer policy and payment presets
+
+`BBOS-POLICY-2026-10-21-V1` defines the standard Terms & Conditions, inclusions, exclusions, and payment schedule of 50% at booking with the remaining balance due before departure. A valid booking-specific schedule may replace the two standard milestones if its percentages total 100. New Quote revisions freeze the policy version, wording, lists, and schedule into the customer package. Quote version history retains the prior values, and conversion copies the accepted customer package unchanged into the Booking. Existing and historical confirmed Booking snapshots are not rewritten.
+
 ## Authorization matrix
 
 | Action | Authority | Scope and separation |
@@ -98,7 +107,7 @@ Inactive or incomplete actors fail closed. Operations and Marketing have no A01 
 
 ## Audit events
 
-The server writes `AMENDMENT_REQUESTED`, `AMENDMENT_APPROVED`, `AMENDMENT_REJECTED`, `AMENDMENT_APPLIED`, `SUPPLIER_SUBSTITUTION_PROPOSED`, `SUPPLIER_SUBSTITUTION_APPROVED`, `SUPPLIER_SUBSTITUTION_REJECTED`, `SUPPLIER_SUBSTITUTION_APPLIED`, `REFUND_CALCULATED`, `REFUND_REQUESTED`, `REFUND_APPROVED`, `REFUND_REJECTED`, `REFUND_PAID`, `COMMISSION_EARNED`, `COMMISSION_REVERSED`, `COMMISSION_ADJUSTED`, and `COMMISSION_SETTLED`. Actors come from authenticated employee identity; clients cannot supply the event action, actor, or authoritative before/after values.
+The server writes `AMENDMENT_REQUESTED`, `AMENDMENT_APPROVED`, `AMENDMENT_REJECTED`, `AMENDMENT_APPLIED`, `SUPPLIER_SUBSTITUTION_PROPOSED`, `SUPPLIER_SUBSTITUTION_APPROVED`, `SUPPLIER_SUBSTITUTION_REJECTED`, `SUPPLIER_SUBSTITUTION_APPLIED`, `REFUND_CALCULATED`, `REFUND_MANUAL_DEDUCTION_AUTHORIZED`, `REFUND_REQUESTED`, `REFUND_APPROVED`, `REFUND_REJECTED`, `REFUND_PAID`, `COMMISSION_EARNED`, `COMMISSION_REVERSED`, `COMMISSION_ADJUSTED`, and `COMMISSION_SETTLED`. Actors come from authenticated employee identity; clients cannot supply the event action, actor, or authoritative before/after values.
 
 ## Idempotency
 
@@ -113,14 +122,10 @@ The server writes `AMENDMENT_REQUESTED`, `AMENDMENT_APPROVED`, `AMENDMENT_REJECT
 
 Booking detail now contains a compact financial-exceptions panel. Authorized users can see current states, before/proposed amendment economics, rejection reasons, substitution materiality, refund calculation and release state, commission ledger totals, immutable refund count, and the audit timeline. The panel provides only the actions allowed for the current role and sends proposals/evidence rather than authoritative calculated values.
 
-## Business-policy hooks
+## Business-policy status
 
-- `BUSINESS_POLICY_REQUIRED_FOR_PARTIAL_COMMISSION_REVERSAL`: no approved partial-refund commission formula exists. A full Booking cancellation creates a full reversal. A partial refund does not create an automatic additional reversal; Finance may use an authorized, audited adjustment after policy approval.
-- `BUSINESS_POLICY_REQUIRED_FOR_SUBSTITUTION_RANGE_THRESHOLD`: no BBOS percentage/absolute “same commercial range” threshold exists. The safe automatic policy is exact supplier-cost equality. Any difference requires Founder/Admin approval.
-- Booking Bridge cancellation deductions default to zero when `financial_policies/current` is absent. Production owners must approve and configure any flat or percentage deduction before relying on it.
-
-These open policy choices do not permit a silent financial mutation: each current fallback is conservative and fail-closed.
+The cancellation, payment schedule, partial-refund commission, and 5% supplier-substitution policies are configured in `src/policies/bookingBridgePolicy.ts`. No A01 business-policy hook remains open. Production still requires the normal deployment and topology validation before these source rules govern live data.
 
 ## Verification
 
-The focused A01 suite covers OWN/TEAM scope, unrelated-team and unassigned-Reservations denial, forged economics, rejection with no mutation, explicit/idempotent apply, immutable confirmation snapshot, substitution materiality/discrepancy, refund deductions and already-refunded amounts, dual authority, immutable ledger, commission configuration/ownership/reversal/settlement, and direct Firestore denial. Final repository regression results are recorded in `BBOS_TEST_RESULTS.md`.
+The focused A01 suite covers every cancellation boundary, no-show, both sides of the standard-charge/supplier-exposure comparison, recoveries, caps, zero floors, prior refunds, exceptional deduction authority, 5% and cheaper substitutions, reduced category/meal/inclusions, immutable customer economics, full and post-settlement commission reversal, no automatic active-booking partial-refund reversal, authorized adjustments, payment schedule validation, preset versioning, Booking snapshot freezing, and the original workflow/authorization/idempotency cases. Final repository regression results are recorded in `BBOS_TEST_RESULTS.md`.

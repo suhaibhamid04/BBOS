@@ -100,6 +100,8 @@ export function projectPackageForPublic(
     inclusions: [...source.inclusions],
     exclusions: [...source.exclusions],
     ...(source.termsAndConditions ? { termsAndConditions: source.termsAndConditions } : {}),
+    ...(source.policyVersion ? { policyVersion: source.policyVersion } : {}),
+    ...(source.paymentSchedule ? { paymentSchedule: source.paymentSchedule.map(item => ({ ...item })) } : {}),
     generatedAt: source.generatedAt,
   };
 }

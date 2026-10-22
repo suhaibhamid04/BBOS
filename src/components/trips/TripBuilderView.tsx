@@ -27,6 +27,7 @@ import { HotelInventoryPicker } from './HotelInventoryPicker';
 import { TransportInventoryPicker } from './TransportInventoryPicker';
 import { ActivityInventoryPicker } from './ActivityInventoryPicker';
 import { isTripCostingFresh } from '../../utils/costingFreshness';
+import { STANDARD_CUSTOMER_POLICY_PRESET } from '../../policies/bookingBridgePolicy';
 
 interface TripBuilderViewProps {
   initialTripId?: string;
@@ -705,9 +706,10 @@ export const TripBuilderView: React.FC<TripBuilderViewProps> = ({ initialTripId,
         discount: 0,
         finalAmount: activeTrip.totalSellingPrice || 0,
         validUntil: validUntilDate.toISOString().split('T')[0],
-        inclusions: ['Inventory-linked itinerary services', 'BBOS trip coordination'],
-        exclusions: ['Personal expenses', 'Services not listed in this proposal'],
-        termsAndConditions: 'Services remain subject to availability until booking confirmation.'
+        inclusions: [...STANDARD_CUSTOMER_POLICY_PRESET.inclusions],
+        exclusions: [...STANDARD_CUSTOMER_POLICY_PRESET.exclusions],
+        termsAndConditions: STANDARD_CUSTOMER_POLICY_PRESET.termsAndConditions,
+        paymentSchedule: STANDARD_CUSTOMER_POLICY_PRESET.paymentSchedule.map(item => ({ ...item })),
       });
 
       notify(`Quote generated successfully: ID ${quote.id}`);

@@ -84,8 +84,19 @@ export interface SupplierSubstitution {
   serviceId: string;
   original: CommercialServiceSnapshot;
   replacement: CommercialServiceSnapshot;
+  originalMealPlan?: string;
+  replacementMealPlan?: string;
   sameCategory: boolean;
   sameCommercialRange: boolean;
+  sameServiceType: boolean;
+  equivalentCategory: boolean;
+  mealPlanSameOrBetter: boolean;
+  occupancyEquivalent: boolean;
+  inclusionsPreserved: boolean;
+  costIncreasePercent: number;
+  commercialTolerancePercent: number;
+  materialReasons: string[];
+  requiresCommercialAmendment: boolean;
   material: boolean;
   customerEconomicsChanged: boolean;
   frozenSupplierCost: number;
@@ -118,20 +129,29 @@ export type RefundStatus =
   | 'CANCELLED';
 
 export interface RefundDeduction {
-  type: 'SUPPLIER_CANCELLATION_CHARGE' | 'NON_REFUNDABLE_SUPPLIER_PAYMENT' | 'BOOKING_BRIDGE_POLICY';
+  type: 'SUPPLIER_CANCELLATION_CHARGE' | 'NON_REFUNDABLE_SUPPLIER_PAYMENT' | 'BOOKING_BRIDGE_POLICY' | 'MANUAL_ADDITIONAL_DEDUCTION';
   amount: number;
   sourceReference: string;
   reason: string;
 }
 
 export interface RefundCalculation {
+  confirmedPackageSellingPrice: number;
+  cancellationDate: string;
+  daysBeforeDeparture: number;
+  cancellationType: 'STANDARD' | 'NO_SHOW';
+  cancellationPercentage: number;
+  standardCancellationCharge: number;
   verifiedPaymentsReceived: number;
   grossRefundableBasis: number;
   supplierCancellationCharges: number;
   nonRefundableSupplierPayments: number;
   recoverableSupplierAmounts: number;
   supplierDeductions: number;
+  netSupplierExposure: number;
+  applicableCancellationCharge: number;
   bookingBridgeDeductions: number;
+  manualAdditionalDeduction: number;
   alreadyRefundedAmount: number;
   suggestedRefundAmount: number;
   policyCode: string;
@@ -172,6 +192,11 @@ export interface RefundLedgerEntry {
   currency: string;
   verifiedPaymentsReceived: number;
   grossRefundableBasis: number;
+  confirmedPackageSellingPrice: number;
+  standardCancellationCharge: number;
+  netSupplierExposure: number;
+  applicableCancellationCharge: number;
+  manualAdditionalDeduction: number;
   supplierDeductions: number;
   bookingBridgeDeductions: number;
   approvedRefundAmount: number;

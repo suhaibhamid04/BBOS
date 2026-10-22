@@ -19,6 +19,7 @@ import type {
 import { CustomerPackagePreview } from './CustomerPackagePreview';
 import { QuoteComparisonPreview } from './QuoteComparisonPreview';
 import { isTripCostingFresh } from '../../utils/costingFreshness';
+import { STANDARD_CUSTOMER_POLICY_PRESET } from '../../policies/bookingBridgePolicy';
 
 interface QuotesViewProps {
   initialQuoteId?: string;
@@ -135,9 +136,10 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialQuoteId, onNaviga
         totalAmount: newSellingPrice,
         discountAmount: newDiscount,
         validUntil: newValidUntil,
-        inclusions: ['Inventory-linked itinerary services', 'BBOS trip coordination'],
-        exclusions: ['Personal expenses', 'Services not listed in this proposal'],
-        termsAndConditions: 'Services remain subject to availability until booking confirmation.',
+        inclusions: [...STANDARD_CUSTOMER_POLICY_PRESET.inclusions],
+        exclusions: [...STANDARD_CUSTOMER_POLICY_PRESET.exclusions],
+        termsAndConditions: STANDARD_CUSTOMER_POLICY_PRESET.termsAndConditions,
+        paymentSchedule: STANDARD_CUSTOMER_POLICY_PRESET.paymentSchedule.map(item => ({ ...item })),
         optionLabel: newOptionLabel,
         customerTitle: `${trip.destination} Holiday Package`,
       });

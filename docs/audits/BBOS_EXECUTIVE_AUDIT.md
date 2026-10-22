@@ -10,14 +10,14 @@ BBOS has substantial server-authoritative commercial workflows and meaningful au
 - **25 finding records: P0 0, P1 17, P2 8, P3 0.** No application-level P0 was confirmed. The vendor-critical dependency advisory was not reachable under BBOS proxy configuration and is patched.
 - **22 confirmed defects/gaps/structural risks; 1 requires deployment verification** (B05). “Confirmed” includes an observed architecture/testing gap, not necessarily an exploitable vulnerability.
 - **19 records repaired or dispositioned in source**; **6 remain open**, with no remaining P1 source implementation finding. B05 still requires an approved production database decision and validation. Firestore source repairs passed emulator verification but still require deployment; “fixed” does not claim production protection.
-- **Sprint 4 final tests:** 700 unit/service/HTTP tests, 56 Chromium cases, 5 Firestore rule cases and 1 Firebase-backed browser case passed. TypeScript and build passed. See [test results](BBOS_TEST_RESULTS.md).
+- **Final A01 policy tests:** 708 unit/service/HTTP tests, 56 Chromium cases, 5 Firestore rule cases and 1 Firebase-backed browser case passed. TypeScript and build passed. See [test results](BBOS_TEST_RESULTS.md).
 - No production credentials/data/configuration, migration, external message or irreversible data operation was used. Dependency changes were limited to compatible transitive patches and one tested same-major `qs` override. Three obsolete browser files were removed only after reference, route, script, test and dynamic-import searches proved the paths retired.
 
 ## What works and what remains unreliable
 
 **Authentication/RBAC:** Production data access now verifies Firebase tokens, resolves one active canonical employee, and applies OWN/TEAM/ALL/ASSIGNED policy before explicit DTO projection. Customer and voucher negative matrices pass. Firestore client rules no longer use UID-keyed employee documents or grant production browser access.
 
-**Financial integrity:** Authoritative inventory costing, package pricing, quote conversion, customer/supplier payments, versioned amendments, substitutions, refund calculations and immutable refund/commission ledgers have tests. Approval/application and approval/payment remain separate; original Sales ownership is preserved. This does not certify tax policy, production cancellation deductions, a broader substitution-range threshold, or a partial-refund commission formula.
+**Financial integrity:** Authoritative inventory costing, package pricing, quote conversion, customer/supplier payments, versioned amendments, 5%-tolerance substitutions, canonical cancellation refunds and immutable refund/commission ledgers have tests. Approval/application and approval/payment remain separate; original Sales ownership and frozen customer policy versions are preserved. This does not certify tax policy or production deployment state.
 
 **Booking/Reservations/Operations:** The browser suite passes the cross-role lifecycle. Dispatch/cancellation and voucher creation commit audit/state/links atomically. Reservations records discrepancy evidence without changing frozen money; material substitutions require ALL-scope approval. Approved commercial amendments, refunds and commission transitions now execute explicitly and idempotently through authenticated server APIs.
 
@@ -42,7 +42,7 @@ The most dangerous confirmed class was bypassing modern resource policy through 
 1. Inspect and approve the authoritative production Firestore database, then execute the documented validation/rollback plan.
 2. Validate the selected production database, indexes, IAM and deployment target before deploying the emulator-verified tightened rules.
 3. Pin the passing Bun/Java/browser/Firebase gates in CI and monitor supported upstream fixes for the six dispositioned advisories.
-4. Approve the remaining A01 policy hooks: production cancellation deductions, any nonzero substitution range, and the partial-refund commission formula.
+4. Deploy and validate the configured A01 policy with the approved production topology; no A01 business-policy decision remains open in source.
 5. Add CI and stronger schemas/static checks before release.
 
 Production configuration/migrations, materially risky dependency upgrades, API-breaking tool-contract changes and ambiguous business rules were intentionally deferred under the user's hard stops. No further routine engineering permission was assumed necessary.
@@ -70,7 +70,7 @@ Production configuration/migrations, materially risky dependency upgrades, API-b
 | B08 | P2 | Stale asynchronous identity/data could overwrite a newer session; sign-in lacked submission guard and labels | Fixed | Confirmed |
 | B09 | P1 | Production could choose ephemeral demo stores while requiring real authentication | Fixed | Confirmed |
 | B10 | P2 | Tool gateway reports successful execution without executing a tool | Open | Confirmed |
-| A01 | P1 | Refund, amendment, substitution and commission journeys were incomplete | Closed in source | Conservative policy hooks documented; production configuration remains |
+| A01 | P1 | Refund, amendment, substitution and commission journeys were incomplete | Closed in source | Canonical business policy configured and tested; production deployment remains |
 | A02 | P2 | Capped registries, eager loading and large bundle constrain growth | Open | Confirmed |
 | A03 | P2 | Verification pipeline lacks CI, true linting and pinned Firebase regression gates | Open | Confirmed |
 | A04 | P2 | Large mixed-responsibility modules and permissive typing raise change risk | Open | Confirmed |

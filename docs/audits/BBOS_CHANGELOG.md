@@ -78,7 +78,17 @@ Finding: **S08 closed**. The audit still exits 1 and no zero-vulnerability claim
 - Added authenticated API routes, a compact role-filtered Booking detail UI, explicit Firestore client-deny blocks for all A01 collections, and complete audit events.
 - Passed 700 unit/service/HTTP tests, 56 Chromium tests, 5 Firestore rule tests and 1 Firebase-backed E2E; TypeScript, build and diff checks pass.
 
-Finding: **A01 closed in source**. Production cancellation deductions, a broader supplier substitution range, and any partial-refund commission reversal formula remain explicit business-policy/configuration decisions. See [the A01 workflow review](A01_FINANCIAL_EXCEPTION_WORKFLOWS.md).
+Finding at Sprint 4 close: **A01 workflows closed in source**. The remaining policy decisions recorded at that checkpoint were subsequently resolved in C8 below. See [the A01 workflow review](A01_FINANCIAL_EXCEPTION_WORKFLOWS.md).
+
+## C8 — A01 final business-policy configuration
+
+- Configured canonical cancellation bands against the frozen confirmed selling price and the non-additive `max(standard charge, net supplier exposure)` calculation, capped at package price.
+- Added Founder/Admin-audited exceptional refund deductions, a versioned 50/50 payment preset, standard customer Terms & Conditions, inclusions and exclusions, and frozen booking-specific schedules.
+- Configured full-cancellation commission reversal, no automatic active-booking partial-refund reversal, explicit audited adjustments, and post-settlement reversal obligations.
+- Replaced the exact-cost substitution fallback with service/category, meal-plan, occupancy and inclusion equivalence plus a 5% supplier-cost tolerance; lower-cost equivalents remain eligible.
+- Passed 708 unit/service/HTTP tests, 56 Chromium tests, 5 unchanged Firestore rule tests and 1 Firebase-backed E2E; TypeScript, build and diff checks pass.
+
+Finding: **A01 policy configured in source**. Cancellation, substitution-range and partial-refund commission behavior is explicit and tested. Production deployment and topology validation remain separate release work.
 
 ## Verification and review
 

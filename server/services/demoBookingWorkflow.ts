@@ -36,6 +36,7 @@ import type {
   ReservationsAssignmentStorage,
 } from './reservationsAssignmentService.js';
 import { PRESET_USERS } from '../../src/services/permissions.js';
+import { CANONICAL_FINANCIAL_POLICY } from '../../src/policies/bookingBridgePolicy.js';
 
 const clone = <T>(value: T): T => structuredClone(value);
 
@@ -219,6 +220,7 @@ const snapshot: FinancialSnapshot = {
 };
 
 const store = new InMemoryConversionStorageProvider({ bookings: [booking] });
+store.rawSet('financial_policies', 'current', { ...CANONICAL_FINANCIAL_POLICY });
 store.rawSet('booking_accommodations', accommodation.id, accommodation);
 store.rawSet('booking_transports', transport.id, transport);
 store.rawSet('booking_activities', activity.id, activity);
