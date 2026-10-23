@@ -1,6 +1,6 @@
 # BBOS Production Readiness Sprint 2
 
-Date: 2026-10-22
+Date: 2026-10-23
 
 Branch: `audit/bbos-comprehensive-remediation`
 
@@ -11,11 +11,11 @@ Production project: `booking-bridge-bbos-prod` / `(default)`
 
 **Status: CLOSED IN SOURCE.** Fabricated dashboard, analytics, AI, and notification content has been removed from production paths. Empty data now renders zero/empty states; failed sources render `Unavailable`. Demo fixture controls and client persona switching are hidden and denied outside explicit demo mode. Firebase development, test, and production targets are explicit and fail closed.
 
-**Recommendation: CONDITIONAL GO** for a controlled Founder-only release. Local verification is complete. The GitHub-hosted workflow must pass, production public Web App environment values must be configured in the deployment platform, and the reviewed commit must be selected for release. No deployment was performed.
+**Recommendation: CONDITIONAL GO** for a controlled Founder-only release. Local and GitHub-hosted verification are complete. Production public Web App environment values must be configured in the deployment platform and the reviewed commit must be selected for release. No deployment was performed.
 
 ## 2. Branch and commit IDs
 
-**Status: CLOSED AND VERIFIED.** Work was completed on `audit/bbos-comprehensive-remediation` from `c248625`. The final implementation commit is the commit containing this report; its immutable ID is recorded in the release handoff and final sprint output after commit creation.
+**Status: CLOSED AND VERIFIED.** Work was completed on `audit/bbos-comprehensive-remediation` from `c248625`. The dashboard/environment implementation is `42d085f`; the UTC-stable E2E fixture and current GitHub Action versions are `2f93348`; the compatible `ip-address` advisory patch is `4642e5e`. The release handoff records the final documentation commit separately.
 
 The pre-existing local modifications to `.env` and `firebase-applet-config.json`, plus local `firebase.prod.json` and `firebase-applet-config.dev-backup.json`, were treated as intentional machine configuration. Their values were not copied into source, reset, staged, or committed.
 
@@ -106,18 +106,17 @@ The local shell required the installed JDK path to be added for Firebase CLI. Th
 
 ## 11. CI status
 
-**Status: CLOSED IN SOURCE.** `.github/workflows/production-readiness.yml` installs Bun 1.4.0 and Java 21, then runs frozen dependency install, repository safety, reviewed dependency audit, typecheck, unit/service tests, build, Chromium E2E, Firestore rules, Firebase emulator E2E, and whitespace validation.
+**Status: CLOSED AND VERIFIED.** `.github/workflows/production-readiness.yml` installs Bun 1.4.0 and Java 21, then runs frozen dependency install, repository safety, reviewed dependency audit, typecheck, unit/service tests, build, Chromium E2E, Firestore rules, Firebase emulator E2E, and whitespace validation.
 
-**GitHub-hosted execution: OPEN.** Workflow YAML creation and local command success do not constitute a hosted CI pass. No deployment job exists.
+**GitHub-hosted execution: PASSED.** [Production Readiness run 39890293867](https://github.com/suhaibhamid04/BBOS/actions/runs/39890293867) passed all gates on commit `4642e5e` in 4m25s. An earlier run correctly exposed a UTC/Kolkata mismatch in the E2E fixture; the fixture now derives the business date in `Asia/Kolkata`, and the replacement UTC run passed 56/56 browser scenarios. The live feed also introduced moderate `ip-address` advisory GHSA-rxp7-6hxx-x8q5 during verification; the lockfile was safely patched from 10.7.2 to 10.7.4 rather than allowlisting it. No deployment job exists.
 
 ## 12. Remaining deployment prerequisites
 
 **Status: OPEN.**
 
 1. Configure production `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_APP_ID`, `VITE_FIREBASE_AUTH_DOMAIN`, project, database, and profile values in the deployment environment; keep Admin credentials server-only.
-2. Push the reviewed commit and obtain a successful GitHub-hosted Production Readiness workflow run.
-3. Review the final commit and generated artifact for the controlled Founder-only release.
-4. Execute a separately approved deployment and post-deployment read-only smoke check. This sprint does not authorize either action.
+2. Review the final commit and generated artifact for the controlled Founder-only release.
+3. Execute a separately approved deployment and post-deployment read-only smoke check. This sprint does not authorize either action.
 
 ## 13. Security and operational risks
 
@@ -129,4 +128,4 @@ The local shell required the installed JDK path to be added for Firebase CLI. Th
 
 ## 14. Release recommendation
 
-**Status: CONDITIONAL GO.** Source behavior and the complete local verification matrix meet the Founder-only release objective. Release remains conditional on production environment configuration, a successful GitHub-hosted verification run, and a separately approved deployment. No application or Firebase resource was deployed in this sprint.
+**Status: CONDITIONAL GO.** Source behavior and both the local and GitHub-hosted verification matrices meet the Founder-only release objective. Release remains conditional on production environment configuration, final artifact review, and a separately approved deployment. No application or Firebase resource was deployed in this sprint.
