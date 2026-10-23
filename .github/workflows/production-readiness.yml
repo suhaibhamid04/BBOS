@@ -23,11 +23,11 @@ jobs:
       VITE_BBOS_FIRESTORE_DATABASE_ID: "(default)"
       VITE_FIREBASE_EMULATOR: "true"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"

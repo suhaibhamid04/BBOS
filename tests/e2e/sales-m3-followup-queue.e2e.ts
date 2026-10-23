@@ -40,12 +40,14 @@ async function localDateTimeInput(page: Page, timestamp: number): Promise<string
   }, timestamp);
 }
 
-async function laterToday(page: Page): Promise<number> {
-  return page.evaluate(() => {
-    const endOfToday = new Date();
-    endOfToday.setHours(23, 59, 0, 0);
-    return endOfToday.getTime();
-  });
+function laterTodayInKolkata(): number {
+  const dateParts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date());
+  const part = (type: Intl.DateTimeFormatPartTypes) => Number(dateParts.find(value => value.type === type)?.value);
+  // 18:29 UTC is 23:59 in Asia/Kolkata. Deriving the date in the business
+  // timezone keeps this fixture stable when a CI browser runs in UTC.
+  return Date.UTC(part('year'), part('month') - 1, part('day'), 18, 29);
 }
 
 async function openQueue(page: Page) {
@@ -86,7 +88,7 @@ test('M3 Sales queue persists interactions, moves urgency, reassigns naturally, 
   const needsAttention = page.getByTestId('sales-queue-group-needs-attention');
   await expect(needsAttention.getByText(primaryName, { exact: true })).toBeVisible();
 
-  primary = await recordFromQueue(page, primary, 'no-answer', await laterToday(page));
+  primary = await recordFromQueue(page, primary, 'no-answer', laterTodayInKolkata());
   await expect(page.getByTestId('sales-queue-group-today').getByText(primaryName, { exact: true })).toBeVisible();
 
   await page.reload();
@@ -178,7 +180,7 @@ test('M3 Open Lead resolves canonical detail from every queue state and survives
 
   const todayResponse = await request.post(`/api/leads/${todayLead.id}/interaction`, {
     headers: executiveHeaders,
-    data: { outcome: 'CALLBACK_REQUESTED', expectedUpdatedAt: todayLead.updatedAt, idempotencyKey: `m3-detail-today-${runId}`, nextFollowUpAt: new Date(Date.now() + 15 * 60_000).toISOString() },
+    data: { outcome: 'CALLBACK_REQUESTED', expectedUpdatedAt: todayLead.updatedAt, idempotencyKey: `m3-detail-today-${runId}`, nextFollowUpAt: new Date(laterTodayInKolkata()).toISOString() },
   });
   expect(todayResponse.ok(), await todayResponse.text()).toBe(true);
   todayLead = (await todayResponse.json()).data;
