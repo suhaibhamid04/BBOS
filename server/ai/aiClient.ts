@@ -6,7 +6,7 @@ export function getAiClient(): GoogleGenAI {
   if (!client) {
     const apiKey = process.env.GEMINI_API_KEY || '';
     if (!apiKey) {
-      console.warn('GEMINI_API_KEY is not set in environment. AI features will fallback gracefully.');
+      console.warn('GEMINI_API_KEY is not set in environment. AI requests will return an unavailable error.');
     }
     client = new GoogleGenAI({ apiKey: apiKey || 'unconfigured' });
   }
@@ -16,4 +16,3 @@ export function getAiClient(): GoogleGenAI {
 export function isAiConfigured(): boolean {
   return Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'unconfigured');
 }
-

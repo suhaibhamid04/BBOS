@@ -1,6 +1,7 @@
 import React from 'react';
 import { useData } from '../../context/DataContext';
-import { Target, Compass, Sparkles, MapPin, Calendar, Award } from 'lucide-react';
+import { APP_CONFIG } from '../../config';
+import { Compass } from 'lucide-react';
 
 export const MarketingStrategyView: React.FC = () => {
   const { marketingPillars } = useData();
@@ -12,56 +13,26 @@ export const MarketingStrategyView: React.FC = () => {
         <div>
           <div className="flex items-center space-x-2">
             <h2 className="text-xl font-bold text-slate-900 tracking-tight">Marketing Strategy & Core Pillars</h2>
-            <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-[#F0A608]/20 text-amber-900">
-              Kashmir & Ladakh Focus
+            <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
+              {APP_CONFIG.DEMO_MODE ? 'Example strategy data' : 'No approved strategy loaded'}
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
-            Target audiences, seasonal promotional angles, luxury positioning, and brand messaging architecture
-          </p>
-        </div>
-      </div>
-
-      {/* Seasonal Campaign Strategy Highlights */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-gradient-to-br from-amber-50 to-orange-50 p-5 rounded-2xl border border-amber-200 shadow-2xs space-y-2">
-          <div className="flex items-center space-x-2 text-amber-900 font-bold text-xs uppercase tracking-wider">
-            <Calendar className="w-4 h-4 text-[#F0A608]" />
-            <span>Autumn Season (Sept - Nov)</span>
-          </div>
-          <h3 className="text-sm font-bold text-slate-900">Golden Chinar & Nigeen Houseboat Luxury</h3>
-          <p className="text-xs text-slate-600 leading-relaxed">
-            Target high-income couple travelers in Mumbai, Delhi NCR, and Bangalore with quiet shikara sunsets, Wazwan dining, and crisp autumn foliage photography.
-          </p>
-        </div>
-
-        <div className="bg-gradient-to-br from-blue-50 to-indigo-50 p-5 rounded-2xl border border-blue-200 shadow-2xs space-y-2">
-          <div className="flex items-center space-x-2 text-blue-900 font-bold text-xs uppercase tracking-wider">
-            <Calendar className="w-4 h-4 text-blue-600" />
-            <span>Winter Season (Dec - Feb)</span>
-          </div>
-          <h3 className="text-sm font-bold text-slate-900">Gulmarg Powder Snow & Ski Expeditions</h3>
-          <p className="text-xs text-slate-600 leading-relaxed">
-            Position Booking Bridge as the premier provider with pre-booked Phase 2 Gondola tickets, heated luxury alpine huts, and private ski instructors.
-          </p>
-        </div>
-
-        <div className="bg-gradient-to-br from-purple-50 to-pink-50 p-5 rounded-2xl border border-purple-200 shadow-2xs space-y-2">
-          <div className="flex items-center space-x-2 text-purple-900 font-bold text-xs uppercase tracking-wider">
-            <Calendar className="w-4 h-4 text-[#7056EE]" />
-            <span>Summer Season (May - Aug)</span>
-          </div>
-          <h3 className="text-sm font-bold text-slate-900">Ladakh High Altitude Passes & Pangong Tso</h3>
-          <p className="text-xs text-slate-600 leading-relaxed">
-            Adventure luxury circuits featuring Nubra Valley glamping, Khardung La passes, and seamless altitude acclimatization itineraries.
+            Approved target audiences, promotional angles, positioning, and brand messaging will appear here
           </p>
         </div>
       </div>
 
       {/* Strategic Marketing Pillars */}
       <div className="space-y-4">
-        <h3 className="text-sm font-bold text-slate-900">Strategic Content & Positioning Pillars</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <h3 className="text-sm font-bold text-slate-900">Approved Strategic Content & Positioning Pillars</h3>
+        {marketingPillars.length === 0 ? (
+          <div data-testid="marketing-strategy-empty" className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
+            <Compass className="mx-auto h-10 w-10 text-slate-300" />
+            <h4 className="mt-3 text-sm font-bold text-slate-800">No approved marketing strategy is available</h4>
+            <p className="mx-auto mt-1 max-w-lg text-xs text-slate-500">Strategy persistence and approval are not implemented yet. BBOS will not substitute seasonal claims or example plans for approved data.</p>
+          </div>
+        ) : <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {marketingPillars.map((pillar) => (
             <div
               key={pillar.id}
@@ -94,7 +65,7 @@ export const MarketingStrategyView: React.FC = () => {
               </div>
             </div>
           ))}
-        </div>
+        </div>}
       </div>
     </div>
   );

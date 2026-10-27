@@ -59,3 +59,10 @@ export function bookingResourceContext(value: unknown): ResourceContext {
   copyIfPresent(context, 'ownerEmployeeId', resource, 'assignedSalesEmployeeId');
   return context as ResourceContext;
 }
+
+export function mediaAssetResourceContext(value: unknown): ResourceContext {
+  const resource = asRecord(value);
+  const context = commonContext(resource);
+  copyIfPresent(context, 'ownerEmployeeId', resource, 'ownerEmployeeId');
+  return context as ResourceContext;
+}

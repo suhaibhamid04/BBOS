@@ -19,19 +19,23 @@ export const MarketingAiView: React.FC = () => {
   const { runMarketingAiGenerate, submitForApproval, createContentItem } = useData();
 
   const [destination, setDestination] = useState<DestinationRegion>('Kashmir');
-  const [objective, setObjective] = useState('Instagram Viral Reel Scripts & Visual Hooks');
-  const [targetAudience, setTargetAudience] = useState('Affluent Couples & Honeymooners in Mumbai/Delhi');
-  const [tone, setTone] = useState('Luxury, poetic, serene, aspirational');
-  const [specificFocus, setSpecificFocus] = useState('Autumn Chinar foliage in Dachigam & Nigeen Houseboat sunset dinner');
+  const [objective, setObjective] = useState('Instagram Reel scripts and visual hooks');
+  const [targetAudience, setTargetAudience] = useState('Couples and families researching Kashmir travel');
+  const [tone, setTone] = useState('Clear, warm, and informative');
+  const [specificFocus, setSpecificFocus] = useState('Use only details in this brief and mark every unsupported claim for verification');
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [result, setResult] = useState<MarketingAiGenerateResult | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [submittedApproval, setSubmittedApproval] = useState(false);
+  const [generationError, setGenerationError] = useState<string | null>(null);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
 
   const handleGenerate = async () => {
     setIsGenerating(true);
     setSubmittedApproval(false);
+    setGenerationError(null);
+    setResult(null);
     try {
       const res = await runMarketingAiGenerate({
         destination,
@@ -43,6 +47,7 @@ export const MarketingAiView: React.FC = () => {
       setResult(res);
     } catch (err) {
       console.error('Failed to generate marketing assets:', err);
+      setGenerationError(err instanceof Error ? err.message : 'Marketing AI is unavailable. Please retry later.');
     } finally {
       setIsGenerating(false);
     }
@@ -56,7 +61,9 @@ export const MarketingAiView: React.FC = () => {
 
   const handleSubmitToApproval = async () => {
     if (!result) return;
-    await submitForApproval({
+    setApprovalError(null);
+    try {
+      await submitForApproval({
       actionType: 'PUBLISH_MARKETING_CAMPAIGN',
       summary: `Approve AI Marketing Content: "${result.campaignTitle}" (${destination})`,
       details: {
@@ -71,24 +78,26 @@ export const MarketingAiView: React.FC = () => {
       requiresRole: 'FOUNDER',
       reason: 'AI marketing creatives require human leadership approval before publishing or spending ad budget.',
       impactLevel: 'MEDIUM',
-    });
+      });
 
     // Also add to Content Calendar in PENDING state
-    await createContentItem({
+      await createContentItem({
       title: result.campaignTitle,
       channel: 'Instagram',
       contentType: 'Reel',
       destination,
-      caption: result.instagramCaptions[0] || result.adCopies[0] || 'Exclusive Kashmir holiday offer.',
+      caption: result.instagramCaptions[0] || result.adCopies[0],
       visualPrompt: result.visualPrompts[0] || '',
-      hashtags: ['#KashmirLuxury', '#BookingBridge', '#GulmargWinter', '#IncredibleIndia'],
-      status: 'SCHEDULED',
+      hashtags: [],
+      status: 'DRAFT',
       approvalStatus: 'PENDING',
-      scheduledFor: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      scheduledFor: '',
       generatedBy: 'AI',
-    });
-
-    setSubmittedApproval(true);
+      });
+      setSubmittedApproval(true);
+    } catch (error) {
+      setApprovalError(error instanceof Error ? error.message : 'The approval request could not be created.');
+    }
   };
 
   return (
@@ -104,11 +113,11 @@ export const MarketingAiView: React.FC = () => {
             </div>
             <h2 className="text-xl font-bold text-slate-900 tracking-tight">Marketing GenAI Engine</h2>
             <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-[#7056EE]/15 text-[#7056EE]">
-              Gemini Generative Creative
+              AI-generated draft
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
-            Produce destination-grounded ad copy, reel hooks, visual prompts, and multi-channel creative packages
+            Prepare draft concepts for human fact-checking. Generated content is never treated as approved or published.
           </p>
         </div>
       </div>
@@ -144,10 +153,10 @@ export const MarketingAiView: React.FC = () => {
                 onChange={(e) => setObjective(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-300 rounded-xl bg-slate-50 font-semibold text-slate-900"
               >
-                <option value="Instagram Viral Reel Scripts & Visual Hooks">Instagram Viral Reel Scripts & Visual Hooks</option>
-                <option value="High-ROAS Meta Ads Copy (Lead Gen & WhatsApp CTAs)">High-ROAS Meta Ads Copy (Lead Gen & WhatsApp CTAs)</option>
-                <option value="Luxury Carousel Storytelling (10-Slide Itinerary)">Luxury Carousel Storytelling (10-Slide Itinerary)</option>
-                <option value="Seasonal Travel Email Newsletter & Exclusive Offers">Seasonal Travel Email Newsletter & Exclusive Offers</option>
+                <option value="Instagram Reel scripts and visual hooks">Instagram Reel scripts and visual hooks</option>
+                <option value="Meta Ads copy draft for lead generation">Meta Ads copy draft for lead generation</option>
+                <option value="Carousel storytelling draft">Carousel storytelling draft</option>
+                <option value="Seasonal travel email draft">Seasonal travel email draft</option>
                 <option value="Complete Multi-Channel Launch Kit">Complete Multi-Channel Launch Kit</option>
               </select>
             </div>
@@ -181,7 +190,7 @@ export const MarketingAiView: React.FC = () => {
                 rows={3}
                 value={specificFocus}
                 onChange={(e) => setSpecificFocus(e.target.value)}
-                placeholder="e.g. Include private shikara with Kashmiri Kahwa, Phase 2 Gulmarg gondola pre-booking guarantee..."
+                placeholder="Add only verified facts or clearly identify details that need verification."
                 className="w-full px-3 py-2 border border-slate-300 rounded-xl"
               />
             </div>
@@ -204,6 +213,13 @@ export const MarketingAiView: React.FC = () => {
                 </>
               )}
             </button>
+            {generationError && (
+              <div data-testid="marketing-ai-error" role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-red-800">
+                <p className="font-bold">Marketing AI is unavailable</p>
+                <p className="mt-1">{generationError}</p>
+                <button type="button" onClick={handleGenerate} className="mt-2 rounded-lg border border-red-300 bg-white px-3 py-1.5 font-bold">Retry</button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -221,7 +237,7 @@ export const MarketingAiView: React.FC = () => {
             <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs space-y-5 animate-in fade-in duration-200">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
                 <div>
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#7056EE]">Generated Campaign</span>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#7056EE]">AI-generated draft · requires fact-check and approval</span>
                   <h3 className="text-sm font-bold text-slate-900">{result.campaignTitle}</h3>
                 </div>
 
@@ -244,6 +260,7 @@ export const MarketingAiView: React.FC = () => {
                   )}
                 </button>
               </div>
+              {approvalError && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800">Approval submission failed: {approvalError}</p>}
 
               {/* Video & Reel Hooks */}
               <div className="space-y-2 text-xs">

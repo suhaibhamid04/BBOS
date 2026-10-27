@@ -40,6 +40,15 @@ const SUPPORTED_ACTIONS: Record<AuthorizationResource, readonly AuthorizationAct
     'VERIFY_SUPPLIER_PAYMENT',
     'VOID_SUPPLIER_PAYMENT',
   ],
+  MEDIA_ASSET: [
+    'CREATE_MEDIA',
+    'READ_MEDIA',
+    'UPDATE_MEDIA_METADATA',
+    'SUBMIT_MEDIA_RIGHTS',
+    'VERIFY_MEDIA_RIGHTS',
+    'CREATE_MEDIA_JOB',
+    'READ_MEDIA_JOB',
+  ],
 };
 
 const COMMERCIAL_RESOURCES: readonly AuthorizationResource[] = ['TRIP', 'QUOTE', 'BOOKING'];
@@ -127,7 +136,9 @@ function roleScope(
   if (role === 'Founder' || role === 'Admin') return 'ALL';
 
   if (role === 'Marketing') {
-    return resource === 'ATTRIBUTION_REPORT' && action === 'READ_AGGREGATE' ? 'AGGREGATE' : 'NONE';
+    if (resource === 'ATTRIBUTION_REPORT' && action === 'READ_AGGREGATE') return 'AGGREGATE';
+    if (resource === 'MEDIA_ASSET' && action !== 'VERIFY_MEDIA_RIGHTS') return 'OWN';
+    return 'NONE';
   }
 
   if (role === 'Accounts') {
@@ -371,6 +382,7 @@ const QUERY_FIELDS: Record<AuthorizationResource, Partial<Record<Exclude<Authori
     ASSIGNED: 'assignedReservationsEmployeeId',
     DEPARTMENT: 'departmentId',
   },
+  MEDIA_ASSET: { OWN: 'ownerEmployeeId', DEPARTMENT: 'departmentId' },
 };
 
 function assignmentQueryField(resource: AuthorizationResource, role: string): string | undefined {

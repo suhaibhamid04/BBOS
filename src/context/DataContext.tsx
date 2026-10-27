@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { APP_CONFIG } from '../config';
+import { buildMarketingCreativeDraft } from '../services/marketing/marketingTruthfulness';
 import { assertDemoControlsAllowed } from '../services/demoModeGuard';
 import { readApiPages } from '../services/auth/readApiPages';
 import { inventoryApi } from '../services/inventory/inventoryApi';
@@ -46,6 +47,7 @@ import {
   CreateLeadInput,
   SalesAiAnalysisResult,
   MarketingAiStrategyResult,
+  MarketingAiCreativeBrief,
   ContentItem,
   MarketingPillar,
   AdCampaign,
@@ -516,7 +518,7 @@ interface DataContextType {
   // AI Service Calls
   runSalesAiAnalysis: (leadId: string) => Promise<SalesAiAnalysisResult>;
   runMarketingStrategy: (destination: string, season: string, objective: string) => Promise<MarketingAiStrategyResult>;
-  runMarketingAiGenerate: (params: { destination: string; audience: string; campaignGoal: string; format: string }) => Promise<MarketingAiGenerateResult>;
+  runMarketingAiGenerate: (params: MarketingAiCreativeBrief) => Promise<MarketingAiGenerateResult>;
   askCommandCenterAi: (question: string) => Promise<{ answer: string; suggestedActions: any[] }>;
   queryCommandCenter: (question: string) => Promise<{ answer: string; suggestedActions: any[] }>;
 
@@ -3353,36 +3355,20 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       body: JSON.stringify({ destination, targetMonthOrSeason: season, primaryObjective: objective })
     });
 
+    const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(`Server returned ${response.status}: Failed to generate marketing strategy`);
+      const correlation = typeof data.correlationId === 'string' ? ` Reference: ${data.correlationId}.` : '';
+      const message = typeof data.error === 'string' ? data.error : 'Marketing AI is unavailable.';
+      throw new Error(`${message}${correlation}`);
     }
-
-    const data = await response.json();
-    return data.data;
+    if (!data?.success || !data?.data) throw new Error('Marketing AI returned an invalid response. Please retry.');
+    return data.data as MarketingAiStrategyResult;
   };
 
-  const runMarketingAiGenerate = async (params: { destination: string; audience: string; campaignGoal: string; format: string }): Promise<MarketingAiGenerateResult> => {
-    const strategyResult = await runMarketingStrategy(params.destination, 'Current Season', `${params.campaignGoal} for ${params.audience}`);
-    
-    return {
-      campaignTitle: strategyResult.campaignIdea || `${params.destination} Luxury Experience`,
-      targetAudienceRecommendation: strategyResult.audience || params.audience,
-      videoHooks: strategyResult.contentIdeas?.map(c => c.hook || c.title) || [
-        `Why booking standard hotels in ${params.destination} ruins the trip`,
-        `The secret local experience most travel packages miss`
-      ],
-      adCopies: [
-        `Escape to ${params.destination} with Booking Bridge OS curated luxury stays and dedicated private concierge. Guaranteed hassle-free permits and premium stays.`,
-        `Discover majestic landscapes and handcrafted itineraries. Inquire today for custom package quotations.`
-      ],
-      instagramCaptions: strategyResult.contentIdeas?.map(c => `${c.title}: ${c.angle} #BookingBridge #${params.destination}`) || [
-        `Golden views and unforgettable memories in ${params.destination}. 🌟 Tap the link in bio to plan your getaway.`
-      ],
-      visualPrompts: [
-        `Cinematic sunset over calm waters with traditional wooden boats and majestic snow peaks in background`,
-        `Warm lighting inside a luxury cedar wooden suite with traditional carpets and scenic mountain view`
-      ]
-    };
+  const runMarketingAiGenerate = async (params: MarketingAiCreativeBrief): Promise<MarketingAiGenerateResult> => {
+    const objective = [params.objective, `Audience: ${params.targetAudience}`, `Tone: ${params.tone}`, `Focus: ${params.specificFocus}`].join('\n');
+    const strategyResult = await runMarketingStrategy(params.destination, 'Current planning period', objective);
+    return buildMarketingCreativeDraft(strategyResult);
   };
 
   const askCommandCenterAi = async (question: string) => {

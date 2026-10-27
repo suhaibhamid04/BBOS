@@ -1068,7 +1068,16 @@ export interface MarketingAiStrategyResult {
   contentIdeas: { title: string; angle: string; format: string; hook: string }[];
   recommendedFormats: string[];
   recommendedCTA: string;
+  /** Metric names suggested for measurement. Values and targets require authoritative data. */
   KPIs: string[];
+}
+
+export interface MarketingAiCreativeBrief {
+  destination: string;
+  objective: string;
+  targetAudience: string;
+  tone: string;
+  specificFocus: string;
 }
 
 export interface ContentItem {
@@ -1081,7 +1090,7 @@ export interface ContentItem {
   visualPrompt?: string;
   hashtags: string[];
   status: 'DRAFT' | 'SCHEDULED' | 'PUBLISHED';
-  approvalStatus: 'PENDING' | 'APPROVED' | 'REJECTED';
+  approvalStatus: 'NOT_SUBMITTED' | 'PENDING' | 'APPROVED' | 'REJECTED';
   scheduledFor: string;
   generatedBy: 'AI' | 'HUMAN';
   createdAt?: string;

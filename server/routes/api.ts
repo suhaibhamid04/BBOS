@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
+import { randomUUID } from 'node:crypto';
 import { analyzeLeadWithSalesAi } from '../ai/salesAgent.js';
-import { generateMarketingStrategy } from '../ai/marketingAgent.js';
+import { generateMarketingStrategy, MarketingAiError } from '../ai/marketingAgent.js';
 import { processCommandCenterQuery } from '../ai/commandCenterAgent.js';
 import { validateToolAccess } from '../ai/toolGateway.js';
 import { isAiConfigured } from '../ai/aiClient.js';
@@ -21,6 +22,7 @@ import { customerSharesPublicRouter } from './customerSharesPublic.js';
 import { metaWhatsAppWebhookRouter } from './metaWhatsAppWebhook.js';
 import { customersRouter } from './customers.js';
 import { financialExceptionsRouter } from './financialExceptions.js';
+import { marketingMediaRouter } from './marketingMedia.js';
 
 export const apiRouter = Router();
 
@@ -57,6 +59,7 @@ apiRouter.use('/supplier-payables', supplierPayablesRouter);
 apiRouter.use('/operations', operationsRouter);
 apiRouter.use('/approvals', approvalsRouter);
 apiRouter.use('/financial-exceptions', financialExceptionsRouter);
+apiRouter.use('/marketing/media', marketingMediaRouter);
 
 // Health check endpoint
 apiRouter.get('/health', (req: Request, res: Response) => {
@@ -105,23 +108,45 @@ apiRouter.post(
 );
 
 // Marketing AI Strategy Endpoint (Gated to Marketing and Leadership)
+export function createMarketingStrategyHandler(generator: typeof generateMarketingStrategy = generateMarketingStrategy) {
+  return async (req: Request, res: Response) => {
+    const requestedCorrelation = req.get('x-request-id');
+    const correlationId = requestedCorrelation && /^[A-Za-z0-9._:-]{1,128}$/.test(requestedCorrelation)
+      ? requestedCorrelation
+      : randomUUID();
+    res.setHeader('x-correlation-id', correlationId);
+    try {
+      const { destination, targetMonthOrSeason, primaryObjective } = req.body;
+      const result = await generator(
+        destination || 'Kashmir',
+        targetMonthOrSeason || 'Current planning period',
+        primaryObjective || 'Prepare an evidence-aware marketing content draft',
+      );
+      return res.json({ success: true, data: result });
+    } catch (error: any) {
+      console.error(`API Error in /ai/marketing-strategy [${correlationId}]:`, error);
+      if (error instanceof MarketingAiError) {
+        return res.status(error.statusCode).json({
+          error: error.message,
+          code: error.code,
+          retryable: error.retryable,
+          correlationId,
+        });
+      }
+      return res.status(500).json({
+        error: 'Marketing AI failed unexpectedly. Please retry later.',
+        code: 'MARKETING_AI_FAILED',
+        retryable: true,
+        correlationId,
+      });
+    }
+  };
+}
+
 apiRouter.post(
   '/ai/marketing-strategy',
   requireRole(['Founder', 'Admin', 'Marketing']),
-  async (req: Request, res: Response) => {
-    try {
-      const { destination, targetMonthOrSeason, primaryObjective } = req.body;
-      const result = await generateMarketingStrategy(
-        destination || 'Kashmir',
-        targetMonthOrSeason || 'Spring 2026',
-        primaryObjective || 'High-intent lead generation for premium vacation packages'
-      );
-      res.json({ success: true, data: result });
-    } catch (error: any) {
-      console.error('API Error in /ai/marketing-strategy:', error);
-      res.status(500).json({ error: error.message || 'Internal Server Error in Marketing AI' });
-    }
-  }
+  createMarketingStrategyHandler(),
 );
 
 // AI Command Center Query Endpoint

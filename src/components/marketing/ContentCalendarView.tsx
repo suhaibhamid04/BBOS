@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { useData } from '../../context/DataContext';
-import { ContentItem } from '../../types';
-import { Calendar, Plus, Instagram, Facebook, Mail, Sparkles, CheckCircle2, Clock, X } from 'lucide-react';
+import { APP_CONFIG } from '../../config';
+import { Calendar, Plus, Sparkles, X } from 'lucide-react';
 
 export const ContentCalendarView: React.FC = () => {
-  const { contentCalendar, createContentItem, approveApproval } = useData();
+  const { contentCalendar, createContentItem } = useData();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   const [title, setTitle] = useState('');
   const [channel, setChannel] = useState<'Instagram' | 'Facebook' | 'Meta Ads' | 'Email' | 'YouTube' | 'Blog'>('Instagram');
@@ -13,29 +14,31 @@ export const ContentCalendarView: React.FC = () => {
   const [destination, setDestination] = useState<'Kashmir' | 'Ladakh' | 'Jammu' | 'General'>('Kashmir');
   const [caption, setCaption] = useState('');
   const [visualPrompt, setVisualPrompt] = useState('');
-  const [scheduledFor, setScheduledFor] = useState('2026-10-18');
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title || !caption) return;
-
-    await createContentItem({
-      title,
-      channel,
-      contentType,
-      destination,
-      caption,
-      visualPrompt,
-      hashtags: ['#KashmirTravel', '#GulmargSnow', '#BookingBridge', '#IncredibleIndia'],
-      status: 'SCHEDULED',
-      approvalStatus: 'PENDING',
-      scheduledFor,
-      generatedBy: 'HUMAN',
-    });
-
-    setIsCreateOpen(false);
-    setTitle('');
-    setCaption('');
+    setCreateError(null);
+    try {
+      await createContentItem({
+        title,
+        channel,
+        contentType,
+        destination,
+        caption,
+        visualPrompt,
+        hashtags: [],
+        status: 'DRAFT',
+        approvalStatus: 'NOT_SUBMITTED',
+        scheduledFor: '',
+        generatedBy: 'HUMAN',
+      });
+      setIsCreateOpen(false);
+      setTitle('');
+      setCaption('');
+    } catch (error) {
+      setCreateError(error instanceof Error ? error.message : 'The draft could not be created.');
+    }
   };
 
   return (
@@ -43,13 +46,13 @@ export const ContentCalendarView: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <div className="flex items-center space-x-2">
-            <h2 className="text-xl font-bold text-slate-900 tracking-tight">Content Calendar & Schedule</h2>
+            <h2 className="text-xl font-bold text-slate-900 tracking-tight">Content Drafts & Calendar</h2>
             <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-pink-100 text-pink-800">
-              {contentCalendar.length} Scheduled Items
+              {contentCalendar.length} {contentCalendar.length === 1 ? 'Item' : 'Items'}
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
-            Planned social reels, carousel itineraries, newsletters, and verified visual prompts
+            Draft planning workspace. Social publishing and durable production calendar persistence are not implemented.
           </p>
         </div>
 
@@ -59,9 +62,21 @@ export const ContentCalendarView: React.FC = () => {
           className="px-3.5 py-2 bg-[#7056EE] hover:bg-[#5e43dc] text-white rounded-xl text-xs font-bold flex items-center space-x-1.5 shadow-xs transition-colors self-start sm:self-auto"
         >
           <Plus className="w-4 h-4" />
-          <span>Schedule Post</span>
+          <span>Create Draft</span>
         </button>
       </div>
+
+      <p data-testid="content-persistence-notice" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-900">
+        {APP_CONFIG.DEMO_MODE ? 'Example and locally saved demo items may be shown.' : 'Items created here are session-only drafts until a server-backed content workflow is implemented.'} Nothing is published or sent to a social platform.
+      </p>
+
+      {contentCalendar.length === 0 && (
+        <div data-testid="content-calendar-empty" className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
+          <Calendar className="mx-auto h-10 w-10 text-slate-300" />
+          <h3 className="mt-3 text-sm font-bold text-slate-800">No content drafts are available</h3>
+          <p className="mt-1 text-xs text-slate-500">Create a session draft to plan content. It will not be scheduled or published.</p>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {contentCalendar.map((item) => (
@@ -89,7 +104,7 @@ export const ContentCalendarView: React.FC = () => {
                 <div className="p-2.5 bg-purple-50/60 border border-purple-200/80 rounded-xl text-[11px] text-purple-900 space-y-1">
                   <span className="font-bold flex items-center space-x-1">
                     <Sparkles className="w-3 h-3 text-[#7056EE]" />
-                    <span>Creative Visual Prompt:</span>
+                    <span>Draft visual brief:</span>
                   </span>
                   <p className="italic">{item.visualPrompt}</p>
                 </div>
@@ -99,7 +114,7 @@ export const ContentCalendarView: React.FC = () => {
             <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
               <span className="flex items-center space-x-1">
                 <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                <span>{item.scheduledFor}</span>
+                <span>{item.scheduledFor || 'Not scheduled'}</span>
               </span>
               <span className="font-semibold text-[#7056EE]">{item.destination}</span>
             </div>
@@ -111,13 +126,14 @@ export const ContentCalendarView: React.FC = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
           <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden">
             <div className="bg-slate-900 text-white p-4 flex items-center justify-between">
-              <h3 className="text-sm font-bold">Schedule Marketing Post</h3>
+              <h3 className="text-sm font-bold">Create Marketing Draft</h3>
               <button onClick={() => setIsCreateOpen(false)} className="text-slate-400 hover:text-white">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <form onSubmit={handleCreate} className="p-5 space-y-3.5 text-xs">
+              {createError && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 font-semibold text-red-800">Draft unavailable: {createError}</p>}
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">Post Title *</label>
                 <input
@@ -172,7 +188,7 @@ export const ContentCalendarView: React.FC = () => {
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">AI Image / Video Brief Prompt</label>
+                <label className="block font-semibold text-slate-700 mb-1">Draft image / video brief</label>
                 <input
                   type="text"
                   value={visualPrompt}
@@ -194,7 +210,7 @@ export const ContentCalendarView: React.FC = () => {
                   type="submit"
                   className="px-4 py-1.5 bg-[#7056EE] text-white font-bold rounded-lg"
                 >
-                  Schedule Post
+                  Create Draft
                 </button>
               </div>
             </form>

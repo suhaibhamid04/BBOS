@@ -7,6 +7,7 @@ export const AUTHORIZATION_RESOURCES = [
   'INVENTORY',
   'ATTRIBUTION_REPORT',
   'SUPPLIER_PAYABLE',
+  'MEDIA_ASSET',
 ] as const;
 
 export type AuthorizationResource = (typeof AUTHORIZATION_RESOURCES)[number];
@@ -35,6 +36,13 @@ export const AUTHORIZATION_ACTIONS = [
   'APPROVE_OPERATIONAL_SPEND',
   'DISPATCH_OPERATIONS',
   'GENERATE_VOUCHERS',
+  'CREATE_MEDIA',
+  'READ_MEDIA',
+  'UPDATE_MEDIA_METADATA',
+  'SUBMIT_MEDIA_RIGHTS',
+  'VERIFY_MEDIA_RIGHTS',
+  'CREATE_MEDIA_JOB',
+  'READ_MEDIA_JOB',
 ] as const;
 
 export type AuthorizationAction = (typeof AUTHORIZATION_ACTIONS)[number];
