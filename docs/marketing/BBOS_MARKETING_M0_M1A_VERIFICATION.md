@@ -1,6 +1,6 @@
 # BBOS Marketing M0/M1A security and verification gate
 
-**Verification date:** 2026-10-27
+**Verification date:** 2026-10-28
 
 **Branch:** `audit/bbos-comprehensive-remediation`
 
@@ -8,18 +8,20 @@
 
 **Validated dependency source commit:** `0bb034b96d607d0d259b70cf4045d8434ca65533`
 
+**Initial report commit:** `b8abc42fb05c3b143864f08ace7be158d34b22b5`
+
 **Report publication:** the commit containing this report; the final response and branch history provide its immutable hash because a commit cannot embed its own hash.
 **Verdict:** **GO for starting M1B development within the already approved isolation boundaries.** This is not approval to deploy, connect production storage, process real media, publish content, connect Meta, or change Sembark.
 
 ## Repository state and isolation
 
-The requested branch and starting commit matched. The only pre-existing worktree modification was `firebase-applet-config.json`; it was preserved, never staged, and excluded from both commits. `package.json` did not change. The dependency remediation changes only `bun.lock` and tightens `config/dependency-audit-allowlist.json` to the five advisories still emitted by `bun audit`.
+The requested branch and starting commit matched. The only pre-existing worktree modification was `firebase-applet-config.json`; it was preserved and never staged. Direct dependency ranges did not change. The remediation updates `bun.lock`, moves the existing `qs` security override from 6.16.0 to 6.16.1, and tightens `config/dependency-audit-allowlist.json` to the five advisories still emitted by `bun audit`.
 
 No production Firebase resource, live Meta account, Sembark connection, real lead, customer record, or media object was accessed or changed. Firebase validation used localhost Auth and Firestore emulators with `demo-bbos-audit-rules` and `bbos-qa3-local` project identifiers.
 
 ## Dependency advisory disposition
 
-The failed implementation-commit audit contained twelve unapproved records: five high, five moderate, and two low. All had compatible fixed versions and were remediated without a direct dependency or framework major upgrade.
+The failed implementation-commit audit contained twelve unapproved records: five high, five moderate, and two low. All had compatible fixed versions and were remediated without a direct dependency or framework major upgrade. A thirteenth moderate `qs` record was published while the final report CI was running and was also remediated rather than allowlisted.
 
 | Advisory | Package and installed version before | Severity | Dependency path and context | Reachability and attacker input | Fixed version and action | Regression risk | Final disposition |
 |---|---|---|---|---|---|---|---|
@@ -35,6 +37,7 @@ The failed implementation-commit audit contained twelve unapproved records: five
 | `1243112` / `GHSA-xjj6-f33q-929c` | `undici` 8.11.2 | High | node-gyp chain under Firebase CLI | Dev tooling only; no remote BBOS response is decoded by this copy. | 8.12.2 | Low | **Remediated; dev tooling only** |
 | `1243114` / `GHSA-xjj6-f33q-929c` | `undici` 6.29.0 | High | Direct Firebase CLI dependency | Dev/emulator tooling only. A public BBOS request cannot supply an HTTP response with excessive content encodings to this client. | 6.29.1 | Low; Firebase CLI emulator coverage passed. | **Remediated; dev tooling only** |
 | `1243066` / `GHSA-mrhx-c7xc-m3w5` | `zod` 4.6.5 | High | Firebase CLI and `@modelcontextprotocol/sdk`; optional Google GenAI MCP path | BBOS does not import Zod or MCP task/schema APIs. Public and AI response inputs do not reach this vulnerable collection validator. | 4.6.6; compatible patch | Low; SDK range remains satisfied and Marketing AI tests passed. | **Remediated; previously not reachable/dev tooling** |
+| `1243452` / `GHSA-6pq8-jhm2-2vcw` | `qs` 6.16.0 | Moderate | Direct Express/body-parser production query and serialization path plus Google/Firebase tooling | **Potentially reachable production package.** The specific fault requires `qs.stringify({ array }, { arrayFormat: 'comma' })` with an array element carrying a non-callable own `toString`. BBOS does not directly call `qs.stringify`, but the shared parser/serializer package is used on public HTTP paths, so acceptance was not justified. | 6.16.1; existing package override and lockfile patched | Low. Same patch line; complete local and hosted regression matrix required. | **Remediated during final CI follow-up** |
 
 `bun audit fix` also safely updated `@modelcontextprotocol/sdk` 1.31.0 to 1.32.0 and Vite 6.4.3 to 6.4.4. Those patches remove nine previously allowlisted MCP/Vite advisory records. The allowlist was reduced from fifteen historical IDs to the five currently emitted and previously evidenced residual records.
 
@@ -72,7 +75,7 @@ CI should continue using the existing `actions/setup-java@v5` Temurin 21 step.
 | Command | Result |
 |---|---|
 | `bun install --frozen-lockfile` | PASS; 857 installs across 889 packages checked, no changes |
-| `bun run verify:repository` | PASS; 343 tracked files at source-commit validation |
+| `bun run verify:repository` | PASS; 344 tracked files at final local validation (343 before this report was added) |
 | `bun run verify:audit` | PASS; 5 reviewed residual advisories, 0 unexpected |
 | `bun run lint` | PASS; TypeScript emitted no errors |
 | `bun test` | PASS; **741 passed, 8 emulator-specific skipped, 0 failed, 2,953 assertions**, 56 files |
@@ -90,6 +93,7 @@ The workflow remains compatible with the branch and changes. It triggers on push
 
 - Implementation commit `2461a49...`: run `40488866078` **failed** at `verify:audit` on exactly the twelve new records classified above.
 - Dependency source commit `0bb034b96d607d0d259b70cf4045d8434ca65533`: run `40491792322` **passed** all steps in 3m21s: <https://github.com/suhaibhamid04/BBOS/actions/runs/40491792322>.
+- Initial report commit `b8abc42fb05c3b143864f08ace7be158d34b22b5`: run `40643414283` **failed** at `verify:audit` because `1243452` was published after the prior green run. No test failure was hidden; `qs` was patched to 6.16.1.
 
 The final report commit receives its own workflow run after push. Its exact result is reported to the user and must be successful before this verification task is called complete.
 
