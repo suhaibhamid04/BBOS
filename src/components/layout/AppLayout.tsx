@@ -29,6 +29,7 @@ const SECTION_TITLES: Record<NavSectionKey, string> = {
   'content-calendar': 'Content Calendar',
   campaigns: 'Ad Campaigns',
   'marketing-ai': 'Marketing GenAI Engine',
+  'media-library': 'Secure Media Library',
   'analytics-overview': 'Business Overview Analytics',
   'analytics-sales': 'Sales Performance Analytics',
   'analytics-marketing': 'Marketing ROI Analytics',

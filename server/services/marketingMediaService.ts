@@ -1,4 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
 import type { ConversionStorageProvider, ConversionTransaction } from '../../src/services/conversion/conversionStorageProvider.js';
 import { FirestoreConversionStorageProvider } from '../../src/services/conversion/conversionStorageProvider.js';
 import { assertAuthorizedResource } from '../authorization/assertAuthorizedResource.js';
@@ -37,6 +42,7 @@ import {
 import {
   UnavailableMediaObjectStorageAdapter,
   derivedObjectRef,
+  isResumableStorageAdapter,
   originalObjectRef,
   type MediaObjectStorageAdapter,
 } from '../marketing/mediaStorageAdapter.js';
@@ -44,6 +50,25 @@ import {
 type MediaMetadataStore = Pick<ConversionStorageProvider, 'runTransaction'>;
 type Clock = () => Date;
 type IdFactory = () => string;
+
+export interface MediaAssetDetail {
+  asset: MediaAsset;
+  currentVersion?: MediaAssetVersion;
+  currentRights?: MediaRightsRecord;
+  rightsHistory: MediaRightsRecord[];
+  derivedObjects: MediaDerivedObject[];
+  jobs: MediaProcessingJob[];
+}
+
+interface MediaInspectionResult {
+  detectedContentType: string;
+  detectedContainer?: string;
+  detectedCodecs: string[];
+  durationMs?: number;
+  width?: number;
+  height?: number;
+  thumbnail?: { path: string; contentType: 'image/webp'; bytes: number };
+}
 
 const COLLECTIONS = {
   assets: 'marketing_media_assets',
@@ -62,9 +87,9 @@ const CONTENT_TYPES: Record<(typeof MEDIA_CATEGORIES)[number], readonly string[]
 };
 
 const MAX_UPLOAD_BYTES: Record<(typeof MEDIA_CATEGORIES)[number], number> = {
-  VIDEO: 5 * 1024 * 1024 * 1024,
-  IMAGE: 50 * 1024 * 1024,
-  AUDIO: 500 * 1024 * 1024,
+  VIDEO: 512 * 1024 * 1024,
+  IMAGE: 25 * 1024 * 1024,
+  AUDIO: 100 * 1024 * 1024,
 };
 
 function clone<T>(value: T): T { return structuredClone(value); }
@@ -74,6 +99,61 @@ function sha256(value: string): string {
 }
 
 function at(clock: Clock): string { return clock().toISOString(); }
+
+async function checksumFile(filePath: string): Promise<string> {
+  const hash = createHash('sha256');
+  await new Promise<void>((resolve, reject) => {
+    const input = createReadStream(filePath);
+    input.on('data', chunk => hash.update(chunk));
+    input.on('error', reject);
+    input.on('end', resolve);
+  });
+  return hash.digest('hex');
+}
+
+async function inspectInIsolatedWorker(input: {
+  mode: 'ORIGINAL' | 'PREVIEW';
+  category: MediaAsset['category'];
+  declaredContentType: string;
+  sourcePath: string;
+  outputPath?: string;
+}): Promise<MediaInspectionResult> {
+  const workerPath = path.resolve(process.cwd(), 'server/workers/mediaInspectionWorker.ts');
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [workerPath], {
+      cwd: process.cwd(),
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+      env: { ...process.env, NODE_ENV: 'test' },
+    });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new MediaDomainError(422, 'MEDIA_PROCESSING_TIMEOUT', 'Media inspection exceeded the 20 second safety limit.'));
+    }, 20_000);
+    child.stdout.on('data', chunk => {
+      stdout += String(chunk);
+      if (stdout.length > 1_000_000) child.kill();
+    });
+    child.stderr.on('data', chunk => {
+      stderr += String(chunk);
+      if (stderr.length > 100_000) child.kill();
+    });
+    child.once('error', error => { clearTimeout(timer); reject(error); });
+    child.once('close', code => {
+      clearTimeout(timer);
+      try {
+        const payload = JSON.parse(stdout) as { ok: boolean; result?: MediaInspectionResult; error?: string };
+        if (code !== 0 || !payload.ok || !payload.result) throw new Error(payload.error || stderr || 'Media inspection failed.');
+        resolve(payload.result);
+      } catch (error) {
+        reject(new MediaDomainError(422, 'MEDIA_INSPECTION_FAILED', error instanceof Error ? error.message : 'Media inspection failed.'));
+      }
+    });
+    child.stdin.end(JSON.stringify(input));
+  });
+}
 
 function principal(actor: MediaActor) {
   return {
@@ -281,6 +361,8 @@ export class MarketingMediaService {
         issuedByEmployeeId: actor.employeeId,
         uploadTransport: grant.uploadTransport,
         uploadTarget: grant.uploadTarget,
+        uploadedBytes: 0,
+        chunkSizeBytes: 1024 * 1024,
       };
       const updated = { ...asset, lifecycleState: 'AWAITING_UPLOAD' as const, revision: asset.revision + 1, updatedAt: issued.toISOString(), updatedByEmployeeId: actor.employeeId };
       tx.set(COLLECTIONS.uploadSessions, session.id, session);
@@ -300,8 +382,203 @@ export class MarketingMediaService {
       if (!asset) throw new MediaDomainError(404, 'MEDIA_ASSET_NOT_FOUND', 'Media asset not found.');
       authorize(actor, 'READ_MEDIA', asset);
       const expired = new Date(session.expiresAt).getTime() <= this.clock().getTime();
-      return clone(expired && !['COMPLETED', 'CANCELLED'].includes(session.state) ? { ...session, state: 'EXPIRED' } : session);
+      return clone(expired && !['COMPLETED', 'CANCELLED', 'FAILED'].includes(session.state) ? { ...session, state: 'EXPIRED' } : session);
     });
+  }
+
+  async getAssetDetail(assetId: string, actor: MediaActor): Promise<MediaAssetDetail> {
+    const id = identifier(assetId, 'assetId');
+    return this.store.runTransaction(async tx => {
+      const asset = await tx.get(COLLECTIONS.assets, id) as MediaAsset | null;
+      if (!asset) throw new MediaDomainError(404, 'MEDIA_ASSET_NOT_FOUND', 'Media asset not found.');
+      authorize(actor, 'READ_MEDIA', asset);
+      const currentVersion = asset.currentVersionId
+        ? await tx.get(COLLECTIONS.versions, asset.currentVersionId) as MediaAssetVersion | null
+        : null;
+      const currentRights = asset.currentRightsId
+        ? await tx.get(COLLECTIONS.rights, asset.currentRightsId) as MediaRightsRecord | null
+        : null;
+      const derivedObjects = await tx.findByField(COLLECTIONS.derived, 'assetId', asset.id, 100) as MediaDerivedObject[];
+      const rightsHistory = await tx.findByField(COLLECTIONS.rights, 'assetId', asset.id, 100) as MediaRightsRecord[];
+      const jobs = (await tx.list(COLLECTIONS.jobs, 500) as MediaProcessingJob[]).filter(job => job.input.assetId === asset.id);
+      return {
+        asset: clone(asset),
+        ...(currentVersion ? { currentVersion: clone(currentVersion) } : {}),
+        ...(currentRights ? { currentRights: clone(currentRights) } : {}),
+        rightsHistory: rightsHistory.sort((left, right) => right.submittedAt.localeCompare(left.submittedAt)).map(clone),
+        derivedObjects: derivedObjects.sort((left, right) => right.createdAt.localeCompare(left.createdAt)).map(clone),
+        jobs: jobs.sort((left, right) => right.createdAt.localeCompare(left.createdAt)).map(clone),
+      };
+    });
+  }
+
+  async listAssetDetails(actor: MediaActor): Promise<MediaAssetDetail[]> {
+    const assets = await this.listAssets(actor);
+    return Promise.all(assets.map(asset => this.getAssetDetail(asset.id, actor)));
+  }
+
+  async appendUploadChunk(sessionId: string, offset: number, chunk: Uint8Array, actor: MediaActor): Promise<MediaUploadSession> {
+    if (!isResumableStorageAdapter(this.objectStorage)) throw new MediaDomainError(503, 'MEDIA_RESUMABLE_STORAGE_UNAVAILABLE', 'Resumable storage is unavailable.');
+    const current = await this.getUploadSession(sessionId, actor);
+    if (current.state === 'EXPIRED') throw new MediaDomainError(409, 'MEDIA_UPLOAD_SESSION_EXPIRED', 'The upload session expired.');
+    if (!['ISSUED', 'UPLOADING'].includes(current.state)) throw new MediaDomainError(409, 'MEDIA_UPLOAD_SESSION_ALREADY_FINALIZED', 'The upload session cannot accept more bytes.');
+    const uploadedBytes = await this.objectStorage.appendChunk(current.storageObjectRef, offset, chunk, current.declaredBytes);
+    return this.store.runTransaction(async tx => {
+      const session = await tx.get(COLLECTIONS.uploadSessions, current.id) as MediaUploadSession | null;
+      if (!session || !['ISSUED', 'UPLOADING'].includes(session.state)) throw new MediaDomainError(409, 'MEDIA_UPLOAD_SESSION_ALREADY_FINALIZED', 'The upload session cannot accept more bytes.');
+      const updated: MediaUploadSession = { ...session, state: 'UPLOADING', uploadedBytes };
+      tx.update(COLLECTIONS.uploadSessions, session.id, updated);
+      return clone(updated);
+    });
+  }
+
+  async cancelUploadSession(sessionId: string, actor: MediaActor): Promise<MediaUploadSession> {
+    const id = identifier(sessionId, 'sessionId');
+    const result = await this.store.runTransaction(async tx => {
+      const session = await tx.get(COLLECTIONS.uploadSessions, id) as MediaUploadSession | null;
+      if (!session) throw new MediaDomainError(404, 'MEDIA_UPLOAD_SESSION_NOT_FOUND', 'Upload session not found.');
+      const asset = await tx.get(COLLECTIONS.assets, session.assetId) as MediaAsset | null;
+      if (!asset) throw new MediaDomainError(404, 'MEDIA_ASSET_NOT_FOUND', 'Media asset not found.');
+      authorize(actor, 'UPDATE_MEDIA_METADATA', asset);
+      if (!['ISSUED', 'UPLOADING'].includes(session.state)) throw new MediaDomainError(409, 'MEDIA_UPLOAD_SESSION_ALREADY_FINALIZED', 'The upload session cannot be cancelled.');
+      const updated: MediaUploadSession = { ...session, state: 'CANCELLED' };
+      tx.update(COLLECTIONS.uploadSessions, session.id, updated);
+      tx.update(COLLECTIONS.assets, asset.id, { ...asset, lifecycleState: 'DRAFT', revision: asset.revision + 1, updatedAt: at(this.clock), updatedByEmployeeId: actor.employeeId });
+      const event = audit(this.nextId(), 'MEDIA_UPLOAD_CANCELLED', 'MEDIA_UPLOAD_SESSION', session.id, actor, at(this.clock), session, updated, 'Upload cancelled by its authorized owner.');
+      tx.set(COLLECTIONS.audit, event.id, event);
+      return updated;
+    });
+    await this.objectStorage.requestDeletion(result.storageObjectRef, 'Authorized upload cancellation.');
+    return clone(result);
+  }
+
+  async reconcileUpload(sessionId: string, actor: MediaActor): Promise<MediaAssetDetail> {
+    if (!isResumableStorageAdapter(this.objectStorage)) throw new MediaDomainError(503, 'MEDIA_RESUMABLE_STORAGE_UNAVAILABLE', 'Resumable storage is unavailable.');
+    const session = await this.getUploadSession(sessionId, actor);
+    if (session.state === 'EXPIRED') throw new MediaDomainError(409, 'MEDIA_UPLOAD_SESSION_EXPIRED', 'The upload session expired before completion.');
+    if (!['ISSUED', 'UPLOADING'].includes(session.state)) throw new MediaDomainError(409, 'MEDIA_UPLOAD_SESSION_ALREADY_FINALIZED', 'The upload session was already finalized.');
+    const asset = await this.getAsset(session.assetId, actor);
+    const actualBytes = await this.objectStorage.objectSize(session.storageObjectRef);
+    if (actualBytes !== session.declaredBytes) throw new MediaDomainError(409, 'MEDIA_UPLOAD_INCOMPLETE', `Upload has ${actualBytes} of ${session.declaredBytes} authorized bytes.`);
+
+    const checksum = await checksumFile(this.objectStorage.localPath(session.storageObjectRef));
+    const worker: MediaWorkerActor = { service: 'MEDIA_WORKER', instanceId: `local-inspector-${this.nextId()}` };
+    const { job } = await this.submitJob({
+      assetId: asset.id,
+      type: 'VALIDATE',
+      uploadSessionId: session.id,
+      parameters: { profile: 'm1bLocalInspection' },
+      idempotencyKey: `reconcile-${session.id}`,
+    }, actor);
+    await this.leaseJob(job.id, worker, 30_000);
+    await this.store.runTransaction(async tx => {
+      const latest = await tx.get(COLLECTIONS.assets, asset.id) as MediaAsset;
+      tx.update(COLLECTIONS.assets, asset.id, { ...latest, lifecycleState: 'VALIDATING', revision: latest.revision + 1, updatedAt: at(this.clock), updatedByEmployeeId: worker.instanceId });
+    });
+
+    const tempRoot = await mkdtemp(path.join(tmpdir(), 'bbos-media-inspect-'));
+    const thumbnailPath = path.join(tempRoot, 'thumbnail.webp');
+    try {
+      const inspection = await inspectInIsolatedWorker({
+        mode: 'ORIGINAL',
+        category: asset.category,
+        declaredContentType: asset.declaredContentType,
+        sourcePath: this.objectStorage.localPath(session.storageObjectRef),
+        ...(asset.category === 'IMAGE' ? { outputPath: thumbnailPath } : {}),
+      });
+      if (asset.category === 'VIDEO') {
+        if (!inspection.durationMs || !inspection.width || !inspection.height) {
+          throw new MediaDomainError(422, 'MEDIA_VIDEO_METADATA_REQUIRED', 'Video duration and resolution could not be verified by the approved inspector.');
+        }
+        if (inspection.durationMs > 10 * 60 * 1_000 || Math.max(inspection.width, inspection.height) > 4_096 || inspection.width * inspection.height > 8_847_360) {
+          throw new MediaDomainError(422, 'MEDIA_VIDEO_LIMIT_EXCEEDED', 'Video exceeds the approved 10 minute or 4K inspection limit.');
+        }
+      }
+      const version = await this.recordAssetVersion(asset.id, {
+        sourceUploadSessionId: session.id,
+        checksumSha256: checksum,
+        bytes: actualBytes,
+        detectedContentType: inspection.detectedContentType,
+        ...(inspection.durationMs === undefined ? {} : { durationMs: inspection.durationMs }),
+        ...(inspection.width === undefined ? {} : { width: inspection.width }),
+        ...(inspection.height === undefined ? {} : { height: inspection.height }),
+        ...(inspection.detectedContainer ? { detectedContainer: inspection.detectedContainer } : {}),
+        detectedCodecs: inspection.detectedCodecs,
+        validationStatus: 'VALID',
+        validationErrors: [],
+      }, worker);
+      await this.objectStorage.promoteObject(session.storageObjectRef, version.storageObjectRef);
+      const outputObjectIds: string[] = [];
+      if (inspection.thumbnail) {
+        const thumbnail = await readFile(inspection.thumbnail.path);
+        const derived = await this.recordDerivedObject(asset.id, {
+          sourceVersionId: version.id,
+          kind: 'THUMBNAIL',
+          checksumSha256: createHash('sha256').update(thumbnail).digest('hex'),
+          contentType: inspection.thumbnail.contentType,
+          bytes: thumbnail.byteLength,
+          parametersHash: createHash('sha256').update('sharp:webp:640x640:inside:q78').digest('hex'),
+        }, worker);
+        await this.objectStorage.writeDerivedObject(derived.storageObjectRef, thumbnail);
+        outputObjectIds.push(derived.id);
+      }
+      await this.completeJob(job.id, { outputObjectIds, metadata: { checksumSha256: checksum, bytes: actualBytes } }, worker);
+    } catch (error) {
+      const safeMessage = error instanceof Error ? error.message.slice(0, 300) : 'Media inspection failed.';
+      try {
+        await this.recordAssetVersion(asset.id, {
+          sourceUploadSessionId: session.id,
+          checksumSha256: checksum,
+          bytes: actualBytes,
+          detectedContentType: 'application/octet-stream',
+          detectedCodecs: [],
+          validationStatus: 'INVALID',
+          validationErrors: [safeMessage],
+        }, worker);
+      } catch { /* preserve the original safe failure */ }
+      await this.failJob(job.id, { classification: 'UNSUPPORTED_MEDIA', code: 'MEDIA_INSPECTION_FAILED', safeMessage, retryable: false }, worker).catch(() => undefined);
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+    return this.getAssetDetail(asset.id, actor);
+  }
+
+  async createPreview(assetId: string, contentType: string, bytes: Uint8Array, actor: MediaActor): Promise<MediaDerivedObject> {
+    if (!isResumableStorageAdapter(this.objectStorage)) throw new MediaDomainError(503, 'MEDIA_RESUMABLE_STORAGE_UNAVAILABLE', 'Preview storage is unavailable.');
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(contentType) || bytes.byteLength <= 0 || bytes.byteLength > 8 * 1024 * 1024) {
+      throw new MediaDomainError(422, 'MEDIA_PREVIEW_INVALID', 'Preview must be a JPEG, PNG, or WebP image no larger than 8 MiB.');
+    }
+    const detail = await this.getAssetDetail(assetId, actor);
+    if (!detail.currentVersion || detail.currentVersion.validationStatus !== 'VALID') throw new MediaDomainError(409, 'MEDIA_VERSION_REQUIRED', 'A valid media version is required before preview creation.');
+    const worker: MediaWorkerActor = { service: 'MEDIA_WORKER', instanceId: `local-preview-${this.nextId()}` };
+    const tempRoot = await mkdtemp(path.join(tmpdir(), 'bbos-media-preview-'));
+    const inputPath = path.join(tempRoot, 'input');
+    const outputPath = path.join(tempRoot, 'preview.webp');
+    try {
+      await writeFile(inputPath, bytes);
+      const inspection = await inspectInIsolatedWorker({ mode: 'PREVIEW', category: 'IMAGE', declaredContentType: contentType, sourcePath: inputPath, outputPath });
+      const normalized = await readFile(inspection.thumbnail!.path);
+      const derived = await this.recordDerivedObject(detail.asset.id, {
+        sourceVersionId: detail.currentVersion.id,
+        kind: 'THUMBNAIL',
+        checksumSha256: createHash('sha256').update(normalized).digest('hex'),
+        contentType: 'image/webp',
+        bytes: normalized.byteLength,
+        parametersHash: createHash('sha256').update('sharp:client-capture:webp:640x640:inside:q78').digest('hex'),
+      }, worker);
+      await this.objectStorage.writeDerivedObject(derived.storageObjectRef, normalized);
+      return derived;
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  }
+
+  async readPreview(assetId: string, actor: MediaActor): Promise<{ bytes: Buffer; contentType: string }> {
+    if (!isResumableStorageAdapter(this.objectStorage)) throw new MediaDomainError(503, 'MEDIA_RESUMABLE_STORAGE_UNAVAILABLE', 'Preview storage is unavailable.');
+    const detail = await this.getAssetDetail(assetId, actor);
+    const preview = detail.derivedObjects.find(item => item.kind === 'THUMBNAIL' || item.kind === 'PREVIEW');
+    if (!preview) throw new MediaDomainError(404, 'MEDIA_PREVIEW_NOT_FOUND', 'A preview is not available for this asset.');
+    return { bytes: await this.objectStorage.readObject(preview.storageObjectRef, 10 * 1024 * 1024), contentType: preview.contentType };
   }
 
   async submitRights(assetId: string, rawInput: unknown, actor: MediaActor): Promise<MediaRightsRecord> {

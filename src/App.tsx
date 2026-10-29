@@ -21,6 +21,7 @@ import { MarketingStrategyView } from './components/marketing/MarketingStrategyV
 import { ContentCalendarView } from './components/marketing/ContentCalendarView';
 import { CampaignsView } from './components/marketing/CampaignsView';
 import { MarketingAiView } from './components/marketing/MarketingAiView';
+import { MarketingMediaLibraryView } from './components/marketing/MarketingMediaLibraryView';
 import { AnalyticsOverviewView } from './components/analytics/AnalyticsOverviewView';
 import { EmployeesView } from './components/governance/EmployeesView';
 import { RolesPermissionsView } from './components/governance/RolesPermissionsView';
@@ -121,6 +122,8 @@ export function AppContent() {
         return <CampaignsView />;
       case 'marketing-ai':
         return <MarketingAiView />;
+      case 'media-library':
+        return <MarketingMediaLibraryView />;
       case 'analytics-overview':
       case 'analytics-sales':
       case 'analytics-marketing':

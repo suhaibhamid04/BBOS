@@ -14,7 +14,7 @@ export type MediaValidationStatus = (typeof MEDIA_VALIDATION_STATUSES)[number];
 export const MEDIA_RIGHTS_STATUSES = ['DRAFT', 'SUBMITTED', 'VERIFIED', 'REJECTED', 'EXPIRED', 'REVOKED'] as const;
 export type MediaRightsStatus = (typeof MEDIA_RIGHTS_STATUSES)[number];
 
-export const MEDIA_UPLOAD_STATES = ['ISSUED', 'UPLOADING', 'COMPLETED', 'EXPIRED', 'CANCELLED'] as const;
+export const MEDIA_UPLOAD_STATES = ['ISSUED', 'UPLOADING', 'COMPLETED', 'EXPIRED', 'CANCELLED', 'FAILED'] as const;
 export type MediaUploadState = (typeof MEDIA_UPLOAD_STATES)[number];
 
 export const MEDIA_DERIVED_KINDS = ['THUMBNAIL', 'PROXY', 'WAVEFORM', 'TRANSCRIPT', 'PREVIEW', 'EXPORT'] as const;
@@ -132,8 +132,11 @@ export interface MediaUploadSession {
   issuedAt: string;
   expiresAt: string;
   issuedByEmployeeId: string;
-  uploadTransport: 'FAKE';
+  uploadTransport: 'FAKE' | 'LOCAL_RESUMABLE';
   uploadTarget: string;
+  uploadedBytes: number;
+  chunkSizeBytes: number;
+  failureCode?: string;
 }
 
 export interface MediaDerivedObject {

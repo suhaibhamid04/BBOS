@@ -1,4 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { constants as fsConstants } from 'node:fs';
+import { copyFile, mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { MediaDomainError, type MediaCategory } from './mediaDomain.js';
 
 export interface ScopedUploadRequest {
@@ -13,7 +17,7 @@ export interface ScopedUploadRequest {
 
 export interface ScopedUploadGrant {
   storageObjectRef: string;
-  uploadTransport: 'FAKE';
+  uploadTransport: 'FAKE' | 'LOCAL_RESUMABLE';
   uploadTarget: string;
   expiresAt: string;
 }
@@ -31,10 +35,24 @@ export interface ScopedObjectAccessGrant {
 }
 
 export interface MediaObjectStorageAdapter {
-  readonly kind: 'FAKE' | 'UNAVAILABLE';
+  readonly kind: 'FAKE' | 'LOCAL' | 'UNAVAILABLE';
   createScopedUpload(request: ScopedUploadRequest): Promise<ScopedUploadGrant>;
   createScopedRead(request: ScopedObjectAccessRequest): Promise<ScopedObjectAccessGrant>;
   requestDeletion(objectRef: string, reason: string): Promise<{ deletionRequestId: string }>;
+}
+
+export interface ResumableMediaObjectStorageAdapter extends MediaObjectStorageAdapter {
+  readonly kind: 'LOCAL';
+  appendChunk(objectRef: string, offset: number, chunk: Uint8Array, maximumBytes: number): Promise<number>;
+  objectSize(objectRef: string): Promise<number>;
+  readObject(objectRef: string, maximumBytes: number): Promise<Buffer>;
+  promoteObject(sourceObjectRef: string, destinationObjectRef: string): Promise<void>;
+  writeDerivedObject(objectRef: string, bytes: Uint8Array): Promise<void>;
+  localPath(objectRef: string): string;
+}
+
+export function isResumableStorageAdapter(value: MediaObjectStorageAdapter): value is ResumableMediaObjectStorageAdapter {
+  return value.kind === 'LOCAL';
 }
 
 export interface MediaRetentionDecision {
@@ -113,6 +131,102 @@ export class FakeMediaObjectStorageAdapter implements MediaObjectStorageAdapter 
     this.deletionRequests.push({ objectRef, reason });
     const deletionRequestId = createHash('sha256').update(`${objectRef}|${reason}`).digest('hex').slice(0, 24);
     return { deletionRequestId: `fake-delete-${deletionRequestId}` };
+  }
+}
+
+/**
+ * Local-only object storage for isolated development and E2E verification.
+ * References are namespace keys, never caller paths, and every resolved path
+ * must remain beneath the configured root.
+ */
+export class LocalMediaObjectStorageAdapter implements ResumableMediaObjectStorageAdapter {
+  readonly kind = 'LOCAL' as const;
+  readonly rootPath: string;
+
+  constructor(rootPath = path.join(tmpdir(), 'bbos-marketing-media')) {
+    this.rootPath = path.resolve(rootPath);
+  }
+
+  localPath(objectRef: string): string {
+    if (!/^marketing\/(quarantine|originals|derived|rights-evidence)\/[A-Za-z0-9._/-]+$/.test(objectRef) || objectRef.includes('..')) {
+      throw new MediaDomainError(400, 'INVALID_STORAGE_REFERENCE', 'Object reference is outside the media namespace.');
+    }
+    const resolved = path.resolve(this.rootPath, ...objectRef.split('/'));
+    const prefix = `${this.rootPath}${path.sep}`;
+    if (!resolved.startsWith(prefix)) throw new MediaDomainError(400, 'INVALID_STORAGE_REFERENCE', 'Object reference escapes the media root.');
+    return resolved;
+  }
+
+  async createScopedUpload(request: ScopedUploadRequest): Promise<ScopedUploadGrant> {
+    const storageObjectRef = quarantineObjectRef(request.ownerEmployeeId, request.sessionId, `object-${randomUUID()}`);
+    const target = this.localPath(storageObjectRef);
+    await mkdir(path.dirname(target), { recursive: true });
+    const handle = await open(target, 'wx');
+    await handle.close();
+    return {
+      storageObjectRef,
+      uploadTransport: 'LOCAL_RESUMABLE',
+      uploadTarget: `/api/marketing/media/upload-sessions/${encodeURIComponent(request.sessionId)}/chunks`,
+      expiresAt: request.expiresAt,
+    };
+  }
+
+  async appendChunk(objectRef: string, offset: number, chunk: Uint8Array, maximumBytes: number): Promise<number> {
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new MediaDomainError(400, 'MEDIA_UPLOAD_OFFSET_INVALID', 'Upload offset is invalid.');
+    if (chunk.byteLength === 0 || chunk.byteLength > 1024 * 1024) throw new MediaDomainError(413, 'MEDIA_UPLOAD_CHUNK_INVALID', 'Upload chunks must be between 1 byte and 1 MiB.');
+    const target = this.localPath(objectRef);
+    const current = (await stat(target)).size;
+    if (current !== offset) throw new MediaDomainError(409, 'MEDIA_UPLOAD_OFFSET_CONFLICT', `Resume upload at byte ${current}.`);
+    if (current + chunk.byteLength > maximumBytes) throw new MediaDomainError(413, 'MEDIA_UPLOAD_TOO_LARGE', 'Upload exceeds the authorized byte limit.');
+    const handle = await open(target, 'r+');
+    try {
+      await handle.write(chunk, 0, chunk.byteLength, offset);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    return current + chunk.byteLength;
+  }
+
+  async objectSize(objectRef: string): Promise<number> {
+    return (await stat(this.localPath(objectRef))).size;
+  }
+
+  async readObject(objectRef: string, maximumBytes: number): Promise<Buffer> {
+    const target = this.localPath(objectRef);
+    const details = await stat(target);
+    if (details.size > maximumBytes) throw new MediaDomainError(413, 'MEDIA_OBJECT_READ_LIMIT', 'Object exceeds the authorized read limit.');
+    return readFile(target);
+  }
+
+  async promoteObject(sourceObjectRef: string, destinationObjectRef: string): Promise<void> {
+    const source = this.localPath(sourceObjectRef);
+    const destination = this.localPath(destinationObjectRef);
+    await mkdir(path.dirname(destination), { recursive: true });
+    try {
+      await rename(source, destination);
+    } catch {
+      await copyFile(source, destination, fsConstants.COPYFILE_EXCL);
+      await rm(source, { force: true });
+    }
+  }
+
+  async writeDerivedObject(objectRef: string, bytes: Uint8Array): Promise<void> {
+    const target = this.localPath(objectRef);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, bytes, { flag: 'wx' });
+  }
+
+  async createScopedRead(request: ScopedObjectAccessRequest): Promise<ScopedObjectAccessGrant> {
+    this.localPath(request.objectRef);
+    const token = createHash('sha256').update(`${request.objectRef}|${request.employeeId}|${request.purpose}|${request.expiresAt}`).digest('hex').slice(0, 32);
+    return { accessTarget: `local-read://${token}`, expiresAt: request.expiresAt };
+  }
+
+  async requestDeletion(objectRef: string, reason: string): Promise<{ deletionRequestId: string }> {
+    await rm(this.localPath(objectRef), { force: true });
+    const digest = createHash('sha256').update(`${objectRef}|${reason}`).digest('hex').slice(0, 24);
+    return { deletionRequestId: `local-delete-${digest}` };
   }
 }
 

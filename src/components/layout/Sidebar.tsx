@@ -31,7 +31,8 @@ import {
   Plane,
   Compass,
   WalletCards,
-  Shuffle
+  Shuffle,
+  Images,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useData } from '../../context/DataContext';
@@ -58,6 +59,7 @@ export type NavSectionKey =
   | 'content-calendar'
   | 'campaigns'
   | 'marketing-ai'
+  | 'media-library'
   | 'operations-dashboard'
   | 'analytics-overview'
   | 'analytics-sales'
@@ -195,6 +197,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       title: 'MARKETING',
       items: [
         { key: 'marketing-strategy', label: 'Strategy', icon: TrendingUp } as any,
+        { key: 'media-library', label: 'Media Library', icon: Images } as any,
         { key: 'content-calendar', label: 'Content Calendar', icon: Calendar } as any,
         { key: 'campaigns', label: 'Campaigns', icon: Megaphone } as any,
         { key: 'marketing-ai', label: 'Marketing AI', icon: Palette, badge: 'GenAI', badgeColor: 'bg-[#F0A608]/15 text-amber-900' } as any,
