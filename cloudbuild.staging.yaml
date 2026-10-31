@@ -1,3 +1,4 @@
+serviceAccount: projects/booking-bridge-bbos-stage/serviceAccounts/bbos-staging-builder@booking-bridge-bbos-stage.iam.gserviceaccount.com
 steps:
   - id: build-staging-image
     name: gcr.io/cloud-builders/docker
