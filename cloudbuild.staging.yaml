@@ -1,0 +1,32 @@
+steps:
+  - id: build-staging-image
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --file=Dockerfile
+      - --tag=asia-south2-docker.pkg.dev/booking-bridge-bbos-stage/bbos-staging-backend/bbos-api:${_IMAGE_TAG}
+      - --build-arg=VITE_BBOS_ENVIRONMENT=staging
+      - --build-arg=VITE_FIREBASE_PROJECT_ID=booking-bridge-bbos-stage
+      - --build-arg=VITE_BBOS_FIRESTORE_DATABASE_ID=(default)
+      - --build-arg=VITE_FIREBASE_API_KEY=${_VITE_FIREBASE_API_KEY}
+      - --build-arg=VITE_FIREBASE_APP_ID=${_VITE_FIREBASE_APP_ID}
+      - --build-arg=VITE_FIREBASE_AUTH_DOMAIN=booking-bridge-bbos-stage.firebaseapp.com
+      - --build-arg=VITE_FIREBASE_STORAGE_BUCKET=booking-bridge-bbos-stage.firebasestorage.app
+      - --build-arg=VITE_FIREBASE_MESSAGING_SENDER_ID=${_VITE_FIREBASE_MESSAGING_SENDER_ID}
+      - --build-arg=VITE_FIREBASE_MEASUREMENT_ID=${_VITE_FIREBASE_MEASUREMENT_ID}
+      - .
+
+images:
+  - asia-south2-docker.pkg.dev/booking-bridge-bbos-stage/bbos-staging-backend/bbos-api:${_IMAGE_TAG}
+
+# Supply every required value explicitly with --substitutions. Empty defaults
+# make an incomplete manual invocation fail before it can create a usable image.
+substitutions:
+  _IMAGE_TAG: ''
+  _VITE_FIREBASE_API_KEY: ''
+  _VITE_FIREBASE_APP_ID: ''
+  _VITE_FIREBASE_MESSAGING_SENDER_ID: ''
+  _VITE_FIREBASE_MEASUREMENT_ID: ''
+
+options:
+  logging: CLOUD_LOGGING_ONLY

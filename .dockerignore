@@ -1,0 +1,46 @@
+# Start from a build-context allowlist. This prevents credentials, local
+# artifacts, documentation, tests, and unrelated Firebase configuration from
+# ever reaching the Docker daemon or Cloud Build.
+*
+
+!package.json
+!bun.lock
+!.dockerignore
+!index.html
+!tsconfig.json
+!vite.config.ts
+!server.ts
+
+!server/
+!server/**
+!shared/
+!shared/**
+!src/
+!src/**
+
+# Explicit defense in depth for sensitive and generated files.
+.env
+.env.*
+**/.env
+**/.env.*
+*.key
+*.pem
+*.p12
+*.crt
+*credentials*.json
+*service-account*.json
+*serviceaccount*.json
+firebase-admin*.json
+.git
+.git/**
+node_modules
+dist
+build
+coverage
+test-results
+playwright-report
+tmp
+*.log
+firebase*.json
+firestore*.json
+firestore.rules

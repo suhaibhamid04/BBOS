@@ -38,8 +38,8 @@ function boundedRaw(types: string | string[], limit: string): RequestHandler {
 }
 
 const requestedStorageMode = process.env.BBOS_MEDIA_STORAGE_MODE?.trim().toLowerCase();
-if (requestedStorageMode === 'local' && APP_CONFIG.ENVIRONMENT === 'production') {
-  throw new Error('BBOS_MEDIA_STORAGE_MODE=local is forbidden in production. Configure an approved private object-storage adapter instead.');
+if (requestedStorageMode === 'local' && (process.env.NODE_ENV === 'production' || ['staging', 'production'].includes(APP_CONFIG.ENVIRONMENT))) {
+  throw new Error('BBOS_MEDIA_STORAGE_MODE=local is forbidden in staging and production runtimes. Configure an approved private object-storage adapter instead.');
 }
 const localStorageEnabled = APP_CONFIG.DEMO_MODE || requestedStorageMode === 'local';
 const defaultService = localStorageEnabled
