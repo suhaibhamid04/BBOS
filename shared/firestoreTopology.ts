@@ -1,7 +1,8 @@
 export const DEFAULT_FIRESTORE_DATABASE_ID = '(default)';
 export const PRODUCTION_FIREBASE_PROJECT_ID = 'booking-bridge-bbos-prod';
+export const STAGING_FIREBASE_PROJECT_ID = 'booking-bridge-bbos-stage';
 
-export type FirestoreRuntimeMode = 'production' | 'development' | 'test';
+export type FirestoreRuntimeMode = 'production' | 'staging' | 'development' | 'test';
 
 export interface FirestoreTopology {
   projectId: string;
@@ -77,8 +78,12 @@ export function normalizeFirebaseProjectId(value: string | undefined): string {
 
 function runtimeMode(value: string | undefined): FirestoreRuntimeMode {
   if (value === 'production') return 'production';
+  if (value === 'staging') return 'staging';
+  if (value === 'development') return 'development';
   if (value === 'test') return 'test';
-  return 'development';
+  throw new FirestoreTopologyError(
+    `Firebase runtime environment is missing or unsupported. Expected production, staging, development, or test; received ${value || '[missing]'}.`,
+  );
 }
 
 export function resolveFirestoreTopology(input: ResolveFirestoreTopologyInput): FirestoreTopology {
@@ -95,6 +100,21 @@ export function resolveFirestoreTopology(input: ResolveFirestoreTopologyInput): 
   if (production && projectId !== PRODUCTION_FIREBASE_PROJECT_ID) {
     throw new FirestoreTopologyError(
       `Production profile must target ${PRODUCTION_FIREBASE_PROJECT_ID}; received ${projectId}.`,
+    );
+  }
+  if (mode === 'staging' && projectId !== STAGING_FIREBASE_PROJECT_ID) {
+    throw new FirestoreTopologyError(
+      `Staging profile must target ${STAGING_FIREBASE_PROJECT_ID}; received ${projectId}.`,
+    );
+  }
+  if (mode === 'staging' && databaseId !== DEFAULT_FIRESTORE_DATABASE_ID) {
+    throw new FirestoreTopologyError(
+      `Staging profile must target the explicit ${DEFAULT_FIRESTORE_DATABASE_ID} Firestore database; received ${databaseId}.`,
+    );
+  }
+  if (mode !== 'staging' && projectId === STAGING_FIREBASE_PROJECT_ID) {
+    throw new FirestoreTopologyError(
+      `Firebase project ${STAGING_FIREBASE_PROJECT_ID} requires the staging runtime profile; received ${mode}.`,
     );
   }
   const targetsProductionFromLocal = !production && projectId === PRODUCTION_FIREBASE_PROJECT_ID;

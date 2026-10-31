@@ -21,7 +21,13 @@ const configuredEnvironment = (typeof process !== 'undefined' ? process.env.BBOS
 export const APP_CONFIG = {
   DEMO_MODE: !isProduction && (serverDemoMode ?? clientDemoMode) === 'true',
   ENVIRONMENT: configuredEnvironment,
-  ENVIRONMENT_LABEL: configuredEnvironment === 'production' ? 'Production' : configuredEnvironment === 'test' ? 'Testing' : 'Development',
+  ENVIRONMENT_LABEL: configuredEnvironment === 'production'
+    ? 'Production'
+    : configuredEnvironment === 'staging'
+      ? 'Staging'
+      : configuredEnvironment === 'test'
+        ? 'Testing'
+        : 'Development',
   LOW_MARGIN_THRESHOLD_PERCENT: configuredLowMarginThreshold === undefined || configuredLowMarginThreshold === ''
     ? undefined
     : Number(configuredLowMarginThreshold),

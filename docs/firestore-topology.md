@@ -1,11 +1,12 @@
 # Canonical Firebase environment topology
 
-BBOS has three explicit runtime profiles. There is no project or database fallback.
+BBOS has four explicit runtime profiles. There is no project or database fallback.
 
 | Profile | Project | Database | Browser/Admin behavior |
 |---|---|---|---|
 | Development | Explicit nonproduction project, currently `universal-arcana-hfjbn` | Explicit approved named database | Local server allowed; live production project rejected |
 | Test | Isolated test project ID | Explicit `(default)` emulator database | Firestore/Auth emulators required; live access rejected |
+| Staging | `booking-bridge-bbos-stage` | Explicit `(default)` | Requires `NODE_ENV=production`/optimized Vite build with the staging deployment profile |
 | Production | `booking-bridge-bbos-prod` | Explicit `(default)` | Requires production process/build profile and complete browser config |
 
 ## Required configuration
@@ -14,13 +15,38 @@ The server reads `BBOS_ENVIRONMENT`, `FIREBASE_PROJECT_ID`, and `BBOS_FIRESTORE_
 
 The browser also requires the public Web App identifiers `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_APP_ID`, and `VITE_FIREBASE_AUTH_DOMAIN`. Optional storage, sender, and measurement identifiers are listed in `.env.example`. Firebase Admin credentials remain server-only and outside the repository.
 
+Cloud Run staging uses Application Default Credentials and these non-secret topology values:
+
+```text
+NODE_ENV=production
+BBOS_ENVIRONMENT=staging
+FIREBASE_PROJECT_ID=booking-bridge-bbos-stage
+GCLOUD_PROJECT=booking-bridge-bbos-stage
+BBOS_FIRESTORE_DATABASE_ID=(default)
+```
+
+The optimized Vite staging build uses:
+
+```text
+VITE_BBOS_ENVIRONMENT=staging
+VITE_FIREBASE_PROJECT_ID=booking-bridge-bbos-stage
+VITE_BBOS_FIRESTORE_DATABASE_ID=(default)
+VITE_FIREBASE_API_KEY=<staging-web-app-api-key>
+VITE_FIREBASE_APP_ID=<staging-web-app-id>
+VITE_FIREBASE_AUTH_DOMAIN=booking-bridge-bbos-stage.firebaseapp.com
+```
+
 `firebase-applet-config.json` is a legacy local artifact and is no longer imported by browser or server source. Local production and development values belong in separate untracked environment configuration, not in source imports.
 
 ## Fail-closed controls
 
 - Production must target `booking-bridge-bbos-prod` and `(default)` explicitly.
+- Staging must target `booking-bridge-bbos-stage` and `(default)` explicitly.
+- Production and staging projects cannot be used under each other's runtime profile.
+- `GCLOUD_PROJECT`, when present, must match `FIREBASE_PROJECT_ID`.
 - Development rejects the production project.
 - Tests require the Firebase emulator environment and reject live projects.
+- Unknown runtime, process, and build environment names are rejected.
 - Browser and Admin normalize the same explicit project/database pair.
 - Missing, invalid, conflicting, or whitespace-padded identifiers stop initialization with an actionable error.
 - Unit tests preload an isolated project ID before application modules load, so a developer `.env` cannot direct them to live Firebase.

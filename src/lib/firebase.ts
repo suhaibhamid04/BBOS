@@ -14,6 +14,7 @@ try {
   const emulatorMode = import.meta.env.VITE_FIREBASE_EMULATOR === 'true';
   firestoreTopology = loadBrowserFirestoreTopology({
     MODE: import.meta.env.MODE,
+    PROD: import.meta.env.PROD as unknown as boolean,
     VITE_FIREBASE_EMULATOR: import.meta.env.VITE_FIREBASE_EMULATOR,
     VITE_FIREBASE_PROJECT_ID: import.meta.env.VITE_FIREBASE_PROJECT_ID,
     FIREBASE_PROJECT_ID: import.meta.env.FIREBASE_PROJECT_ID,
